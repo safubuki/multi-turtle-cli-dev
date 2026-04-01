@@ -1,0 +1,23 @@
+{
+  "name": "multi-turtle-cli-dev-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon --watch src --ext ts,mjs --exec \"node --experimental-specifier-resolution=node --loader ts-node/esm src/index.ts\"",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --experimental-specifier-resolution=node dist/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.0.0",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

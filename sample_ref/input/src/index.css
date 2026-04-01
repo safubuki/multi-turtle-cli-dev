@@ -1,0 +1,207 @@
+@import "tailwindcss";
+
+/* カスタムテーマ拡張 */
+@theme {
+  --color-gray-850: #1a1d23;
+}
+
+/* プルリロード（Pull-to-Refresh）の無効化 */
+body {
+  overscroll-behavior-y: none;
+}
+
+/* カスタムスクロールバー */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #1f2937;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
+
+/* レンジスライダーのスタイル */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #4b5563;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-top: -5px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+input[type="range"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 数値入力のスピナー非表示 */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* アニメーション */
+@keyframes bounce-short {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.animate-bounce-short {
+  animation: bounce-short 0.5s ease-in-out;
+}
+
+@keyframes preview-capture-press {
+  0% {
+    transform: scale(1);
+    filter: brightness(1) saturate(1);
+    box-shadow: 0 0 0 0 rgba(167, 243, 208, 0), 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+  30% {
+    transform: scale(0.93);
+    filter: brightness(0.8) saturate(1.12);
+    box-shadow: 0 0 0 5px rgba(167, 243, 208, 0.38), 0 0 22px 3px rgba(16, 185, 129, 0.42);
+  }
+  65% {
+    transform: scale(0.97);
+    filter: brightness(0.9) saturate(1.06);
+    box-shadow: 0 0 0 3px rgba(167, 243, 208, 0.24), 0 0 16px 2px rgba(16, 185, 129, 0.28);
+  }
+  100% {
+    transform: scale(1);
+    filter: brightness(1) saturate(1);
+    box-shadow: 0 0 0 0 rgba(167, 243, 208, 0), 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.animate-preview-capture-press {
+  animation: preview-capture-press 0.42s ease-out;
+}
+
+@keyframes ai-modal-sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-ai-modal-sheet {
+  animation: ai-modal-sheet-up 0.22s ease-out;
+}
+
+/* ============================================
+   PC / タブレット レスポンシブ対応
+   モバイル (<768px) には一切影響しない
+   ============================================ */
+
+/* タブレット横画面 (768px+): テキスト・UI要素のスケールアップ */
+@media (min-width: 768px) {
+  .animate-ai-modal-sheet {
+    animation: none;
+  }
+
+  /* スライダーのトラック拡大 */
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+    margin-top: -6px;
+  }
+
+  /* スクロールバー拡大 */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+  }
+}
+
+/* デスクトップ (1024px+): さらなるスケールアップ */
+@media (min-width: 1024px) {
+  /* スライダーのトラック・サム拡大 */
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 8px;
+    border-radius: 4px;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    width: 22px;
+    height: 22px;
+    margin-top: -7px;
+  }
+
+  /* スクロールバー拡大 */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  /* 数値入力フィールドの拡大 */
+  section input[type="number"] {
+    font-size: 0.875rem;
+    padding: 0.25rem 0.5rem;
+  }
+
+  /* PC版: 極小テキスト (text-[10px]) を読みやすいサイズに拡大 */
+  section [class*="text-[10px]"] {
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  /* PC版: タブレット対応済みテキスト（md:text-xs等）を更にスケールアップ */
+  section [class*="text-[10px]"][class*="md:text-"] {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  /* PC版: チェックボックスの操作性改善 */
+  section input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    min-width: 1rem;
+    min-height: 1rem;
+  }
+
+  /* PC版: フェードラベル幅拡大（テキスト拡大に合わせる） */
+  section label[class*="w-24"] {
+    width: 7rem;
+  }
+}

@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-900 text-slate-100 antialiased overflow-hidden selection:bg-cyan-500/30;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-slate-800/80 backdrop-blur-md border border-slate-700/50 shadow-xl;
+  }
+}
