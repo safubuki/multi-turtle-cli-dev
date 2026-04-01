@@ -453,19 +453,16 @@ export function TerminalPane({
                   <div className="browser-panel">
                     <div className="section-headline compact-headline">
                       <strong>フォルダ内容</strong>
-                      <span>{pane.localBrowserLoading ? '読み込み中' : `${pane.localBrowserEntries.length}件`}</span>
+                      <span>{pane.localBrowserLoading ? '読み込み中' : getShortPathLabel(pane.localBrowserPath || pane.localWorkspacePath || '')}</span>
                     </div>
 
-                    <div className="browser-list">
+                    <div className="browser-simple-list">
                       {pane.localBrowserEntries.length > 0 ? (
                         pane.localBrowserEntries.map((entry) => (
-                          <div key={entry.path} className="browser-entry">
-                            <div className="browser-entry-main">
+                          <div key={entry.path} className={`browser-simple-item ${entry.isDirectory ? 'directory' : 'file'}`}>
+                            <div className="browser-simple-main">
                               {entry.isDirectory ? <Folder size={15} /> : <FileText size={15} />}
-                              <div>
-                                <strong>{entry.label}</strong>
-                                <span>{entry.path}</span>
-                              </div>
+                              <span>{entry.label}</span>
                             </div>
                           </div>
                         ))

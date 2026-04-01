@@ -47,16 +47,28 @@ function runPowerShellJson(script: string): Promise<string[]> {
 
 export async function pickFolderDialog(): Promise<string[]> {
   if (process.platform !== 'win32') {
-    throw new Error('ネイティブフォルダ選択は Windows 実装のみです。')
+    throw new Error('ネイティブフォルダ選択は Windows のみ対応です。')
   }
 
   const script = `
     Add-Type -AssemblyName System.Windows.Forms
-    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = 'ワークスペースとして使うフォルダを選択'
-    $dialog.ShowNewFolderButton = $false
+    $dialog = New-Object System.Windows.Forms.OpenFileDialog
+    $dialog.Title = 'ワークスペースとして使うフォルダを選択'
+    $dialog.Filter = 'All files (*.*)|*.*'
+    $dialog.CheckFileExists = $false
+    $dialog.CheckPathExists = $true
+    $dialog.ValidateNames = $false
+    $dialog.AddExtension = $false
+    $dialog.Multiselect = $false
+    $dialog.FileName = 'フォルダを選択'
+    $dialog.InitialDirectory = [Environment]::GetFolderPath('Desktop')
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-      @($dialog.SelectedPath) | ConvertTo-Json -Compress
+      $selectedPath = Split-Path -Parent $dialog.FileName
+      if ([string]::IsNullOrWhiteSpace($selectedPath)) {
+        @() | ConvertTo-Json -Compress
+      } else {
+        @($selectedPath) | ConvertTo-Json -Compress
+      }
     } else {
       @() | ConvertTo-Json -Compress
     }
