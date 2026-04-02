@@ -81,21 +81,62 @@ function createFallbackModels(provider: ProviderId): ProviderModelInfo[] {
   if (provider === 'gemini') {
     return [
       { id: 'auto-gemini-3', name: 'Auto (Gemini 3)', supportedReasoningEfforts: [], defaultReasoningEffort: null },
+      { id: 'auto-gemini-2.5', name: 'Auto (Gemini 2.5)', supportedReasoningEfforts: [], defaultReasoningEffort: null },
+      { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro Preview', supportedReasoningEfforts: [], defaultReasoningEffort: null },
       {
         id: 'gemini-3.1-pro-preview',
         name: 'Gemini 3.1 Pro Preview',
         supportedReasoningEfforts: [],
         defaultReasoningEffort: null
       },
-      { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', supportedReasoningEfforts: [], defaultReasoningEffort: null }
+      {
+        id: 'gemini-3.1-pro-preview-customtools',
+        name: 'Gemini 3.1 Pro Preview Custom Tools',
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: null
+      },
+      { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview', supportedReasoningEfforts: [], defaultReasoningEffort: null },
+      {
+        id: 'gemini-3.1-flash-lite-preview',
+        name: 'Gemini 3.1 Flash Lite Preview',
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: null
+      },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', supportedReasoningEfforts: [], defaultReasoningEffort: null },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', supportedReasoningEfforts: [], defaultReasoningEffort: null },
+      { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', supportedReasoningEfforts: [], defaultReasoningEffort: null }
     ]
   }
 
   return [
     {
+      id: 'claude-sonnet-4.5',
+      name: 'Claude Sonnet 4.5',
+      supportedReasoningEfforts: ['low', 'medium', 'high'],
+      defaultReasoningEffort: 'medium'
+    },
+    {
+      id: 'claude-sonnet-4',
+      name: 'Claude Sonnet 4',
+      supportedReasoningEfforts: ['low', 'medium', 'high'],
+      defaultReasoningEffort: 'medium'
+    },
+    {
       id: 'claude-sonnet-4.6',
       name: 'Claude Sonnet 4.6',
       supportedReasoningEfforts: ['low', 'medium', 'high'],
+      defaultReasoningEffort: 'medium'
+    },
+    {
+      id: 'claude-opus-4.6',
+      name: 'Claude Opus 4.6',
+      supportedReasoningEfforts: ['low', 'medium', 'high'],
+      defaultReasoningEffort: 'medium'
+    },
+    {
+      id: 'gpt-5',
+      name: 'GPT-5',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
       defaultReasoningEffort: 'medium'
     },
     {
@@ -105,10 +146,34 @@ function createFallbackModels(provider: ProviderId): ProviderModelInfo[] {
       defaultReasoningEffort: 'medium'
     },
     {
+      id: 'gpt-5.1',
+      name: 'GPT-5.1',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultReasoningEffort: 'medium'
+    },
+    {
       id: 'gpt-5.2',
       name: 'GPT-5.2',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultReasoningEffort: 'medium'
+    },
+    {
+      id: 'gpt-5-mini',
+      name: 'GPT-5 Mini',
       supportedReasoningEfforts: ['low', 'medium', 'high'],
       defaultReasoningEffort: 'medium'
+    },
+    {
+      id: 'gpt-4.1',
+      name: 'GPT-4.1',
+      supportedReasoningEfforts: ['low', 'medium'],
+      defaultReasoningEffort: 'medium'
+    },
+    {
+      id: 'gemini-3-pro-preview',
+      name: 'Gemini 3 Pro Preview',
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null
     }
   ]
 }
@@ -195,13 +260,32 @@ async function discoverGeminiCatalog(): Promise<ProviderCatalogResponse> {
   }
 
   const source = await fs.readFile(modelsFile, 'utf8')
-  const discovered = Array.from(source.matchAll(/'([^']+gemini[^']+)'/g))
+  const preferredOrder = [
+    'auto-gemini-3',
+    'auto-gemini-2.5',
+    'gemini-3-pro-preview',
+    'gemini-3.1-pro-preview',
+    'gemini-3.1-pro-preview-customtools',
+    'gemini-3-flash-preview',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite'
+  ]
+  const discoveredIds = Array.from(source.matchAll(/export const [A-Z0-9_]+ = '([^']+)'/g))
     .map((match) => match[1])
+    .filter((value) => /^(auto-gemini-[\d.]+|gemini-[\d.][a-z0-9.-]*)$/i.test(value))
+  const uniqueIds = preferredOrder.filter((id) => discoveredIds.includes(id))
+  const discovered = (uniqueIds.length > 0 ? uniqueIds : discoveredIds)
     .filter((value, index, all) => all.indexOf(value) === index)
-    .slice(0, 8)
     .map((model) => ({
       id: model,
-      name: model,
+      name:
+        model === 'auto-gemini-3'
+          ? 'Auto (Gemini 3)'
+          : model === 'auto-gemini-2.5'
+            ? 'Auto (Gemini 2.5)'
+            : model,
       supportedReasoningEfforts: [],
       defaultReasoningEffort: null
     }))
@@ -218,6 +302,38 @@ async function discoverGeminiCatalog(): Promise<ProviderCatalogResponse> {
 async function discoverCopilotCatalog(): Promise<ProviderCatalogResponse> {
   const commandPath = getCliCommandPath('copilot')
   const sdkPath = getCopilotSdkModulePath()
+  const cliPackagePath = path.join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@github', 'copilot', 'app.js')
+  if (existsSync(cliPackagePath)) {
+    const source = await fs.readFile(cliPackagePath, 'utf8')
+    const anchor = 'I2s={"sweagent-capi":{'
+    const start = source.indexOf(anchor)
+    const region = start >= 0 ? source.slice(start, Math.min(source.length, start + 8_000)) : source
+    const discoveredIds = Array.from(region.matchAll(/"([^"]+)":\{/g))
+      .map((match) => match[1])
+      .filter((value) => /^(claude-|gpt-|gemini-|oswe-)/.test(value))
+      .filter((value, index, all) => all.indexOf(value) === index)
+
+    const discovered = discoveredIds.map((model) => ({
+      id: model,
+      name:
+        model.startsWith('gpt-') ? model.toUpperCase() : model.replace(/(^|-)([a-z])/g, (_all, prefix, letter) => `${prefix}${letter.toUpperCase()}`),
+      supportedReasoningEfforts: model.startsWith('claude-')
+        ? (['low', 'medium', 'high'] as ReasoningEffort[])
+        : model.startsWith('gpt-')
+          ? (['low', 'medium', 'high', 'xhigh'] as ReasoningEffort[])
+          : [],
+      defaultReasoningEffort: model.startsWith('claude-') || model.startsWith('gpt-') ? ('medium' as ReasoningEffort) : null
+    }))
+
+    return createCatalog(
+      'copilot',
+      discovered.length > 0 ? discovered : createFallbackModels('copilot'),
+      Boolean(commandPath || sdkPath),
+      'copilot app.js',
+      null
+    )
+  }
+
   return createCatalog(
     'copilot',
     createFallbackModels('copilot'),

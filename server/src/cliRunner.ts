@@ -28,6 +28,7 @@ interface CliLaunchSpec {
   command: string
   args: string[]
   stdinPrompt: string | null
+  outputFilePath?: string
 }
 
 interface ParsedRunState {
@@ -43,6 +44,12 @@ const DEFAULT_STATE = (): ParsedRunState => ({
   finalText: null,
   stderrText: ''
 })
+
+function createCodexOutputCapturePath(): string {
+  const captureDir = path.join(APP_ROOT, '.multi-turtle-runtime')
+  fs.mkdirSync(captureDir, { recursive: true })
+  return path.join(captureDir, `codex-last-message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`)
+}
 
 function emitIfText(onEvent: RunOptions['onEvent'], type: Extract<RunStreamEvent, { type: 'status' | 'tool' | 'stderr' | 'assistant-delta' }>['type'], text: string): void {
   const normalized = text.replace(/\r/g, '').trimEnd()
@@ -378,18 +385,19 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
   const launcher = resolveCommand(options.provider)
 
   if (options.provider === 'codex') {
+    const outputFilePath = createCodexOutputCapturePath()
     const args = resolvedSessionId
       ? [
           ...launcher.prefixArgs,
           'exec',
-          'resume',
           '--json',
           '--full-auto',
-          '-C',
-          options.target.path,
           '--skip-git-repo-check',
+          '-o',
+          outputFilePath,
           '-m',
           options.model,
+          'resume',
           resolvedSessionId,
           '-'
         ]
@@ -398,9 +406,9 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
           'exec',
           '--json',
           '--full-auto',
-          '-C',
-          options.target.path,
           '--skip-git-repo-check',
+          '-o',
+          outputFilePath,
           '-m',
           options.model,
           '-'
@@ -409,7 +417,8 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
     return {
       command: launcher.command,
       args,
-      stdinPrompt: options.prompt
+      stdinPrompt: options.prompt,
+      outputFilePath
     }
   }
 
@@ -486,14 +495,12 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
         ? [
             'codex',
             'exec',
-            'resume',
             '--json',
             '--full-auto',
-            '-C',
-            options.target.path,
             '--skip-git-repo-check',
             '-m',
             options.model,
+            'resume',
             resolvedSessionId,
             '-'
           ]
@@ -502,8 +509,6 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
             'exec',
             '--json',
             '--full-auto',
-            '-C',
-            options.target.path,
             '--skip-git-repo-check',
             '-m',
             options.model,
@@ -542,19 +547,23 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
             options.prompt
           ]
 
+  const escapedRemoteArgs = remoteArgs.map((entry) => shellEscapePosix(entry)).join(' ')
+  const remoteCommand =
+    options.provider === 'codex'
+      ? `cd ${shellEscapePosix(options.target.path)} && ${escapedRemoteArgs}`
+      : escapedRemoteArgs
+
   return {
     command: 'ssh',
-    args: [
-      options.target.host,
-      `bash -lc ${shellEscapePosix(remoteArgs.map((entry) => shellEscapePosix(entry)).join(' '))}`
-    ],
+    args: [options.target.host, `bash -lc ${shellEscapePosix(remoteCommand)}`],
     stdinPrompt: options.provider === 'copilot' ? null : options.prompt
   }
 }
 
 function createActiveRun(
   child: ChildProcessWithoutNullStreams,
-  options: RunOptions
+  options: RunOptions,
+  launchSpec: CliLaunchSpec
 ): ActiveCliRun {
   const state = DEFAULT_STATE()
   let stdoutBuffer = ''
@@ -620,6 +629,21 @@ function createActiveRun(
     child.on('close', (code) => {
       flushStdoutBuffer(true)
 
+      let capturedOutput = ''
+      if (launchSpec.outputFilePath) {
+        try {
+          capturedOutput = fs.readFileSync(launchSpec.outputFilePath, 'utf8').trim()
+        } catch {
+          capturedOutput = ''
+        }
+
+        try {
+          fs.rmSync(launchSpec.outputFilePath, { force: true })
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+
       if (stopped) {
         reject(new Error('CLI run stopped'))
         return
@@ -630,7 +654,7 @@ function createActiveRun(
         return
       }
 
-      const response = (state.finalText ?? state.assistantText).trim()
+      const response = (state.finalText ?? state.assistantText).trim() || capturedOutput
       if (!response) {
         reject(new Error(state.stderrText.trim() || 'CLI returned empty output'))
         return
@@ -676,5 +700,5 @@ export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
   })
   child.stdin.end(launchSpec.stdinPrompt ? `${launchSpec.stdinPrompt}\n` : '')
 
-  return createActiveRun(child, options)
+  return createActiveRun(child, options, launchSpec)
 }

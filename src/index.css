@@ -137,8 +137,10 @@ button {
   align-items: center;
   gap: 8px;
   padding: 10px 16px;
+  white-space: nowrap;
   border-radius: 999px;
   border: 1px solid transparent;
+  flex-shrink: 0;
   transition:
     transform 160ms ease,
     border-color 160ms ease,
@@ -911,6 +913,24 @@ textarea {
   color: var(--muted);
 }
 
+.session-selector {
+  gap: 6px;
+}
+
+.session-log-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.session-log-meta strong {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
 .activity-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -984,12 +1004,33 @@ textarea {
   margin-top: 10px;
 }
 
+.composer-actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.composer-actions .primary-button,
+.composer-actions .danger-button {
+  min-width: 92px;
+  justify-content: center;
+}
+
 .composer-hint {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+.composer-hint > span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .checkbox-line {
@@ -1530,4 +1571,109 @@ textarea {
   .compact-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.pane-side-actions {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.pane-vscode-button {
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+}
+
+.pane-session-button {
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+}
+
+.pane-side-actions .pane-session-button {
+  order: 0;
+}
+
+.pane-side-actions .pane-vscode-button {
+  order: 1;
+}
+
+.pane-side-actions .icon-button.danger {
+  order: 2;
+}
+
+.pane-side-actions .pane-menu {
+  order: 3;
+}
+
+.settings-accordion {
+  background: linear-gradient(180deg, rgba(18, 27, 32, 0.84), rgba(11, 18, 22, 0.92));
+}
+
+.workspace-accordion {
+  background: linear-gradient(180deg, rgba(16, 24, 28, 0.88), rgba(10, 17, 21, 0.96));
+}
+
+.terminal-pane.minimal-pane {
+  border-width: 2px;
+  border-style: solid;
+  border-color: rgba(118, 155, 149, 0.18);
+}
+
+.terminal-pane.status-idle.minimal-pane {
+  border-color: rgba(118, 155, 149, 0.24);
+}
+
+.terminal-pane.status-running.minimal-pane {
+  border-color: rgba(84, 210, 194, 0.34);
+}
+
+.terminal-pane.status-completed.minimal-pane {
+  border-color: rgba(125, 237, 153, 0.3);
+}
+
+.terminal-pane.status-attention.minimal-pane,
+.terminal-pane.status-stalled.minimal-pane {
+  border-color: rgba(244, 198, 108, 0.34);
+}
+
+.terminal-pane.status-error.minimal-pane {
+  border-color: rgba(255, 127, 127, 0.36);
+}
+
+.workspace-accordion .workspace-stack > .inline-actions.wrap-actions > .secondary-button:nth-child(2),
+.workspace-accordion .workspace-stack > .inline-actions.wrap-actions > .secondary-button:nth-child(4) {
+  display: none;
+}
+
+.browser-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compact-ghost {
+  padding: 5px 8px;
+  border-radius: 999px;
+}
+
+.browser-simple-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-simple-item:focus-visible {
+  outline: 1px solid rgba(84, 210, 194, 0.45);
+  background: rgba(84, 210, 194, 0.06);
+}
+
+.browser-simple-item.directory:hover,
+.browser-simple-item.file:hover {
+  background: rgba(255, 255, 255, 0.05);
 }

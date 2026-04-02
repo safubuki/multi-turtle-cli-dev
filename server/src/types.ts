@@ -65,12 +65,14 @@ export type WorkspaceTarget =
       kind: 'local'
       path: string
       label: string
+      resourceType?: 'folder' | 'file'
     }
   | {
       kind: 'ssh'
       host: string
       path: string
       label: string
+      resourceType?: 'folder' | 'file'
     }
 
 export interface MemoryEntry {

@@ -41,6 +41,12 @@ function buildLocalFolderUri(localPath: string): string {
   return pathToFileURL(path.resolve(localPath)).toString()
 }
 
+function buildRemoteFileUri(host: string, remotePath: string): string {
+  const normalized = remotePath.replace(/\\/g, '/')
+  const pathname = normalized.startsWith('/') ? normalized : `/${normalized}`
+  return `vscode-remote://ssh-remote+${encodeURIComponent(host)}${encodeURI(pathname)}`
+}
+
 function getSpawnCommand(command: string, args: string[]): { command: string; args: string[] } {
   if (process.platform === 'win32' && isCmdScript(command)) {
     const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
@@ -84,10 +90,15 @@ function tryLaunch(command: string, args: string[]): Promise<void> {
 }
 
 export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
+  const resourceType = target.resourceType ?? 'folder'
   const args =
     target.kind === 'local'
-      ? ['--folder-uri', buildLocalFolderUri(target.path)]
-      : ['--folder-uri', buildRemoteFolderUri(target.host, target.path)]
+      ? resourceType === 'file'
+        ? [path.resolve(target.path)]
+        : ['--folder-uri', buildLocalFolderUri(target.path)]
+      : resourceType === 'file'
+        ? ['--file-uri', buildRemoteFileUri(target.host, target.path)]
+        : ['--folder-uri', buildRemoteFolderUri(target.host, target.path)]
 
   let lastError: unknown = null
 
@@ -98,6 +109,16 @@ export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
     } catch (error) {
       lastError = error
     }
+  }
+
+  const missingBinary =
+    lastError &&
+    typeof lastError === 'object' &&
+    'code' in lastError &&
+    String((lastError as { code?: unknown }).code ?? '').toUpperCase() === 'ENOENT'
+
+  if (missingBinary) {
+    throw new Error('VSCode をインストールしてください。')
   }
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error')

@@ -28,6 +28,7 @@ import type {
   BootstrapPayload,
   LocalWorkspace,
   PaneLogEntry,
+  PaneSessionRecord,
   PaneState,
   PaneStatus,
   ProviderCatalogResponse,
@@ -52,6 +53,7 @@ const STORAGE_KEYS = {
 } as const
 const MAX_LOGS = 24
 const MAX_STREAM_ENTRIES = 80
+const MAX_SESSION_HISTORY = 18
 const MAX_LIVE_OUTPUT = 64_000
 const MAX_SHARED_CONTEXT = 16
 const STALL_MS = 45_000
@@ -66,6 +68,31 @@ function clipText(text: string, maxLength: number): string {
   }
 
   return `${text.slice(0, maxLength).trimEnd()}\n\n[truncated]`
+}
+
+function sanitizeTerminalText(text: string): string {
+  return text
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u0000/g, '')
+}
+
+function appendLiveOutputChunk(existing: string, incoming: string): string {
+  const normalized = sanitizeTerminalText(incoming)
+  if (!normalized) {
+    return existing
+  }
+
+  return clipText(`${existing}${normalized}`, MAX_LIVE_OUTPUT)
+}
+
+function appendLiveOutputLine(existing: string, incoming: string): string {
+  const normalized = sanitizeTerminalText(incoming).trim()
+  if (!normalized) {
+    return existing
+  }
+
+  return clipText(existing.trim() ? `${existing.trimEnd()}\n${normalized}` : normalized, MAX_LIVE_OUTPUT)
 }
 
 function summarize(text: string): string {
@@ -84,7 +111,7 @@ function statusLabel(status: PaneStatus): string {
     case 'completed':
       return '完了'
     case 'attention':
-      return '確認待ち'
+      return '入力/確認待ち'
     case 'error':
       return 'エラー'
     default:
@@ -201,6 +228,44 @@ function appendStreamEntry(
   return [...entries, { id: createId('stream'), kind, text: clipped, createdAt }].slice(-MAX_STREAM_ENTRIES)
 }
 
+function hasSessionContent(pane: Pick<PaneState, 'logs' | 'streamEntries' | 'sessionId' | 'liveOutput' | 'lastResponse'>): boolean {
+  return (
+    pane.logs.length > 0 ||
+    pane.streamEntries.length > 0 ||
+    Boolean(pane.sessionId) ||
+    Boolean(pane.liveOutput.trim()) ||
+    Boolean(pane.lastResponse?.trim())
+  )
+}
+
+function buildSessionLabel(sessionId: string | null, createdAt: number): string {
+  if (sessionId) {
+    return `セッション ${sessionId.slice(0, 8)}`
+  }
+
+  return `セッション ${new Date(createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
+}
+
+function createArchivedSessionRecord(pane: PaneState): PaneSessionRecord {
+  const createdAt = pane.lastRunAt ?? pane.lastActivityAt ?? pane.lastFinishedAt ?? Date.now()
+  const updatedAt = pane.lastActivityAt ?? pane.lastFinishedAt ?? createdAt
+
+  return {
+    key: createId('session'),
+    label: buildSessionLabel(pane.sessionId, createdAt),
+    sessionId: pane.sessionId,
+    createdAt,
+    updatedAt,
+    status: pane.status,
+    logs: pane.logs.slice(-MAX_LOGS),
+    streamEntries: pane.streamEntries.slice(-MAX_STREAM_ENTRIES)
+  }
+}
+
+function appendSessionRecord(history: PaneSessionRecord[], record: PaneSessionRecord): PaneSessionRecord[] {
+  return [record, ...history].slice(0, MAX_SESSION_HISTORY)
+}
+
 function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[]): WorkspaceTarget | null {
   if (pane.workspaceMode === 'local') {
     if (!pane.localWorkspacePath.trim()) {
@@ -211,7 +276,8 @@ function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[])
     return {
       kind: 'local',
       path: pane.localWorkspacePath,
-      label: workspace?.label ?? pane.localWorkspacePath
+      label: workspace?.label ?? pane.localWorkspacePath,
+      resourceType: 'folder'
     }
   }
 
@@ -223,7 +289,8 @@ function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[])
     kind: 'ssh',
     host: pane.sshHost.trim(),
     path: pane.remoteWorkspacePath.trim(),
-    label: `${pane.sshHost.trim()}:${pane.remoteWorkspacePath.trim()}`
+    label: `${pane.sshHost.trim()}:${pane.remoteWorkspacePath.trim()}`,
+    resourceType: 'folder'
   }
 }
 
@@ -261,6 +328,8 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     prompt: '',
     logs: [],
     streamEntries: [],
+    sessionHistory: [],
+    selectedSessionKey: null,
     liveOutput: '',
     attachedContextIds: [],
     sessionId: null,
@@ -294,6 +363,50 @@ function getLatestAssistantText(pane: PaneState): string | null {
 
   const latestAssistant = [...pane.logs].reverse().find((entry) => entry.role === 'assistant')
   return latestAssistant?.text ?? null
+}
+
+function getShareableText(pane: PaneState): string | null {
+  if (pane.selectedSessionKey) {
+    const selectedSession = pane.sessionHistory.find((session) => session.key === pane.selectedSessionKey)
+    if (selectedSession) {
+      const latestAssistant = [...selectedSession.logs].reverse().find((entry) => entry.role === 'assistant')?.text
+      if (latestAssistant?.trim()) {
+        return latestAssistant
+      }
+
+      const combinedLogs = selectedSession.logs.map((entry) => `${entry.role.toUpperCase()}: ${entry.text}`).join('\n\n').trim()
+      if (combinedLogs) {
+        return combinedLogs
+      }
+
+      const combinedStream = selectedSession.streamEntries.map((entry) => `[${entry.kind}] ${entry.text}`).join('\n').trim()
+      if (combinedStream) {
+        return combinedStream
+      }
+    }
+  }
+
+  return getLatestAssistantText(pane)
+}
+
+function resetActiveSessionFields(pane: PaneState): PaneState {
+  return {
+    ...pane,
+    prompt: '',
+    status: 'idle',
+    statusText: statusLabel('idle'),
+    logs: [],
+    streamEntries: [],
+    selectedSessionKey: null,
+    liveOutput: '',
+    sessionId: null,
+    lastRunAt: null,
+    runningSince: null,
+    lastActivityAt: null,
+    lastFinishedAt: null,
+    lastError: null,
+    lastResponse: null
+  }
 }
 
 function readJsonStorage<T>(key: string, fallback: T): T {
@@ -354,6 +467,26 @@ function normalizeRemoteDirectoryEntry(rawEntry: Partial<RemoteDirectoryEntry> |
     label: rawEntry.label,
     path: rawEntry.path,
     isWorkspace: Boolean(rawEntry.isWorkspace)
+  }
+}
+
+function normalizeSessionRecord(rawRecord: Partial<PaneSessionRecord> | null | undefined): PaneSessionRecord | null {
+  if (!rawRecord?.key || !rawRecord.label) {
+    return null
+  }
+
+  return {
+    key: rawRecord.key,
+    label: rawRecord.label,
+    sessionId: typeof rawRecord.sessionId === 'string' ? rawRecord.sessionId : null,
+    createdAt: typeof rawRecord.createdAt === 'number' ? rawRecord.createdAt : Date.now(),
+    updatedAt: typeof rawRecord.updatedAt === 'number' ? rawRecord.updatedAt : null,
+    status:
+      rawRecord.status === 'completed' || rawRecord.status === 'attention' || rawRecord.status === 'error' || rawRecord.status === 'running'
+        ? rawRecord.status
+        : 'idle',
+    logs: Array.isArray(rawRecord.logs) ? rawRecord.logs.slice(-MAX_LOGS) : [],
+    streamEntries: Array.isArray(rawRecord.streamEntries) ? rawRecord.streamEntries.slice(-MAX_STREAM_ENTRIES) : []
   }
 }
 
@@ -422,6 +555,12 @@ function normalizePane(
     prompt: typeof rawPane.prompt === 'string' ? rawPane.prompt : '',
     logs: Array.isArray(rawPane.logs) ? rawPane.logs.slice(-MAX_LOGS) : [],
     streamEntries: Array.isArray(rawPane.streamEntries) ? rawPane.streamEntries.slice(-MAX_STREAM_ENTRIES) : [],
+    sessionHistory: Array.isArray(rawPane.sessionHistory)
+      ? rawPane.sessionHistory
+          .map((item) => normalizeSessionRecord(item))
+          .filter((item): item is PaneSessionRecord => Boolean(item))
+      : [],
+    selectedSessionKey: typeof rawPane.selectedSessionKey === 'string' ? rawPane.selectedSessionKey : null,
     liveOutput: typeof rawPane.liveOutput === 'string' ? clipText(rawPane.liveOutput, MAX_LIVE_OUTPUT) : '',
     attachedContextIds: Array.isArray(rawPane.attachedContextIds)
       ? rawPane.attachedContextIds.filter((item): item is string => typeof item === 'string')
@@ -620,18 +759,22 @@ function App() {
       return
     }
 
-    const modelInfo = bootstrap.providers[pane.provider].models.find((item) => item.id === model)
-    if (!modelInfo) {
+    const normalizedModel = model.trim()
+    if (!normalizedModel) {
       return
     }
 
+    const modelInfo = bootstrap.providers[pane.provider].models.find((item) => item.id === normalizedModel)
+
     const reasoningEffort =
-      modelInfo.supportedReasoningEfforts.length === 0 || modelInfo.supportedReasoningEfforts.includes(pane.reasoningEffort)
+      !modelInfo ||
+      modelInfo.supportedReasoningEfforts.length === 0 ||
+      modelInfo.supportedReasoningEfforts.includes(pane.reasoningEffort)
         ? pane.reasoningEffort
         : modelInfo.defaultReasoningEffort ?? 'medium'
 
     updatePane(paneId, {
-      model,
+      model: normalizedModel,
       reasoningEffort
     })
   }
@@ -660,7 +803,7 @@ function App() {
       return
     }
 
-    const response = responseOverride ?? getLatestAssistantText(pane)
+    const response = responseOverride ?? getShareableText(pane)
     if (!response) {
       return
     }
@@ -678,7 +821,7 @@ function App() {
       startTransition(() => {
         mutatePane(paneId, (pane) => ({
           ...pane,
-          liveOutput: clipText(`${pane.liveOutput}${event.text}`, MAX_LIVE_OUTPUT),
+          liveOutput: appendLiveOutputChunk(pane.liveOutput, event.text),
           lastActivityAt: eventAt,
           statusText: '応答を生成中'
         }))
@@ -687,10 +830,12 @@ function App() {
     }
 
     if (event.type === 'session') {
+      const sessionLine = `[session] ${event.sessionId}`
       mutatePane(paneId, (pane) => ({
         ...pane,
         sessionId: event.sessionId,
         lastActivityAt: eventAt,
+        liveOutput: appendLiveOutputLine(pane.liveOutput, sessionLine),
         streamEntries: appendStreamEntry(pane.streamEntries, 'system', `セッション開始: ${event.sessionId}`, eventAt)
       }))
       return
@@ -698,25 +843,36 @@ function App() {
 
     if (event.type === 'status' || event.type === 'tool' || event.type === 'stderr') {
       const kind = event.type === 'status' ? 'status' : event.type === 'tool' ? 'tool' : 'stderr'
+      const normalizedText = sanitizeTerminalText(event.text).trim()
       mutatePane(paneId, (pane) => ({
         ...pane,
         lastActivityAt: eventAt,
-        streamEntries: appendStreamEntry(pane.streamEntries, kind, event.text, eventAt),
-        lastError: event.type === 'stderr' ? event.text : pane.lastError
+        liveOutput: appendLiveOutputLine(pane.liveOutput, `[${kind}] ${normalizedText}`),
+        streamEntries: appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt),
+        lastError: event.type === 'stderr' ? normalizedText : pane.lastError
       }))
       return
     }
 
     if (event.type === 'final') {
+      const finalText = clipText(sanitizeTerminalText(event.response).trim(), MAX_LIVE_OUTPUT)
       const assistantEntry: PaneLogEntry = {
         id: createId('log'),
         role: 'assistant',
-        text: clipText(event.response, MAX_LIVE_OUTPUT),
+        text: finalText,
         createdAt: eventAt
       }
 
       let shouldShare = false
       mutatePane(paneId, (pane) => {
+        const finalPreview = finalText.slice(0, 120)
+        const liveOutputHasFinal = Boolean(finalPreview) && pane.liveOutput.includes(finalPreview)
+        const nextLiveOutput = finalText
+          ? liveOutputHasFinal
+            ? clipText(pane.liveOutput, MAX_LIVE_OUTPUT)
+            : appendLiveOutputLine(pane.liveOutput, finalText)
+          : pane.liveOutput
+
         shouldShare = pane.autoShare
         return {
           ...pane,
@@ -728,7 +884,7 @@ function App() {
           lastFinishedAt: eventAt,
           lastError: event.statusHint === 'error' ? '応答がエラーで終了しました' : null,
           lastResponse: assistantEntry.text,
-          liveOutput: assistantEntry.text,
+          liveOutput: nextLiveOutput,
           sessionId: event.sessionId ?? pane.sessionId,
           streamEntries: appendStreamEntry(pane.streamEntries, 'system', `実行終了: ${statusLabel(event.statusHint)}`, eventAt)
         }
@@ -741,12 +897,13 @@ function App() {
     }
 
     if (event.type === 'error') {
+      const message = sanitizeTerminalText(event.message).trim()
       streamErroredRef.current.add(paneId)
       mutatePane(paneId, (pane) => {
         const systemEntry: PaneLogEntry = {
           id: createId('log'),
           role: 'system',
-          text: event.message,
+          text: message,
           createdAt: eventAt
         }
 
@@ -758,8 +915,9 @@ function App() {
           runningSince: null,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
-          lastError: event.message,
-          streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', event.message, eventAt)
+          lastError: message,
+          liveOutput: appendLiveOutputLine(pane.liveOutput, `[stderr] ${message}`),
+          streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', message, eventAt)
         }
       })
     }
@@ -816,6 +974,7 @@ function App() {
       runningSince: startedAt,
       lastActivityAt: startedAt,
       lastError: null,
+      selectedSessionKey: null,
       liveOutput: '',
       streamEntries: appendStreamEntry([], 'system', `開始: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
@@ -838,7 +997,7 @@ function App() {
         controller.signal
       )
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = sanitizeTerminalText(error instanceof Error ? error.message : String(error)).trim()
       const stopped = controller.signal.aborted || stopRequestedRef.current.has(paneId) || isAbortLikeMessage(message)
       const streamErrored = streamErroredRef.current.delete(paneId)
 
@@ -861,6 +1020,7 @@ function App() {
             lastActivityAt: failedAt,
             lastFinishedAt: failedAt,
             lastError: message,
+            liveOutput: appendLiveOutputLine(currentPane.liveOutput, `[stderr] ${message}`),
             streamEntries: appendStreamEntry(currentPane.streamEntries, 'stderr', message, failedAt)
           }
         })
@@ -876,6 +1036,7 @@ function App() {
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
+          liveOutput: appendLiveOutputLine(currentPane.liveOutput, '[system] stopped'),
           streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '実行を停止しました', stoppedAt)
         }))
       }
@@ -967,6 +1128,8 @@ function App() {
       prompt: '',
       logs: [],
       streamEntries: [],
+      sessionHistory: [],
+      selectedSessionKey: null,
       liveOutput: '',
       sessionId: null,
       lastRunAt: null,
@@ -981,21 +1144,27 @@ function App() {
     setFocusedPaneId(duplicated.id)
   }
 
+  const handleStartNewSession = (paneId: string) => {
+    mutatePane(paneId, (pane) => {
+      const nextHistory = hasSessionContent(pane)
+        ? appendSessionRecord(pane.sessionHistory, createArchivedSessionRecord(pane))
+        : pane.sessionHistory
+
+      return {
+        ...resetActiveSessionFields(pane),
+        sessionHistory: nextHistory
+      }
+    })
+  }
+
   const handleResetSession = (paneId: string) => {
+    mutatePane(paneId, (pane) => resetActiveSessionFields(pane))
+  }
+
+  const handleSelectSession = (paneId: string, sessionKey: string | null) => {
     mutatePane(paneId, (pane) => ({
       ...pane,
-      status: 'idle',
-      statusText: statusLabel('idle'),
-      logs: [],
-      streamEntries: [],
-      liveOutput: '',
-      sessionId: null,
-      lastRunAt: null,
-      runningSince: null,
-      lastActivityAt: null,
-      lastFinishedAt: null,
-      lastError: null,
-      lastResponse: null
+      selectedSessionKey: sessionKey
     }))
   }
 
@@ -1130,6 +1299,39 @@ function App() {
     if (!target) {
       return
     }
+
+    try {
+      await openWorkspaceInVsCode(target)
+    } catch (error) {
+      updatePane(paneId, {
+        status: 'error',
+        statusText: 'VSCode 起動に失敗しました',
+        lastError: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const handleOpenPathInVsCode = async (paneId: string, path: string, resourceType: 'folder' | 'file') => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane || !path.trim()) {
+      return
+    }
+
+    const target: WorkspaceTarget =
+      pane.workspaceMode === 'local'
+        ? {
+            kind: 'local',
+            path: path.trim(),
+            label: path.trim(),
+            resourceType
+          }
+        : {
+            kind: 'ssh',
+            host: pane.sshHost.trim(),
+            path: path.trim(),
+            label: `${pane.sshHost.trim()}:${path.trim()}`,
+            resourceType
+          }
 
     try {
       await openWorkspaceInVsCode(target)
@@ -1373,13 +1575,15 @@ function App() {
             <span>完了</span>
           </header>
           <strong>{metrics.completed}</strong>
+          <p>正常終了したタスク</p>
         </article>
         <article className="metric-card compact">
           <header>
             <Bot size={16} />
-            <span>確認待ち</span>
+            <span>入力/確認待ち</span>
           </header>
           <strong>{metrics.attention}</strong>
+          <p>選択や確認が必要</p>
         </article>
         <article className="metric-card compact">
           <header>
@@ -1480,15 +1684,19 @@ function App() {
                 onShare={shareFromPane}
                 onCopyLatest={(paneId) => void handleCopyLatest(paneId)}
                 onDuplicate={handleDuplicatePane}
+                onStartNewSession={handleStartNewSession}
                 onResetSession={handleResetSession}
+                onSelectSession={handleSelectSession}
                 onDelete={handleDeletePane}
                 onLoadRemote={(paneId) => void handleLoadRemote(paneId)}
                 onBrowseRemote={(paneId, path) => void handleBrowseRemote(paneId, path)}
                 onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
                 onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}
+                onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
                 onAddLocalWorkspace={(paneId) => void handleAddLocalWorkspace(paneId)}
                 onSelectLocalWorkspace={(paneId, workspacePath) => void handleSelectLocalWorkspace(paneId, workspacePath)}
                 onRemoveLocalWorkspace={handleRemoveLocalWorkspace}
+                onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
                 onToggleContext={handleToggleContext}
               />
             ))}

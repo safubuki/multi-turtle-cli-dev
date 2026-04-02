@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Bot,
@@ -41,15 +41,19 @@ interface TerminalPaneProps {
   onShare: (paneId: string) => void
   onCopyLatest: (paneId: string) => void
   onDuplicate: (paneId: string) => void
+  onStartNewSession: (paneId: string) => void
   onResetSession: (paneId: string) => void
   onDelete: (paneId: string) => void
   onLoadRemote: (paneId: string) => void
   onBrowseRemote: (paneId: string, path?: string) => void
   onCreateRemoteDirectory: (paneId: string) => void
   onOpenWorkspace: (paneId: string) => void
+  onOpenPath: (paneId: string, path: string, resourceType: 'folder' | 'file') => void
   onAddLocalWorkspace: (paneId: string) => void
   onSelectLocalWorkspace: (paneId: string, workspacePath: string) => void
   onRemoveLocalWorkspace: (paneId: string) => void
+  onBrowseLocal: (paneId: string, path: string) => void
+  onSelectSession: (paneId: string, sessionKey: string | null) => void
   onToggleContext: (paneId: string, contextId: string) => void
 }
 
@@ -93,6 +97,41 @@ function getOutputText(pane: PaneState): string {
   return ''
 }
 
+function hasCurrentSessionContent(pane: PaneState): boolean {
+  return (
+    pane.logs.length > 0 ||
+    pane.streamEntries.length > 0 ||
+    Boolean(pane.sessionId) ||
+    Boolean(pane.lastResponse?.trim()) ||
+    Boolean(pane.liveOutput.trim())
+  )
+}
+
+function normalizeWindowsPath(path: string): string {
+  return path.replace(/[\\/]+$/, '').replace(/\//g, '\\')
+}
+
+function getLocalParentPath(currentPath: string, workspaceRoot: string): string | null {
+  const current = normalizeWindowsPath(currentPath)
+  const root = normalizeWindowsPath(workspaceRoot)
+  if (!current || !root || current.toLowerCase() === root.toLowerCase()) {
+    return null
+  }
+
+  const segments = current.split('\\')
+  if (segments.length <= 1) {
+    return null
+  }
+
+  segments.pop()
+  let parent = segments.join('\\')
+  if (/^[A-Za-z]:$/.test(parent)) {
+    parent += '\\'
+  }
+
+  return parent.toLowerCase().startsWith(root.toLowerCase()) ? parent : root
+}
+
 export function TerminalPane({
   pane,
   catalogs,
@@ -110,18 +149,44 @@ export function TerminalPane({
   onShare,
   onCopyLatest,
   onDuplicate,
+  onStartNewSession,
   onResetSession,
   onDelete,
   onLoadRemote,
   onBrowseRemote,
   onCreateRemoteDirectory,
   onOpenWorkspace,
+  onOpenPath,
   onAddLocalWorkspace,
   onSelectLocalWorkspace,
   onRemoveLocalWorkspace,
+  onBrowseLocal,
+  onSelectSession,
   onToggleContext
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDetailsElement | null>(null)
+
+  useEffect(() => {
+    if (!isMenuOpen) {
+      return
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        if (menuRef.current) {
+          menuRef.current.open = false
+        }
+        setIsMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+    }
+  }, [isMenuOpen])
 
   const catalog = catalogs[pane.provider]
   const currentModel = catalog?.models.find((model) => model.id === pane.model) ?? catalog?.models[0]
@@ -138,12 +203,65 @@ export function TerminalPane({
       ? pane.localWorkspacePath.trim().length > 0
       : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
+  const localParentPath = useMemo(
+    () => getLocalParentPath(pane.localBrowserPath || pane.localWorkspacePath, pane.localWorkspacePath),
+    [pane.localBrowserPath, pane.localWorkspacePath]
+  )
   const workspaceLabel =
     pane.workspaceMode === 'local'
       ? selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || '未選択')
       : pane.remoteWorkspacePath
         ? getShortPathLabel(pane.remoteWorkspacePath)
         : pane.sshHost || 'SSH 未設定'
+
+  const currentSessionAvailable = hasCurrentSessionContent(pane)
+  const fallbackArchivedSession = !currentSessionAvailable ? pane.sessionHistory[0] ?? null : null
+  const selectedArchivedSession = pane.selectedSessionKey
+    ? pane.sessionHistory.find((session) => session.key === pane.selectedSessionKey) ?? fallbackArchivedSession
+    : fallbackArchivedSession
+  const visibleSession = selectedArchivedSession
+    ? {
+        key: selectedArchivedSession.key,
+        label: selectedArchivedSession.label,
+        logs: selectedArchivedSession.logs,
+        streamEntries: selectedArchivedSession.streamEntries,
+        updatedAt: selectedArchivedSession.updatedAt,
+        status: selectedArchivedSession.status
+      }
+    : {
+        key: null,
+        label: pane.sessionId ? `現在 / ${pane.sessionId.slice(0, 8)}` : '現在のセッション',
+        logs: pane.logs,
+        streamEntries: pane.streamEntries,
+        updatedAt: pane.lastActivityAt ?? pane.lastRunAt,
+        status: pane.status
+      }
+  const sessionOptions = [
+    ...(currentSessionAvailable
+      ? [
+          {
+            key: '__current__',
+            label: pane.sessionId ? `現在 / ${pane.sessionId.slice(0, 8)}` : '現在のセッション'
+          }
+        ]
+      : []),
+    ...pane.sessionHistory.map((session) => ({
+      key: session.key,
+      label: session.label
+    }))
+  ]
+  const hasSessionRecords = sessionOptions.length > 0
+
+  const handleDelete = () => {
+    if (window.confirm('このペインを削除してもよいですか？')) {
+      onDelete(pane.id)
+    }
+  }
+
+  const closeMenuAndRun = (callback: () => void) => {
+    setIsMenuOpen(false)
+    callback()
+  }
 
   return (
     <>
@@ -165,21 +283,26 @@ export function TerminalPane({
             </div>
           </div>
 
-          <div className="pane-header-actions">
-            <details className="pane-menu">
+          <div className="pane-header-actions pane-side-actions">
+            <details
+              className="pane-menu"
+              ref={menuRef}
+              open={isMenuOpen}
+              onToggle={(event) => setIsMenuOpen((event.currentTarget as HTMLDetailsElement).open)}
+            >
               <summary className="icon-button" aria-label="ペイン操作">
                 <Ellipsis size={16} />
               </summary>
               <div className="pane-menu-surface">
-                <button type="button" className="menu-action" onClick={() => onShare(pane.id)}>
+                <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onShare(pane.id))}>
                   <Share2 size={15} />
                   結果を共有
                 </button>
-                <button type="button" className="menu-action" onClick={() => onCopyLatest(pane.id)}>
+                <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onCopyLatest(pane.id))}>
                   <Copy size={15} />
                   応答をコピー
                 </button>
-                <button type="button" className="menu-action" onClick={() => onDuplicate(pane.id)}>
+                <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onDuplicate(pane.id))}>
                   <Copy size={15} />
                   設定を複製
                 </button>
@@ -187,7 +310,7 @@ export function TerminalPane({
                   type="button"
                   className="menu-action"
                   disabled={pane.status === 'running'}
-                  onClick={() => onResetSession(pane.id)}
+                  onClick={() => closeMenuAndRun(() => onResetSession(pane.id))}
                 >
                   <RefreshCcw size={15} />
                   履歴を初期化
@@ -202,9 +325,27 @@ export function TerminalPane({
                 </label>
               </div>
             </details>
+            <button
+              type="button"
+              className="secondary-button pane-session-button"
+              disabled={pane.status === 'running'}
+              onClick={() => onStartNewSession(pane.id)}
+            >
+              <RefreshCcw size={16} />
+              新規セッション
+            </button>
 
-            <button type="button" className="icon-button danger" onClick={() => onDelete(pane.id)} title="ペインを削除">
+            <button type="button" className="icon-button danger" onClick={handleDelete} title="ペインを削除">
               <Trash2 size={16} />
+            </button>
+            <button
+              type="button"
+              className="secondary-button pane-vscode-button"
+              disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath}
+              onClick={() => onOpenWorkspace(pane.id)}
+            >
+              <FolderOpen size={16} />
+              VSCodeで開く
             </button>
           </div>
         </header>
@@ -288,7 +429,7 @@ export function TerminalPane({
         </section>
 
         <div className="pane-accordion-group">
-          <details className="pane-accordion">
+          <details className="pane-accordion settings-accordion">
             <summary className="accordion-summary">
               <span className="accordion-label">
                 <Settings2 size={15} />
@@ -353,7 +494,7 @@ export function TerminalPane({
                 </label>
 
                 <label>
-                  <span>自律度</span>
+                  <span>実行スタイル</span>
                   <select
                     value={pane.autonomyMode}
                     disabled={pane.provider === 'codex'}
@@ -363,8 +504,8 @@ export function TerminalPane({
                       })
                     }
                   >
-                    <option value="balanced">balanced</option>
-                    <option value="max">max</option>
+                    <option value="balanced">標準</option>
+                    <option value="max">積極</option>
                   </select>
                 </label>
               </div>
@@ -372,12 +513,12 @@ export function TerminalPane({
               <p className="field-note">
                 {pane.provider === 'codex'
                   ? 'Codex は現在 full-auto 固定です。'
-                  : 'balanced は安全寄り、max は自動編集を強めます。'}
+                  : '標準は安全寄り、積極は自動編集を強めます。'}
               </p>
             </div>
           </details>
 
-          <details className="pane-accordion">
+          <details className="pane-accordion workspace-accordion">
             <summary className="accordion-summary">
               <span className="accordion-label">
                 <FolderOpen size={15} />
@@ -453,19 +594,46 @@ export function TerminalPane({
                   <div className="browser-panel">
                     <div className="section-headline compact-headline">
                       <strong>フォルダ内容</strong>
-                      <span>{pane.localBrowserLoading ? '読み込み中' : getShortPathLabel(pane.localBrowserPath || pane.localWorkspacePath || '')}</span>
+                      <div className="browser-toolbar">
+                        {localParentPath && (
+                          <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, localParentPath)}>
+                            <ChevronLeft size={14} />
+                            上へ
+                          </button>
+                        )}
+                        <span>{pane.localBrowserLoading ? '読み込み中' : getShortPathLabel(pane.localBrowserPath || pane.localWorkspacePath || '')}</span>
+                      </div>
                     </div>
 
                     <div className="browser-simple-list">
                       {pane.localBrowserEntries.length > 0 ? (
-                        pane.localBrowserEntries.map((entry) => (
-                          <div key={entry.path} className={`browser-simple-item ${entry.isDirectory ? 'directory' : 'file'}`}>
-                            <div className="browser-simple-main">
-                              {entry.isDirectory ? <Folder size={15} /> : <FileText size={15} />}
-                              <span>{entry.label}</span>
-                            </div>
-                          </div>
-                        ))
+                        pane.localBrowserEntries.map((entry) =>
+                          entry.isDirectory ? (
+                            <button
+                              key={entry.path}
+                              type="button"
+                              className="browser-simple-item directory"
+                              onClick={() => onBrowseLocal(pane.id, entry.path)}
+                            >
+                              <div className="browser-simple-main">
+                                <Folder size={15} />
+                                <span>{entry.label}</span>
+                              </div>
+                            </button>
+                          ) : (
+                            <button
+                              key={entry.path}
+                              type="button"
+                              className="browser-simple-item file"
+                              onClick={() => onOpenPath(pane.id, entry.path, 'file')}
+                            >
+                              <div className="browser-simple-main">
+                                <FileText size={15} />
+                                <span>{entry.label}</span>
+                              </div>
+                            </button>
+                          )
+                        )
                       ) : (
                         <div className="panel-placeholder browser-placeholder">
                           {pane.localBrowserLoading ? 'フォルダ内容を読み込んでいます。' : '選択したフォルダの内容がここに表示されます。'}
@@ -646,7 +814,7 @@ export function TerminalPane({
             </details>
           )}
 
-          {(pane.streamEntries.length > 0 || pane.logs.length > 0) && (
+          {hasSessionRecords && (
             <details className="pane-accordion">
               <summary className="accordion-summary">
                 <span className="accordion-label">
@@ -654,19 +822,39 @@ export function TerminalPane({
                   実行ログ
                 </span>
                 <span className="accordion-value">
-                  {pane.streamEntries.length + pane.logs.length}件
+                  {sessionOptions.length}セッション
                 </span>
               </summary>
 
               <div className="accordion-body stacked-panels">
-                {pane.streamEntries.length > 0 && (
+                {sessionOptions.length > 1 && (
+                  <label className="session-selector">
+                    <span>セッション</span>
+                    <select
+                      value={selectedArchivedSession?.key ?? '__current__'}
+                      onChange={(event) => onSelectSession(pane.id, event.target.value === '__current__' ? null : event.target.value)}
+                    >
+                      {sessionOptions.map((session) => (
+                        <option key={session.key} value={session.key}>
+                          {session.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                <div className="session-log-meta">
+                  <strong>{visibleSession.label}</strong>
+                  <span>{formatClock(visibleSession.updatedAt)}</span>
+                </div>
+                {visibleSession.streamEntries.length > 0 && (
                   <div className="activity-panel compact-panel">
                     <div className="section-headline compact-headline">
                       <strong>ストリーム</strong>
-                      <span>{formatClock(pane.lastRunAt)}</span>
+                      <span>{visibleSession.streamEntries.length}件</span>
                     </div>
                     <div className="activity-feed">
-                      {pane.streamEntries.map((entry) => (
+                      {visibleSession.streamEntries.map((entry) => (
                         <article key={entry.id} className={`activity-entry ${entry.kind}`}>
                           <header>
                             <strong>{entry.kind}</strong>
@@ -679,14 +867,14 @@ export function TerminalPane({
                   </div>
                 )}
 
-                {pane.logs.length > 0 && (
+                {visibleSession.logs.length > 0 && (
                   <div className="history-panel compact-panel">
                     <div className="section-headline compact-headline">
                       <strong>会話履歴</strong>
-                      <span>{pane.logs.length}件</span>
+                      <span>{visibleSession.logs.length}件</span>
                     </div>
                     <div className="history-feed">
-                      {pane.logs.map((entry) => (
+                      {visibleSession.logs.map((entry) => (
                         <article key={entry.id} className={`history-entry ${entry.role}`}>
                           <header>
                             <strong>{entry.role === 'assistant' ? pane.provider : entry.role}</strong>
@@ -705,7 +893,7 @@ export function TerminalPane({
       </section>
 
       {isOutputExpanded && (
-        <div className="output-modal-backdrop" onClick={() => setIsOutputExpanded(false)}>
+        <div className="output-modal-backdrop">
           <div className="output-modal" onClick={(event) => event.stopPropagation()}>
             <div className="panel-header slim">
               <div>

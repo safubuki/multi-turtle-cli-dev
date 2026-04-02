@@ -82,6 +82,7 @@ export interface WorkspaceTarget {
   path: string
   label: string
   host?: string
+  resourceType?: 'folder' | 'file'
 }
 
 export interface PaneLogEntry {
@@ -96,6 +97,17 @@ export interface PaneStreamEntry {
   kind: 'status' | 'tool' | 'stderr' | 'system'
   text: string
   createdAt: number
+}
+
+export interface PaneSessionRecord {
+  key: string
+  label: string
+  sessionId: string | null
+  createdAt: number
+  updatedAt: number | null
+  status: PaneStatus
+  logs: PaneLogEntry[]
+  streamEntries: PaneStreamEntry[]
 }
 
 export interface SharedContextItem {
@@ -136,6 +148,8 @@ export interface PaneState {
   prompt: string
   logs: PaneLogEntry[]
   streamEntries: PaneStreamEntry[]
+  sessionHistory: PaneSessionRecord[]
+  selectedSessionKey: string | null
   liveOutput: string
   attachedContextIds: string[]
   sessionId: string | null

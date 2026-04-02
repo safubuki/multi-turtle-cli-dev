@@ -29,34 +29,24 @@ function normalizeAutonomyMode(value: unknown): AutonomyMode {
 
 function buildCombinedPrompt(body: RunRequestBody): string {
   const sections = [
-    `# Target\n${body.target.kind === 'local' ? `Local workspace: ${body.target.path}` : `SSH host: ${body.target.host}\nRemote workspace: ${body.target.path}`}`
+    body.target.kind === 'local'
+      ? `Workspace: ${body.target.path}`
+      : `SSH host: ${body.target.host}\nWorkspace: ${body.target.path}`
   ]
 
   if (body.sharedContext.length > 0) {
     sections.push(
       [
-        '# Shared Context',
+        'Shared Context',
         ...body.sharedContext.map(
           (item, index) =>
-            `## Context ${index + 1}\nSource lane: ${item.sourcePaneTitle}\nWorkspace: ${item.workspaceLabel}\nSummary: ${item.summary}\nDetails:\n${item.detail}`
+            `Context ${index + 1}\nSource: ${item.sourcePaneTitle}\nWorkspace: ${item.workspaceLabel}\nSummary: ${item.summary}\nDetails:\n${item.detail}`
         )
       ].join('\n')
     )
   }
 
-  if (body.sessionId) {
-    sections.push(
-      '# Session Continuity\nContinue the existing CLI session. Use the prior conversation already stored in that session and focus only on the new request below.'
-    )
-  } else if (body.memory.length > 0) {
-    sections.push(
-      ['# Recent Conversation', ...body.memory.slice(-8).map((entry) => `${entry.role.toUpperCase()}: ${entry.text}`)].join(
-        '\n'
-      )
-    )
-  }
-
-  sections.push(`# New Request\n${body.prompt}`)
+  sections.push(body.prompt)
   return sections.join('\n\n')
 }
 
