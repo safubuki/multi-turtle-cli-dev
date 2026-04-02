@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+﻿import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import type {
@@ -11,6 +11,7 @@ import type {
   WorkspaceTarget
 } from './types.js'
 import { getProviderCatalogs } from './providerCatalog.js'
+import { buildSshCommandArgs } from './ssh.js'
 import { APP_ROOT, dedupeStrings, shellEscapePosix } from './util.js'
 
 interface RunOptions {
@@ -299,13 +300,13 @@ function classifyStatus(response: string, stderrText: string): CliExecResult['st
   const combined = `${response}\n${stderrText}`.toLowerCase()
 
   if (
-    /permission denied|fatal:|traceback|exception|failed|error:|起動失敗|接続失敗|not found/.test(combined) &&
+    /permission denied|fatal:|traceback|exception|failed|error:|襍ｷ蜍募､ｱ謨慾謗･邯壼､ｱ謨慾not found/.test(combined) &&
     !/no error/.test(combined)
   ) {
     return 'error'
   }
 
-  if (/確認|選択|approval|approve|continue\?|続行|yes\/no|入力してください|which one|choose/.test(combined)) {
+  if (/遒ｺ隱鋼驕ｸ謚桍approval|approve|continue\?|邯夊｡芸yes\/no|蜈･蜉帙＠縺ｦ縺上□縺輔＞|which one|choose/.test(combined)) {
     return 'attention'
   }
 
@@ -548,14 +549,24 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
           ]
 
   const escapedRemoteArgs = remoteArgs.map((entry) => shellEscapePosix(entry)).join(' ')
-  const remoteCommand =
+  const remoteCommand = [
+    'export PATH="$HOME/.local/bin:$HOME/bin:$PATH"',
+    'export TERM=xterm-256color',
+    'export COLORTERM=truecolor',
     options.provider === 'codex'
       ? `cd ${shellEscapePosix(options.target.path)} && ${escapedRemoteArgs}`
       : escapedRemoteArgs
+  ].join(' && ')
 
   return {
     command: 'ssh',
-    args: [options.target.host, `bash -lc ${shellEscapePosix(remoteCommand)}`],
+    args: buildSshCommandArgs(
+      {
+        host: options.target.host,
+        connection: options.target.connection
+      },
+      ['bash', '-lc', remoteCommand]
+    ),
     stdinPrompt: options.provider === 'copilot' ? null : options.prompt
   }
 }
@@ -702,3 +713,5 @@ export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
 
   return createActiveRun(child, options, launchSpec)
 }
+
+

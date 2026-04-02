@@ -1,8 +1,10 @@
-import { existsSync } from 'fs'
+﻿import { existsSync } from 'fs'
 import path from 'path'
 import { spawn } from 'child_process'
 import { pathToFileURL } from 'url'
+import { buildSshCommandArgs } from './ssh.js'
 import type { WorkspaceTarget } from './types.js'
+import { shellEscapePosix } from './util.js'
 
 function getCodeCommandCandidates(): string[] {
   const candidates = [
@@ -31,6 +33,11 @@ function isCmdScript(command: string): boolean {
   return /\.cmd$/i.test(command)
 }
 
+function getCmdExecutable(): string {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+  return path.join(systemRoot, 'System32', 'cmd.exe')
+}
+
 function buildRemoteFolderUri(host: string, remotePath: string): string {
   const normalized = remotePath.replace(/\\/g, '/')
   const pathname = normalized.startsWith('/') ? normalized : `/${normalized}`
@@ -49,8 +56,7 @@ function buildRemoteFileUri(host: string, remotePath: string): string {
 
 function getSpawnCommand(command: string, args: string[]): { command: string; args: string[] } {
   if (process.platform === 'win32' && isCmdScript(command)) {
-    const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
-    const cmdPath = path.join(systemRoot, 'System32', 'cmd.exe')
+    const cmdPath = getCmdExecutable()
     return {
       command: cmdPath,
       args: ['/d', '/s', '/c', `"${command}"`, ...args]
@@ -89,6 +95,18 @@ function tryLaunch(command: string, args: string[]): Promise<void> {
   })
 }
 
+function quoteForCmd(value: string): string {
+  if (!value) {
+    return '""'
+  }
+
+  if (!/[\s"]/u.test(value)) {
+    return value
+  }
+
+  return `"${value.replace(/"/g, '""')}"`
+}
+
 export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
   const resourceType = target.resourceType ?? 'folder'
   const args =
@@ -123,4 +141,28 @@ export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error')
   throw new Error(`VSCode を起動できませんでした: ${detail}`)
+}
+
+export async function openInCommandPrompt(target: WorkspaceTarget): Promise<void> {
+  const cmdPath = getCmdExecutable()
+
+  if (target.kind === 'local') {
+    const basePath = target.resourceType === 'file' ? path.dirname(target.path) : target.path
+    await tryLaunch(cmdPath, ['/k', `cd /d ${quoteForCmd(path.resolve(basePath))}`])
+    return
+  }
+
+  const remotePath = target.resourceType === 'file' ? path.posix.dirname(target.path) : target.path
+  const remoteCommand = remotePath
+    ? `cd ${shellEscapePosix(remotePath)} && exec \${SHELL:-bash} -l`
+    : 'exec \${SHELL:-bash} -l'
+  const sshArgs = buildSshCommandArgs(
+    {
+      host: target.host,
+      connection: target.connection
+    },
+    ['-t', 'bash', '-lc', remoteCommand]
+  )
+
+  await tryLaunch(cmdPath, ['/k', `ssh ${sshArgs.map(quoteForCmd).join(' ')}`])
 }

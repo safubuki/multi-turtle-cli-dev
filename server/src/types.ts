@@ -1,4 +1,4 @@
-export type ProviderId = 'codex' | 'gemini' | 'copilot'
+﻿export type ProviderId = 'codex' | 'gemini' | 'copilot'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
 export type AutonomyMode = 'balanced' | 'max'
 
@@ -40,7 +40,29 @@ export interface SshHost {
   hostname?: string
   user?: string
   port?: string
+  identityFile?: string
+  proxyJump?: string
+  proxyCommand?: string
   source: 'ssh-config' | 'manual'
+}
+
+export interface SshConnectionOptions {
+  username?: string
+  port?: string
+  password?: string
+  identityFile?: string
+  proxyJump?: string
+  proxyCommand?: string
+  extraArgs?: string
+}
+
+export interface LocalSshKey {
+  id: string
+  name: string
+  publicKeyPath: string
+  privateKeyPath: string
+  publicKey: string
+  algorithm: string
 }
 
 export interface RemoteWorkspace {
@@ -73,6 +95,7 @@ export type WorkspaceTarget =
       path: string
       label: string
       resourceType?: 'folder' | 'file'
+      connection?: SshConnectionOptions
     }
 
 export interface MemoryEntry {

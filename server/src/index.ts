@@ -1,4 +1,4 @@
-import cors from 'cors'
+﻿import cors from 'cors'
 import express from 'express'
 import { startCliRun } from './cliRunner.js'
 import { pickFolderDialog } from './nativeDialog.js'
@@ -7,13 +7,16 @@ import {
   browseRemoteDirectory,
   createRemoteDirectory,
   discoverSshHosts,
+  generateSshKeyPair,
   getRemoteWorkspaceRoots,
   inspectRemoteHost,
-  listRemoteWorkspaces
+  installSshPublicKey,
+  listRemoteWorkspaces,
+  scpTransfer
 } from './ssh.js'
 import { specSections } from './spec.js'
-import type { ActiveCliRun, AutonomyMode, RunRequestBody, RunStreamEvent } from './types.js'
-import { openInVsCode } from './vscode.js'
+import type { ActiveCliRun, AutonomyMode, RunRequestBody, RunStreamEvent, SshConnectionOptions } from './types.js'
+import { openInCommandPrompt, openInVsCode } from './vscode.js'
 import { browseLocalDirectory, discoverLocalWorkspaces } from './workspaces.js'
 
 const app = express()
@@ -25,6 +28,28 @@ app.use(express.json({ limit: '10mb' }))
 
 function normalizeAutonomyMode(value: unknown): AutonomyMode {
   return value === 'max' ? 'max' : 'balanced'
+}
+
+function normalizeConnection(value: unknown): SshConnectionOptions | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+
+  const raw = value as Record<string, unknown>
+  const normalizeString = (key: string): string | undefined => {
+    const found = raw[key]
+    return typeof found === 'string' && found.trim() ? found.trim() : undefined
+  }
+
+  return {
+    username: normalizeString('username'),
+    port: normalizeString('port'),
+    password: normalizeString('password'),
+    identityFile: normalizeString('identityFile'),
+    proxyJump: normalizeString('proxyJump'),
+    proxyCommand: normalizeString('proxyCommand'),
+    extraArgs: normalizeString('extraArgs')
+  }
 }
 
 function buildCombinedPrompt(body: RunRequestBody): string {
@@ -169,9 +194,31 @@ app.post('/api/system/open-vscode', async (req, res) => {
   }
 })
 
+app.post('/api/system/open-cmd', async (req, res) => {
+  try {
+    const { target } = req.body as { target?: RunRequestBody['target'] }
+    if (!target) {
+      res.status(400).json({
+        success: false,
+        error: 'target required'
+      })
+      return
+    }
+
+    await openInCommandPrompt(target)
+    res.json({ success: true })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'command prompt open failed',
+      details: String(error)
+    })
+  }
+})
+
 app.post('/api/ssh/workspaces', async (req, res) => {
   try {
-    const { host } = req.body as { host?: string }
+    const { host, connection } = req.body as { host?: string; connection?: unknown }
     if (!host?.trim()) {
       res.status(400).json({
         success: false,
@@ -180,7 +227,7 @@ app.post('/api/ssh/workspaces', async (req, res) => {
       return
     }
 
-    const workspaces = await listRemoteWorkspaces(host.trim())
+    const workspaces = await listRemoteWorkspaces(host.trim(), normalizeConnection(connection))
     res.json({
       success: true,
       host: host.trim(),
@@ -197,7 +244,7 @@ app.post('/api/ssh/workspaces', async (req, res) => {
 
 app.post('/api/ssh/inspect', async (req, res) => {
   try {
-    const { host } = req.body as { host?: string }
+    const { host, connection } = req.body as { host?: string; connection?: unknown }
     if (!host?.trim()) {
       res.status(400).json({
         success: false,
@@ -206,7 +253,7 @@ app.post('/api/ssh/inspect', async (req, res) => {
       return
     }
 
-    const inspection = await inspectRemoteHost(host.trim())
+    const inspection = await inspectRemoteHost(host.trim(), normalizeConnection(connection))
     res.json({
       success: true,
       host: host.trim(),
@@ -223,7 +270,7 @@ app.post('/api/ssh/inspect', async (req, res) => {
 
 app.post('/api/ssh/browse', async (req, res) => {
   try {
-    const { host, path } = req.body as { host?: string; path?: string }
+    const { host, path, connection } = req.body as { host?: string; path?: string; connection?: unknown }
     if (!host?.trim()) {
       res.status(400).json({
         success: false,
@@ -232,7 +279,7 @@ app.post('/api/ssh/browse', async (req, res) => {
       return
     }
 
-    const payload = await browseRemoteDirectory(host.trim(), path)
+    const payload = await browseRemoteDirectory(host.trim(), normalizeConnection(connection), path)
     res.json({
       success: true,
       host: host.trim(),
@@ -249,10 +296,11 @@ app.post('/api/ssh/browse', async (req, res) => {
 
 app.post('/api/ssh/mkdir', async (req, res) => {
   try {
-    const { host, parentPath, directoryName } = req.body as {
+    const { host, parentPath, directoryName, connection } = req.body as {
       host?: string
       parentPath?: string
       directoryName?: string
+      connection?: unknown
     }
 
     if (!host?.trim() || !parentPath?.trim() || !directoryName?.trim()) {
@@ -263,7 +311,7 @@ app.post('/api/ssh/mkdir', async (req, res) => {
       return
     }
 
-    const createdPath = await createRemoteDirectory(host.trim(), parentPath.trim(), directoryName.trim())
+    const createdPath = await createRemoteDirectory(host.trim(), normalizeConnection(connection), parentPath.trim(), directoryName.trim())
     res.json({
       success: true,
       host: host.trim(),
@@ -274,6 +322,93 @@ app.post('/api/ssh/mkdir', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'remote directory creation failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/ssh/keygen', async (req, res) => {
+  try {
+    const { keyName, comment, passphrase } = req.body as {
+      keyName?: string
+      comment?: string
+      passphrase?: string
+    }
+
+    const key = await generateSshKeyPair(keyName ?? 'id_ed25519', comment ?? '', passphrase ?? '')
+    res.json({
+      success: true,
+      key
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'ssh key generation failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/ssh/install-key', async (req, res) => {
+  try {
+    const { host, publicKey, connection } = req.body as {
+      host?: string
+      publicKey?: string
+      connection?: unknown
+    }
+
+    if (!host?.trim() || !publicKey?.trim()) {
+      res.status(400).json({
+        success: false,
+        error: 'host and publicKey are required'
+      })
+      return
+    }
+
+    await installSshPublicKey(host.trim(), normalizeConnection(connection), publicKey.trim())
+    res.json({
+      success: true,
+      host: host.trim(),
+      installed: true
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'ssh key installation failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/ssh/scp', async (req, res) => {
+  try {
+    const { direction, host, localPath, remotePath, connection } = req.body as {
+      direction?: 'upload' | 'download'
+      host?: string
+      localPath?: string
+      remotePath?: string
+      connection?: unknown
+    }
+
+    if (!direction || !host?.trim() || !localPath?.trim() || !remotePath?.trim()) {
+      res.status(400).json({
+        success: false,
+        error: 'direction, host, localPath and remotePath are required'
+      })
+      return
+    }
+
+    await scpTransfer(direction, { host: host.trim(), connection: normalizeConnection(connection) }, localPath.trim(), remotePath.trim())
+    res.json({
+      success: true,
+      direction,
+      localPath: localPath.trim(),
+      remotePath: remotePath.trim()
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'scp transfer failed',
       details: String(error)
     })
   }

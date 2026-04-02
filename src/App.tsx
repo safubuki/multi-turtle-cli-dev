@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Bot,
@@ -8,6 +8,7 @@ import {
   Plus,
   RefreshCcw,
   SplitSquareHorizontal,
+  Trash2,
   Wifi,
   XCircle
 } from 'lucide-react'
@@ -18,11 +19,15 @@ import {
   createRemoteDirectory,
   fetchBootstrap,
   fetchRemoteWorkspaces,
+  generateSshKey,
   inspectSshHost,
+  installSshKey,
+  openTargetInCommandPrompt,
   openWorkspaceInVsCode,
   pickLocalWorkspace,
   runPaneStream,
-  stopPaneRun
+  stopPaneRun,
+  transferSshPath
 } from './lib/api'
 import type {
   BootstrapPayload,
@@ -37,6 +42,8 @@ import type {
   RemoteDirectoryEntry,
   RunStreamEvent,
   SharedContextItem,
+  SshConnectionOptions,
+  SshHost,
   WorkspaceTarget
 } from './types'
 
@@ -240,10 +247,10 @@ function hasSessionContent(pane: Pick<PaneState, 'logs' | 'streamEntries' | 'ses
 
 function buildSessionLabel(sessionId: string | null, createdAt: number): string {
   if (sessionId) {
-    return `セッション ${sessionId.slice(0, 8)}`
+    return `繧ｻ繝・す繝ｧ繝ｳ ${sessionId.slice(0, 8)}`
   }
 
-  return `セッション ${new Date(createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
+  return `繧ｻ繝・す繝ｧ繝ｳ ${new Date(createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
 }
 
 function createArchivedSessionRecord(pane: PaneState): PaneSessionRecord {
@@ -266,7 +273,26 @@ function appendSessionRecord(history: PaneSessionRecord[], record: PaneSessionRe
   return [record, ...history].slice(0, MAX_SESSION_HISTORY)
 }
 
-function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[]): WorkspaceTarget | null {
+function buildSshConnectionFromPane(pane: PaneState, sshHosts: SshHost[] = []): SshConnectionOptions {
+  const matchedHost = sshHosts.find((item) => item.alias === pane.sshHost.trim())
+
+  return {
+    username: pane.sshUser.trim() || matchedHost?.user || undefined,
+    port: pane.sshPort.trim() || matchedHost?.port || undefined,
+    password: pane.sshPassword.trim() || undefined,
+    identityFile: pane.sshIdentityFile.trim() || matchedHost?.identityFile || undefined,
+    proxyJump: pane.sshProxyJump.trim() || matchedHost?.proxyJump || undefined,
+    proxyCommand: pane.sshProxyCommand.trim() || matchedHost?.proxyCommand || undefined,
+    extraArgs: pane.sshExtraArgs.trim() || undefined
+  }
+}
+
+function buildSshLabel(host: string, remotePath: string, connection?: SshConnectionOptions): string {
+  const userPrefix = connection?.username?.trim() ? `${connection.username.trim()}@` : ''
+  return `${userPrefix}${host}:${remotePath}`
+}
+
+function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[], sshHosts: SshHost[] = []): WorkspaceTarget | null {
   if (pane.workspaceMode === 'local') {
     if (!pane.localWorkspacePath.trim()) {
       return null
@@ -285,12 +311,15 @@ function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[])
     return null
   }
 
+  const connection = buildSshConnectionFromPane(pane, sshHosts)
+
   return {
     kind: 'ssh',
     host: pane.sshHost.trim(),
     path: pane.remoteWorkspacePath.trim(),
-    label: `${pane.sshHost.trim()}:${pane.remoteWorkspacePath.trim()}`,
-    resourceType: 'folder'
+    label: buildSshLabel(pane.sshHost.trim(), pane.remoteWorkspacePath.trim(), connection),
+    resourceType: 'folder',
+    connection
   }
 }
 
@@ -316,6 +345,19 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     localBrowserEntries: [],
     localBrowserLoading: false,
     sshHost: '',
+    sshUser: '',
+    sshPort: '',
+    sshPassword: '',
+    sshIdentityFile: '',
+    sshProxyJump: '',
+    sshProxyCommand: '',
+    sshExtraArgs: '',
+    sshLocalKeys: [],
+    sshSelectedKeyPath: '',
+    sshPublicKeyText: '',
+    sshDiagnostics: [],
+    sshLocalPath: firstWorkspace?.path ?? '',
+    sshRemotePath: '',
     remoteWorkspacePath: '',
     remoteWorkspaces: [],
     remoteAvailableProviders: [],
@@ -343,12 +385,26 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
   }
 }
 
-function createSharedContextItem(pane: PaneState, target: WorkspaceTarget | null, response: string): SharedContextItem {
+function createSharedContextItem(
+  pane: PaneState,
+  target: WorkspaceTarget | null,
+  response: string,
+  options: {
+    scope: SharedContextItem['scope']
+    targetPaneIds?: string[]
+    targetPaneTitles?: string[]
+    contentLabel: string
+  }
+): SharedContextItem {
   return {
     id: createId('context'),
     sourcePaneId: pane.id,
     sourcePaneTitle: pane.title,
     provider: pane.provider,
+    scope: options.scope,
+    targetPaneIds: options.targetPaneIds ?? [],
+    targetPaneTitles: options.targetPaneTitles ?? [],
+    contentLabel: options.contentLabel,
     workspaceLabel: target?.label ?? '未選択',
     summary: summarize(response),
     detail: clipText(response, 16_000),
@@ -365,28 +421,28 @@ function getLatestAssistantText(pane: PaneState): string | null {
   return latestAssistant?.text ?? null
 }
 
-function getShareableText(pane: PaneState): string | null {
+function getShareablePayload(pane: PaneState): { text: string | null; contentLabel: string } {
   if (pane.selectedSessionKey) {
     const selectedSession = pane.sessionHistory.find((session) => session.key === pane.selectedSessionKey)
     if (selectedSession) {
       const latestAssistant = [...selectedSession.logs].reverse().find((entry) => entry.role === 'assistant')?.text
       if (latestAssistant?.trim()) {
-        return latestAssistant
+        return { text: latestAssistant, contentLabel: '驕ｸ謚樔ｸｭ繧ｻ繝・す繝ｧ繝ｳ' }
       }
 
       const combinedLogs = selectedSession.logs.map((entry) => `${entry.role.toUpperCase()}: ${entry.text}`).join('\n\n').trim()
       if (combinedLogs) {
-        return combinedLogs
+        return { text: combinedLogs, contentLabel: '驕ｸ謚樔ｸｭ繧ｻ繝・す繝ｧ繝ｳ' }
       }
 
       const combinedStream = selectedSession.streamEntries.map((entry) => `[${entry.kind}] ${entry.text}`).join('\n').trim()
       if (combinedStream) {
-        return combinedStream
+        return { text: combinedStream, contentLabel: '驕ｸ謚樔ｸｭ繧ｻ繝・す繝ｧ繝ｳ' }
       }
     }
   }
 
-  return getLatestAssistantText(pane)
+  return { text: getLatestAssistantText(pane), contentLabel: '譛譁ｰ邨先棡' }
 }
 
 function resetActiveSessionFields(pane: PaneState): PaneState {
@@ -422,6 +478,31 @@ function readJsonStorage<T>(key: string, fallback: T): T {
   }
 }
 
+function normalizeSharedContextItem(rawItem: Partial<SharedContextItem> | null | undefined): SharedContextItem | null {
+  if (!rawItem?.id || !rawItem.sourcePaneId || !rawItem.sourcePaneTitle || !rawItem.provider || !rawItem.workspaceLabel) {
+    return null
+  }
+
+  return {
+    id: rawItem.id,
+    sourcePaneId: rawItem.sourcePaneId,
+    sourcePaneTitle: rawItem.sourcePaneTitle,
+    provider: rawItem.provider,
+    workspaceLabel: rawItem.workspaceLabel,
+    scope: rawItem.scope === 'direct' ? 'direct' : 'global',
+    targetPaneIds: Array.isArray(rawItem.targetPaneIds)
+      ? rawItem.targetPaneIds.filter((item): item is string => typeof item === 'string')
+      : [],
+    targetPaneTitles: Array.isArray(rawItem.targetPaneTitles)
+      ? rawItem.targetPaneTitles.filter((item): item is string => typeof item === 'string')
+      : [],
+    contentLabel: typeof rawItem.contentLabel === 'string' && rawItem.contentLabel.trim() ? rawItem.contentLabel : '譛譁ｰ邨先棡',
+    summary: typeof rawItem.summary === 'string' ? rawItem.summary : '',
+    detail: typeof rawItem.detail === 'string' ? rawItem.detail : '',
+    createdAt: typeof rawItem.createdAt === 'number' ? rawItem.createdAt : Date.now()
+  }
+}
+
 function loadPersistedState(): {
   panes: Partial<PaneState>[]
   sharedContext: SharedContextItem[]
@@ -433,7 +514,9 @@ function loadPersistedState(): {
 
   return {
     panes: readJsonStorage<Partial<PaneState>[]>(STORAGE_KEYS.panes, []),
-    sharedContext: readJsonStorage<SharedContextItem[]>(STORAGE_KEYS.sharedContext, []),
+    sharedContext: readJsonStorage<SharedContextItem[]>(STORAGE_KEYS.sharedContext, [])
+      .map((item) => normalizeSharedContextItem(item))
+      .filter((item): item is SharedContextItem => Boolean(item)),
     layout: layout === 'quad' || layout === 'focus' ? layout : 'triple',
     localWorkspaces: mergeLocalWorkspaces(readJsonStorage<LocalWorkspace[]>(STORAGE_KEYS.localWorkspaces, [])),
     focusedPaneId: readJsonStorage<string | null>(STORAGE_KEYS.focusedPane, null)
@@ -524,7 +607,7 @@ function normalizePane(
         .filter((entry): entry is RemoteDirectoryEntry => Boolean(entry))
     : []
   const statusText =
-    rawStatus === 'running' ? '前回の実行は切断されました' : typeof rawPane.statusText === 'string' ? rawPane.statusText : statusLabel(restoredStatus)
+    rawStatus === 'running' ? '蜑榊屓縺ｮ螳溯｡後・蛻・妙縺輔ｌ縺ｾ縺励◆' : typeof rawPane.statusText === 'string' ? rawPane.statusText : statusLabel(restoredStatus)
 
   return {
     id: rawPane.id ?? createId('pane'),
@@ -541,6 +624,21 @@ function normalizePane(
     localBrowserEntries: Array.isArray(rawPane.localBrowserEntries) ? rawPane.localBrowserEntries : [],
     localBrowserLoading: false,
     sshHost: typeof rawPane.sshHost === 'string' ? rawPane.sshHost : '',
+    sshUser: typeof rawPane.sshUser === 'string' ? rawPane.sshUser : '',
+    sshPort: typeof rawPane.sshPort === 'string' ? rawPane.sshPort : '',
+    sshPassword: typeof rawPane.sshPassword === 'string' ? rawPane.sshPassword : '',
+    sshIdentityFile: typeof rawPane.sshIdentityFile === 'string' ? rawPane.sshIdentityFile : '',
+    sshProxyJump: typeof rawPane.sshProxyJump === 'string' ? rawPane.sshProxyJump : '',
+    sshProxyCommand: typeof rawPane.sshProxyCommand === 'string' ? rawPane.sshProxyCommand : '',
+    sshExtraArgs: typeof rawPane.sshExtraArgs === 'string' ? rawPane.sshExtraArgs : '',
+    sshLocalKeys: Array.isArray(rawPane.sshLocalKeys) ? rawPane.sshLocalKeys : [],
+    sshSelectedKeyPath: typeof rawPane.sshSelectedKeyPath === 'string' ? rawPane.sshSelectedKeyPath : '',
+    sshPublicKeyText: typeof rawPane.sshPublicKeyText === 'string' ? rawPane.sshPublicKeyText : '',
+    sshDiagnostics: Array.isArray(rawPane.sshDiagnostics)
+      ? rawPane.sshDiagnostics.filter((item): item is string => typeof item === 'string')
+      : [],
+    sshLocalPath: typeof rawPane.sshLocalPath === 'string' ? rawPane.sshLocalPath : localWorkspacePath,
+    sshRemotePath: typeof rawPane.sshRemotePath === 'string' ? rawPane.sshRemotePath : '',
     remoteWorkspacePath: typeof rawPane.remoteWorkspacePath === 'string' ? rawPane.remoteWorkspacePath : '',
     remoteWorkspaces: Array.isArray(rawPane.remoteWorkspaces) ? rawPane.remoteWorkspaces : [],
     remoteAvailableProviders: Array.isArray(rawPane.remoteAvailableProviders)
@@ -797,21 +895,64 @@ function App() {
     )
   }
 
-  const shareFromPane = (paneId: string, responseOverride?: string) => {
+  const shareFromPane = (
+    paneId: string,
+    responseOverride?: string,
+    options?: {
+      scope?: SharedContextItem['scope']
+      targetPaneId?: string
+    }
+  ) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
     if (!pane) {
       return
     }
 
-    const response = responseOverride ?? getShareableText(pane)
+    const payload = getShareablePayload(pane)
+    const response = responseOverride ?? payload.text
     if (!response) {
       return
     }
 
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current)
-    const contextItem = createSharedContextItem(pane, target, response)
+    const scope = options?.scope === 'direct' ? 'direct' : 'global'
+    const targetPane = options?.targetPaneId ? panesRef.current.find((item) => item.id === options.targetPaneId) ?? null : null
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    const contextItem = createSharedContextItem(pane, target, response, {
+      scope,
+      targetPaneIds: targetPane ? [targetPane.id] : [],
+      targetPaneTitles: targetPane ? [targetPane.title] : [],
+      contentLabel: payload.contentLabel
+    })
     setSharedContext((current) => [contextItem, ...current].slice(0, MAX_SHARED_CONTEXT))
-    appendPaneSystemMessage(paneId, '結果を共有へ追加しました')
+
+    if (targetPane) {
+      setPanes((current) =>
+        current.map((currentPane) =>
+          currentPane.id === targetPane.id
+            ? {
+                ...currentPane,
+                attachedContextIds: currentPane.attachedContextIds.includes(contextItem.id)
+                  ? currentPane.attachedContextIds
+                  : [...currentPane.attachedContextIds, contextItem.id]
+              }
+            : currentPane
+        )
+      )
+      appendPaneSystemMessage(paneId, `${targetPane.title} 縺ｫ蛟句挨蜈ｱ譛峨＠縺ｾ縺励◆`)
+      appendPaneSystemMessage(targetPane.id, `${pane.title} 縺九ｉ蜈ｱ譛峨ｒ蜿励￠蜿悶ｊ縺ｾ縺励◆`)
+      return
+    }
+    appendPaneSystemMessage(paneId, '邨先棡繧貞・譛峨∈霑ｽ蜉縺励∪縺励◆')
+  }
+
+  const handleDeleteSharedContext = (contextId: string) => {
+    setSharedContext((current) => current.filter((item) => item.id !== contextId))
+    setPanes((current) =>
+      current.map((pane) => ({
+        ...pane,
+        attachedContextIds: pane.attachedContextIds.filter((item) => item !== contextId)
+      }))
+    )
   }
 
   const handleStreamEvent = (paneId: string, event: RunStreamEvent) => {
@@ -823,7 +964,7 @@ function App() {
           ...pane,
           liveOutput: appendLiveOutputChunk(pane.liveOutput, event.text),
           lastActivityAt: eventAt,
-          statusText: '応答を生成中'
+          statusText: '蠢懃ｭ斐ｒ逕滓・荳ｭ'
         }))
       })
       return
@@ -836,7 +977,7 @@ function App() {
         sessionId: event.sessionId,
         lastActivityAt: eventAt,
         liveOutput: appendLiveOutputLine(pane.liveOutput, sessionLine),
-        streamEntries: appendStreamEntry(pane.streamEntries, 'system', `セッション開始: ${event.sessionId}`, eventAt)
+        streamEntries: appendStreamEntry(pane.streamEntries, 'system', `繧ｻ繝・す繝ｧ繝ｳ髢句ｧ・ ${event.sessionId}`, eventAt)
       }))
       return
     }
@@ -882,11 +1023,11 @@ function App() {
           runningSince: null,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
-          lastError: event.statusHint === 'error' ? '応答がエラーで終了しました' : null,
+          lastError: event.statusHint === 'error' ? '蠢懃ｭ斐′繧ｨ繝ｩ繝ｼ縺ｧ邨ゆｺ・＠縺ｾ縺励◆' : null,
           lastResponse: assistantEntry.text,
           liveOutput: nextLiveOutput,
           sessionId: event.sessionId ?? pane.sessionId,
-          streamEntries: appendStreamEntry(pane.streamEntries, 'system', `実行終了: ${statusLabel(event.statusHint)}`, eventAt)
+          streamEntries: appendStreamEntry(pane.streamEntries, 'system', `螳溯｡檎ｵゆｺ・ ${statusLabel(event.statusHint)}`, eventAt)
         }
       })
 
@@ -929,7 +1070,7 @@ function App() {
       return
     }
 
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current)
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
     if (!target) {
       updatePane(paneId, {
         status: 'attention',
@@ -943,7 +1084,7 @@ function App() {
     if (!prompt) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '指示文を入力してください',
+        statusText: '指示を入力してください',
         lastError: 'プロンプトが空です'
       })
       return
@@ -969,14 +1110,14 @@ function App() {
       ...currentPane,
       logs: appendLogEntry(currentPane.logs, userEntry),
       status: 'running',
-      statusText: 'CLI を実行中',
+      statusText: 'CLI 繧貞ｮ溯｡御ｸｭ',
       lastRunAt: startedAt,
       runningSince: startedAt,
       lastActivityAt: startedAt,
       lastError: null,
       selectedSessionKey: null,
       liveOutput: '',
-      streamEntries: appendStreamEntry([], 'system', `開始: ${currentPane.provider} / ${target.label}`, startedAt)
+      streamEntries: appendStreamEntry([], 'system', `髢句ｧ・ ${currentPane.provider} / ${target.label}`, startedAt)
     }))
 
     try {
@@ -1031,13 +1172,13 @@ function App() {
         mutatePane(paneId, (currentPane) => ({
           ...currentPane,
           status: 'attention',
-          statusText: '停止しました',
+          statusText: '蛛懈ｭ｢縺励∪縺励◆',
           runningSince: null,
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
           liveOutput: appendLiveOutputLine(currentPane.liveOutput, '[system] stopped'),
-          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '実行を停止しました', stoppedAt)
+          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '螳溯｡後ｒ蛛懈ｭ｢縺励∪縺励◆', stoppedAt)
         }))
       }
     } finally {
@@ -1088,7 +1229,20 @@ function App() {
     delete controllersRef.current[paneId]
     void stopPaneRun(paneId).catch(() => undefined)
 
-    setSharedContext((current) => current.filter((item) => item.sourcePaneId !== paneId))
+    setSharedContext((current) =>
+      current
+        .filter((item) => item.sourcePaneId !== paneId)
+        .map((item) =>
+          item.targetPaneIds.includes(paneId)
+            ? {
+                ...item,
+                targetPaneIds: item.targetPaneIds.filter((id) => id !== paneId),
+                targetPaneTitles: item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
+              }
+            : item
+        )
+        .filter((item) => item.scope !== 'direct' || item.targetPaneIds.length > 0)
+    )
 
     let nextFocusId: string | null = null
     setPanes((current) => {
@@ -1180,13 +1334,13 @@ function App() {
       const copiedAt = Date.now()
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '最新出力をクリップボードへコピーしました', copiedAt),
+        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '譛譁ｰ蜃ｺ蜉帙ｒ繧ｯ繝ｪ繝・・繝懊・繝峨∈繧ｳ繝斐・縺励∪縺励◆', copiedAt),
         lastActivityAt: copiedAt
       }))
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'コピーに失敗しました',
+        statusText: '繧ｳ繝斐・縺ｫ螟ｱ謨励＠縺ｾ縺励◆',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1214,7 +1368,7 @@ function App() {
       updatePane(paneId, {
         localBrowserLoading: false,
         status: 'error',
-        statusText: 'フォルダ内容の読込に失敗しました',
+        statusText: '繝輔か繝ｫ繝蜀・ｮｹ縺ｮ隱ｭ霎ｼ縺ｫ螟ｱ謨励＠縺ｾ縺励◆',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1251,7 +1405,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'フォルダ選択に失敗しました',
+        statusText: '繝輔か繝ｫ繝驕ｸ謚槭↓螟ｱ謨励＠縺ｾ縺励◆',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1295,7 +1449,7 @@ function App() {
       return
     }
 
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current)
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
     if (!target) {
       return
     }
@@ -1305,7 +1459,29 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'VSCode 起動に失敗しました',
+        statusText: 'VSCode の起動に失敗しました',
+        lastError: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const handleOpenCommandPrompt = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane) {
+      return
+    }
+
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    if (!target) {
+      return
+    }
+
+    try {
+      await openTargetInCommandPrompt(target)
+    } catch (error) {
+      updatePane(paneId, {
+        status: 'error',
+        statusText: 'コマンドプロンプトを開けませんでした',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1329,8 +1505,9 @@ function App() {
             kind: 'ssh',
             host: pane.sshHost.trim(),
             path: path.trim(),
-            label: `${pane.sshHost.trim()}:${path.trim()}`,
-            resourceType
+            label: buildSshLabel(pane.sshHost.trim(), path.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])),
+            resourceType,
+            connection: buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
           }
 
     try {
@@ -1338,7 +1515,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'VSCode 起動に失敗しました',
+        statusText: 'VSCode の起動に失敗しました',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1355,6 +1532,7 @@ function App() {
       return
     }
 
+    const connection = buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
     const startedAt = Date.now()
     updatePane(paneId, {
       status: 'running',
@@ -1366,9 +1544,9 @@ function App() {
 
     try {
       const [workspacePayload, inspectionPayload, browsePayload] = await Promise.all([
-        fetchRemoteWorkspaces(pane.sshHost.trim()),
-        inspectSshHost(pane.sshHost.trim()),
-        browseRemoteDirectory(pane.sshHost.trim(), pane.remoteBrowserPath || pane.remoteWorkspacePath || undefined)
+        fetchRemoteWorkspaces(pane.sshHost.trim(), connection),
+        inspectSshHost(pane.sshHost.trim(), connection),
+        browseRemoteDirectory(pane.sshHost.trim(), pane.remoteBrowserPath || pane.remoteWorkspacePath || undefined, connection)
       ])
 
       setPanes((current) =>
@@ -1387,11 +1565,23 @@ function App() {
               ? bootstrap.providers[nextProvider].models[0]?.id ?? item.model
               : item.model
           const updatedAt = Date.now()
+          const selectedKey = inspectionPayload.localKeys.find((key) => key.privateKeyPath === item.sshSelectedKeyPath) ?? inspectionPayload.localKeys[0] ?? null
 
           return {
             ...item,
             provider: nextProvider,
             model: nextModel,
+            sshUser: item.sshUser || inspectionPayload.suggestedUser || '',
+            sshPort: item.sshPort || inspectionPayload.suggestedPort || '',
+            sshIdentityFile: item.sshIdentityFile || inspectionPayload.suggestedIdentityFile || '',
+            sshProxyJump: item.sshProxyJump || inspectionPayload.suggestedProxyJump || '',
+            sshProxyCommand: item.sshProxyCommand || inspectionPayload.suggestedProxyCommand || '',
+            sshLocalKeys: inspectionPayload.localKeys,
+            sshSelectedKeyPath: selectedKey?.privateKeyPath ?? '',
+            sshPublicKeyText: selectedKey?.publicKey ?? item.sshPublicKeyText,
+            sshDiagnostics: inspectionPayload.diagnostics,
+            sshLocalPath: item.sshLocalPath || localWorkspacesRef.current[0]?.path || '',
+            sshRemotePath: item.sshRemotePath || item.remoteWorkspacePath || browsePayload.path,
             remoteWorkspaces: workspacePayload.workspaces,
             remoteAvailableProviders: inspectionPayload.availableProviders,
             remoteHomeDirectory: inspectionPayload.homeDirectory,
@@ -1437,7 +1627,8 @@ function App() {
     try {
       const browsePayload = await browseRemoteDirectory(
         pane.sshHost.trim(),
-        nextPath || pane.remoteBrowserPath || pane.remoteHomeDirectory || undefined
+        nextPath || pane.remoteBrowserPath || pane.remoteHomeDirectory || undefined,
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
       )
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
@@ -1446,6 +1637,7 @@ function App() {
         remoteBrowserPath: browsePayload.path,
         remoteParentPath: browsePayload.parentPath,
         remoteBrowserEntries: browsePayload.entries,
+        sshRemotePath: currentPane.sshRemotePath || browsePayload.path,
         lastError: null
       }))
     } catch (error) {
@@ -1463,7 +1655,7 @@ function App() {
     if (!pane || !pane.sshHost.trim() || !pane.remoteBrowserPath.trim() || !pane.remoteNewDirectoryName.trim()) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '作成先とフォルダ名を確認してください',
+        statusText: '作成先とフォルダ名を設定してください',
         lastError: 'リモートフォルダ作成に必要な情報が不足しています'
       })
       return
@@ -1477,9 +1669,14 @@ function App() {
       const payload = await createRemoteDirectory(
         pane.sshHost.trim(),
         pane.remoteBrowserPath.trim(),
-        pane.remoteNewDirectoryName.trim()
+        pane.remoteNewDirectoryName.trim(),
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
       )
-      const browsePayload = await browseRemoteDirectory(pane.sshHost.trim(), payload.path)
+      const browsePayload = await browseRemoteDirectory(
+        pane.sshHost.trim(),
+        payload.path,
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+      )
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
         remoteBrowserLoading: false,
@@ -1488,6 +1685,7 @@ function App() {
         remoteParentPath: browsePayload.parentPath,
         remoteBrowserEntries: browsePayload.entries,
         remoteNewDirectoryName: '',
+        sshRemotePath: payload.path,
         lastError: null,
         streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', `フォルダ作成: ${payload.path}`, Date.now())
       }))
@@ -1496,6 +1694,92 @@ function App() {
         remoteBrowserLoading: false,
         status: 'error',
         statusText: 'フォルダ作成に失敗しました',
+        lastError: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const handleGenerateSshKey = async (paneId: string) => {
+    try {
+      const result = await generateSshKey('id_ed25519', 'multi-turtle-cli-dev', '')
+      mutatePane(paneId, (pane) => ({
+        ...pane,
+        sshLocalKeys: [result.key, ...pane.sshLocalKeys.filter((item) => item.privateKeyPath !== result.key.privateKeyPath)],
+        sshSelectedKeyPath: result.key.privateKeyPath,
+        sshIdentityFile: pane.sshIdentityFile || result.key.privateKeyPath,
+        sshPublicKeyText: result.key.publicKey,
+        sshDiagnostics: [...pane.sshDiagnostics.filter((item) => !item.startsWith('ローカル鍵:')), `ローカル鍵: ${result.key.privateKeyPath}`],
+        lastError: null
+      }))
+    } catch (error) {
+      updatePane(paneId, {
+        status: 'error',
+        statusText: 'SSH 鍵の生成に失敗しました',
+        lastError: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const handleInstallSshPublicKey = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane || !pane.sshHost.trim() || !pane.sshPublicKeyText.trim()) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '接続先と公開鍵を確認してください',
+        lastError: 'SSH 公開鍵を登録する条件が不足しています'
+      })
+      return
+    }
+
+    try {
+      await installSshKey(pane.sshHost.trim(), pane.sshPublicKeyText.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? []))
+      appendPaneSystemMessage(paneId, '公開鍵を接続先へ登録しました')
+      updatePane(paneId, {
+        status: 'idle',
+        statusText: '公開鍵を登録しました',
+        lastError: null
+      })
+    } catch (error) {
+      updatePane(paneId, {
+        status: 'error',
+        statusText: '公開鍵の登録に失敗しました',
+        lastError: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const handleTransferSshPath = async (paneId: string, direction: 'upload' | 'download') => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane || !pane.sshHost.trim() || !pane.sshLocalPath.trim() || !pane.sshRemotePath.trim()) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '転送元と転送先を入力してください',
+        lastError: 'SCP に必要な情報が不足しています'
+      })
+      return
+    }
+
+    try {
+      await transferSshPath(
+        direction,
+        pane.sshHost.trim(),
+        pane.sshLocalPath.trim(),
+        pane.sshRemotePath.trim(),
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+      )
+      appendPaneSystemMessage(
+        paneId,
+        direction === 'upload' ? `SCP 送信完了: ${pane.sshLocalPath} -> ${pane.sshRemotePath}` : `SCP 取得完了: ${pane.sshRemotePath} -> ${pane.sshLocalPath}`
+      )
+      updatePane(paneId, {
+        status: 'completed',
+        statusText: direction === 'upload' ? 'SCP 送信完了' : 'SCP 取得完了',
+        lastError: null
+      })
+    } catch (error) {
+      updatePane(paneId, {
+        status: 'error',
+        statusText: 'SCP 転送に失敗しました',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1525,7 +1809,7 @@ function App() {
       <div className="loading-screen">
         <div className="loading-panel">
           <Activity size={22} />
-          <p>CLI デッキを読み込んでいます。</p>
+          <p>CLI デッキを読み込み中です。</p>
         </div>
       </div>
     )
@@ -1539,7 +1823,7 @@ function App() {
         <div>
           <p className="eyebrow">Multi Turtle CLI Develop Tool</p>
           <h1>Multi Turtle CLI Develop Tool</h1>
-          <p className="topbar-copy">複数の CLI とワークスペースを、一画面で切り替えながら進行管理する。</p>
+          <p className="topbar-copy">複数の CLI とワークスペースを一画面で切り替えながら進行管理します。</p>
         </div>
 
         <div className="topbar-actions">
@@ -1583,7 +1867,7 @@ function App() {
             <span>入力/確認待ち</span>
           </header>
           <strong>{metrics.attention}</strong>
-          <p>選択や確認が必要</p>
+          <p>確認や追加入力が必要なタスク</p>
         </article>
         <article className="metric-card compact">
           <header>
@@ -1596,15 +1880,42 @@ function App() {
 
       {sharedContext.length > 0 && (
         <section className="context-dock">
-          <div className="panel-header">
+          <div className="panel-header context-dock-header">
             <Wifi size={16} />
             <h2>共有コンテキスト</h2>
+          </div>
+          <div className="context-dock-note">
+            <span>全体 {sharedContext.filter((item) => item.scope === 'global').length}</span>
+            <span>個別 {sharedContext.filter((item) => item.scope === 'direct').length}</span>
           </div>
           <div className="context-dock-list">
             {sharedContext.map((item) => (
               <article key={item.id} className="context-dock-item">
-                <strong>{item.sourcePaneTitle}</strong>
+                <div className="context-dock-item-head">
+                  <div>
+                    <strong>{item.sourcePaneTitle}</strong>
+                    <span className="context-dock-meta">
+                      {item.contentLabel} / {item.scope === 'global' ? '全体共有' : '個別共有'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button danger compact-icon-button"
+                    onClick={() => handleDeleteSharedContext(item.id)}
+                    title="共有を削除"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
                 <span>{item.summary}</span>
+                <span className="context-dock-meta">workspace: {item.workspaceLabel}</span>
+                <span className="context-dock-meta">
+                  {item.scope === 'global'
+                    ? `${panes.filter((pane) => pane.attachedContextIds.includes(item.id)).length} ペインで使用中`
+                    : item.targetPaneTitles.length > 0
+                      ? `${item.targetPaneTitles.join(', ')} に個別共有`
+                      : '共有先なし'}
+                </span>
               </article>
             ))}
           </div>
@@ -1629,8 +1940,7 @@ function App() {
                 onClick={() => setLayout('triple')}
               >
                 <SplitSquareHorizontal size={15} />
-                3列
-              </button>
+                3蛻・              </button>
               <button
                 type="button"
                 className={layout === 'focus' ? 'switch-button active' : 'switch-button'}
@@ -1682,6 +1992,9 @@ function App() {
                 onRun={(paneId) => void handleRun(paneId)}
                 onStop={(paneId) => void handleStop(paneId)}
                 onShare={shareFromPane}
+                onShareToPane={(sourcePaneId, targetPaneId) =>
+                  shareFromPane(sourcePaneId, undefined, { scope: 'direct', targetPaneId })
+                }
                 onCopyLatest={(paneId) => void handleCopyLatest(paneId)}
                 onDuplicate={handleDuplicatePane}
                 onStartNewSession={handleStartNewSession}
@@ -1692,11 +2005,16 @@ function App() {
                 onBrowseRemote={(paneId, path) => void handleBrowseRemote(paneId, path)}
                 onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
                 onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}
+                onOpenCommandPrompt={(paneId) => void handleOpenCommandPrompt(paneId)}
                 onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
                 onAddLocalWorkspace={(paneId) => void handleAddLocalWorkspace(paneId)}
                 onSelectLocalWorkspace={(paneId, workspacePath) => void handleSelectLocalWorkspace(paneId, workspacePath)}
                 onRemoveLocalWorkspace={handleRemoveLocalWorkspace}
                 onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
+                onGenerateSshKey={(paneId) => void handleGenerateSshKey(paneId)}
+                onInstallSshPublicKey={(paneId) => void handleInstallSshPublicKey(paneId)}
+                onTransferSshPath={(paneId, direction) => void handleTransferSshPath(paneId, direction)}
+                shareTargets={panes.filter((item) => item.id !== pane.id).map((item) => ({ id: item.id, title: item.title }))}
                 onToggleContext={handleToggleContext}
               />
             ))}
@@ -1708,3 +2026,11 @@ function App() {
 }
 
 export default App
+
+
+
+
+
+
+
+

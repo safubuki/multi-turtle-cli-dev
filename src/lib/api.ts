@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   BootstrapPayload,
   LocalBrowseResponse,
   RemoteBrowseResponse,
@@ -7,7 +7,11 @@ import type {
   RunPaneRequest,
   RunPaneResponse,
   RunStreamEvent,
+  SshConnectionOptions,
   SshInspectionResponse,
+  SshKeyGenerateResponse,
+  SshKeyInstallResponse,
+  SshTransferResponse,
   StopRunResponse,
   WorkspaceTarget
 } from '../types'
@@ -138,6 +142,16 @@ export function openWorkspaceInVsCode(target: WorkspaceTarget): Promise<{ succes
   })
 }
 
+export function openTargetInCommandPrompt(target: WorkspaceTarget): Promise<{ success: boolean }> {
+  return requestJson<{ success: boolean }>('/api/system/open-cmd', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ target })
+  })
+}
+
 export function pickLocalWorkspace(): Promise<{ success: boolean; paths: string[] }> {
   return requestJson<{ success: boolean; paths: string[] }>('/api/system/pick-folder', {
     method: 'POST',
@@ -157,46 +171,83 @@ export function browseLocalDirectory(path: string): Promise<LocalBrowseResponse>
   })
 }
 
-export function fetchRemoteWorkspaces(host: string): Promise<RemoteWorkspaceResponse> {
+export function fetchRemoteWorkspaces(host: string, connection?: SshConnectionOptions): Promise<RemoteWorkspaceResponse> {
   return requestJson<RemoteWorkspaceResponse>('/api/ssh/workspaces', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ host })
+    body: JSON.stringify({ host, connection })
   })
 }
 
-export function inspectSshHost(host: string): Promise<SshInspectionResponse> {
+export function inspectSshHost(host: string, connection?: SshConnectionOptions): Promise<SshInspectionResponse> {
   return requestJson<SshInspectionResponse>('/api/ssh/inspect', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ host })
+    body: JSON.stringify({ host, connection })
   })
 }
 
-export function browseRemoteDirectory(host: string, path?: string): Promise<RemoteBrowseResponse> {
+export function browseRemoteDirectory(host: string, path?: string, connection?: SshConnectionOptions): Promise<RemoteBrowseResponse> {
   return requestJson<RemoteBrowseResponse>('/api/ssh/browse', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ host, path })
+    body: JSON.stringify({ host, path, connection })
   })
 }
 
 export function createRemoteDirectory(
   host: string,
   parentPath: string,
-  directoryName: string
+  directoryName: string,
+  connection?: SshConnectionOptions
 ): Promise<RemoteCreateDirectoryResponse> {
   return requestJson<RemoteCreateDirectoryResponse>('/api/ssh/mkdir', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ host, parentPath, directoryName })
+    body: JSON.stringify({ host, parentPath, directoryName, connection })
+  })
+}
+
+export function generateSshKey(keyName: string, comment: string, passphrase = ''): Promise<SshKeyGenerateResponse> {
+  return requestJson<SshKeyGenerateResponse>('/api/ssh/keygen', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ keyName, comment, passphrase })
+  })
+}
+
+export function installSshKey(host: string, publicKey: string, connection?: SshConnectionOptions): Promise<SshKeyInstallResponse> {
+  return requestJson<SshKeyInstallResponse>('/api/ssh/install-key', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ host, publicKey, connection })
+  })
+}
+
+export function transferSshPath(
+  direction: 'upload' | 'download',
+  host: string,
+  localPath: string,
+  remotePath: string,
+  connection?: SshConnectionOptions
+): Promise<SshTransferResponse> {
+  return requestJson<SshTransferResponse>('/api/ssh/scp', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ direction, host, localPath, remotePath, connection })
   })
 }

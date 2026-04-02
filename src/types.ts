@@ -1,4 +1,4 @@
-export type ProviderId = 'codex' | 'gemini' | 'copilot'
+﻿export type ProviderId = 'codex' | 'gemini' | 'copilot'
 export type PaneStatus = 'idle' | 'running' | 'completed' | 'attention' | 'error'
 export type WorkspaceMode = 'local' | 'ssh'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
@@ -42,7 +42,29 @@ export interface SshHost {
   hostname?: string
   user?: string
   port?: string
+  identityFile?: string
+  proxyJump?: string
+  proxyCommand?: string
   source: 'ssh-config' | 'manual'
+}
+
+export interface SshConnectionOptions {
+  username?: string
+  port?: string
+  password?: string
+  identityFile?: string
+  proxyJump?: string
+  proxyCommand?: string
+  extraArgs?: string
+}
+
+export interface LocalSshKey {
+  id: string
+  name: string
+  publicKeyPath: string
+  privateKeyPath: string
+  publicKey: string
+  algorithm: string
 }
 
 export interface RemoteWorkspace {
@@ -77,13 +99,21 @@ export interface BootstrapPayload {
   spec: SpecSection[]
 }
 
-export interface WorkspaceTarget {
-  kind: 'local' | 'ssh'
-  path: string
-  label: string
-  host?: string
-  resourceType?: 'folder' | 'file'
-}
+export type WorkspaceTarget =
+  | {
+      kind: 'local'
+      path: string
+      label: string
+      resourceType?: 'folder' | 'file'
+    }
+  | {
+      kind: 'ssh'
+      host: string
+      path: string
+      label: string
+      resourceType?: 'folder' | 'file'
+      connection?: SshConnectionOptions
+    }
 
 export interface PaneLogEntry {
   id: string
@@ -116,6 +146,10 @@ export interface SharedContextItem {
   sourcePaneTitle: string
   provider: ProviderId
   workspaceLabel: string
+  scope: 'global' | 'direct'
+  targetPaneIds: string[]
+  targetPaneTitles: string[]
+  contentLabel: string
   summary: string
   detail: string
   createdAt: number
@@ -136,6 +170,19 @@ export interface PaneState {
   localBrowserEntries: LocalDirectoryEntry[]
   localBrowserLoading: boolean
   sshHost: string
+  sshUser: string
+  sshPort: string
+  sshPassword: string
+  sshIdentityFile: string
+  sshProxyJump: string
+  sshProxyCommand: string
+  sshExtraArgs: string
+  sshLocalKeys: LocalSshKey[]
+  sshSelectedKeyPath: string
+  sshPublicKeyText: string
+  sshDiagnostics: string[]
+  sshLocalPath: string
+  sshRemotePath: string
   remoteWorkspacePath: string
   remoteWorkspaces: RemoteWorkspace[]
   remoteAvailableProviders: ProviderId[]
@@ -252,4 +299,29 @@ export interface SshInspectionResponse {
   host: string
   availableProviders: ProviderId[]
   homeDirectory: string | null
+  diagnostics: string[]
+  localKeys: LocalSshKey[]
+  suggestedUser: string | null
+  suggestedPort: string | null
+  suggestedIdentityFile: string | null
+  suggestedProxyJump: string | null
+  suggestedProxyCommand: string | null
+}
+
+export interface SshKeyGenerateResponse {
+  success: boolean
+  key: LocalSshKey
+}
+
+export interface SshKeyInstallResponse {
+  success: boolean
+  host: string
+  installed: boolean
+}
+
+export interface SshTransferResponse {
+  success: boolean
+  direction: 'upload' | 'download'
+  localPath: string
+  remotePath: string
 }

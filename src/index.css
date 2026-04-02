@@ -268,6 +268,15 @@ button {
   gap: 10px;
 }
 
+.context-dock-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: -4px 0 8px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
 .context-dock-item {
   min-width: 180px;
   max-width: 260px;
@@ -282,10 +291,28 @@ button {
   display: block;
 }
 
+.context-dock-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.context-dock-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .context-dock-item span {
   margin-top: 4px;
   color: var(--muted);
   line-height: 1.4;
+}
+
+.compact-icon-button {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
 }
 
 .main-grid {
@@ -1517,6 +1544,59 @@ textarea {
   margin: 0;
 }
 
+.menu-share-group {
+  display: grid;
+  gap: 6px;
+}
+
+.menu-section-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  padding: 2px 4px 0;
+}
+
+.menu-share-targets {
+  display: grid;
+  gap: 6px;
+}
+
+.compact-menu-action {
+  padding: 8px 10px;
+}
+
+.pane-menu-surface > .menu-action:nth-of-type(1),
+.pane-menu-surface > .menu-action:nth-of-type(3) {
+  font-size: 0;
+}
+
+.pane-menu-surface > .menu-action:nth-of-type(1)::after {
+  content: '全体共有';
+  font-size: 0.9rem;
+}
+
+.pane-menu-surface > .menu-action:nth-of-type(3)::after {
+  content: 'ペインを複製';
+  font-size: 0.9rem;
+}
+
+.menu-section-label {
+  font-size: 0;
+}
+
+.menu-section-label::after {
+  content: '個別共有';
+  font-size: 0.78rem;
+}
+
+.pane-menu-surface .menu-toggle span {
+  font-size: 0;
+}
+
+.pane-menu-surface .menu-toggle span::after {
+  content: '完了時に全体共有';
+  font-size: 0.9rem;
+}
+
 .stacked-panels {
   display: grid;
   gap: 10px;
@@ -1676,4 +1756,126 @@ textarea {
 .browser-simple-item.directory:hover,
 .browser-simple-item.file:hover {
   background: rgba(255, 255, 255, 0.05);
+}
+
+.pane-action-stack {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.pane-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.icon-row {
+  width: 100%;
+}
+
+.launch-row {
+  width: 100%;
+}
+
+.pane-launch-button,
+.pane-vscode-button,
+.pane-session-button,
+.stable-run-button {
+  min-width: 108px;
+  white-space: nowrap;
+}
+
+.stable-run-button {
+  min-height: 42px;
+  border-radius: 16px;
+}
+
+.console-output,
+.inline-console-output {
+  user-select: text;
+  cursor: text;
+}
+
+.console-output {
+  min-height: 240px;
+}
+
+.inline-console-output {
+  min-height: 0;
+  max-height: 140px;
+}
+
+.composer-panel textarea {
+  resize: none;
+  min-height: 118px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.settings-accordion .accordion-summary {
+  background: linear-gradient(180deg, rgba(24, 32, 38, 0.82), rgba(17, 24, 29, 0.92));
+}
+
+.workspace-accordion .accordion-summary {
+  background: linear-gradient(180deg, rgba(18, 29, 33, 0.88), rgba(12, 21, 25, 0.96));
+}
+
+.ssh-stack {
+  gap: 14px;
+}
+
+.ssh-config-grid .full-span {
+  grid-column: 1 / -1;
+}
+
+.ssh-transfer-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diagnostic-list {
+  display: grid;
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.diagnostic-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.workspace-accordion .workspace-stack > .inline-actions.wrap-actions > .secondary-button:nth-child(2),
+.workspace-accordion .workspace-stack > .inline-actions.wrap-actions > .secondary-button:nth-child(4) {
+  display: inline-flex;
+}
+
+@media (max-width: 1180px) {
+  .pane-action-stack,
+  .pane-action-row,
+  .launch-row {
+    width: 100%;
+    justify-items: stretch;
+    justify-content: stretch;
+  }
+
+  .pane-launch-button,
+  .pane-vscode-button,
+  .pane-session-button,
+  .stable-run-button {
+    width: 100%;
+  }
+
+  .ssh-transfer-grid {
+    grid-template-columns: 1fr;
+  }
 }

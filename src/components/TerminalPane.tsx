@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Bot,
@@ -39,6 +39,7 @@ interface TerminalPaneProps {
   onRun: (paneId: string) => void
   onStop: (paneId: string) => void
   onShare: (paneId: string) => void
+  onShareToPane: (sourcePaneId: string, targetPaneId: string) => void
   onCopyLatest: (paneId: string) => void
   onDuplicate: (paneId: string) => void
   onStartNewSession: (paneId: string) => void
@@ -48,11 +49,16 @@ interface TerminalPaneProps {
   onBrowseRemote: (paneId: string, path?: string) => void
   onCreateRemoteDirectory: (paneId: string) => void
   onOpenWorkspace: (paneId: string) => void
+  onOpenCommandPrompt: (paneId: string) => void
   onOpenPath: (paneId: string, path: string, resourceType: 'folder' | 'file') => void
   onAddLocalWorkspace: (paneId: string) => void
   onSelectLocalWorkspace: (paneId: string, workspacePath: string) => void
   onRemoveLocalWorkspace: (paneId: string) => void
   onBrowseLocal: (paneId: string, path: string) => void
+  onGenerateSshKey: (paneId: string) => void
+  onInstallSshPublicKey: (paneId: string) => void
+  onTransferSshPath: (paneId: string, direction: 'upload' | 'download') => void
+  shareTargets: Array<{ id: string; title: string }>
   onSelectSession: (paneId: string, sessionKey: string | null) => void
   onToggleContext: (paneId: string, contextId: string) => void
 }
@@ -147,6 +153,7 @@ export function TerminalPane({
   onRun,
   onStop,
   onShare,
+  onShareToPane,
   onCopyLatest,
   onDuplicate,
   onStartNewSession,
@@ -156,17 +163,23 @@ export function TerminalPane({
   onBrowseRemote,
   onCreateRemoteDirectory,
   onOpenWorkspace,
+  onOpenCommandPrompt,
   onOpenPath,
   onAddLocalWorkspace,
   onSelectLocalWorkspace,
   onRemoveLocalWorkspace,
   onBrowseLocal,
+  onGenerateSshKey,
+  onInstallSshPublicKey,
+  onTransferSshPath,
+  shareTargets,
   onSelectSession,
   onToggleContext
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDetailsElement | null>(null)
+  const promptRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     if (!isMenuOpen) {
@@ -188,6 +201,18 @@ export function TerminalPane({
     }
   }, [isMenuOpen])
 
+  useEffect(() => {
+    const element = promptRef.current
+    if (!element) {
+      return
+    }
+
+    element.style.height = '0px'
+    const nextHeight = Math.min(Math.max(element.scrollHeight, 118), 220)
+    element.style.height = `${nextHeight}px`
+    element.style.overflowY = element.scrollHeight > 220 ? 'auto' : 'hidden'
+  }, [pane.prompt])
+
   const catalog = catalogs[pane.provider]
   const currentModel = catalog?.models.find((model) => model.id === pane.model) ?? catalog?.models[0]
   const availableRemoteProviders =
@@ -207,12 +232,13 @@ export function TerminalPane({
     () => getLocalParentPath(pane.localBrowserPath || pane.localWorkspacePath, pane.localWorkspacePath),
     [pane.localBrowserPath, pane.localWorkspacePath]
   )
+  const sshDisplayName = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim()
   const workspaceLabel =
     pane.workspaceMode === 'local'
       ? selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || '未選択')
       : pane.remoteWorkspacePath
         ? getShortPathLabel(pane.remoteWorkspacePath)
-        : pane.sshHost || 'SSH 未設定'
+        : sshDisplayName || 'SSH 未設定'
 
   const currentSessionAvailable = hasCurrentSessionContent(pane)
   const fallbackArchivedSession = !currentSessionAvailable ? pane.sessionHistory[0] ?? null : null
@@ -251,9 +277,12 @@ export function TerminalPane({
     }))
   ]
   const hasSessionRecords = sessionOptions.length > 0
+  const visibleSharedContext = sharedContext.filter(
+    (item) => item.scope === 'global' || item.targetPaneIds.includes(pane.id)
+  )
 
   const handleDelete = () => {
-    if (window.confirm('このペインを削除してもよいですか？')) {
+    if (window.confirm('このペインを削除しても良いですか？')) {
       onDelete(pane.id)
     }
   }
@@ -283,70 +312,102 @@ export function TerminalPane({
             </div>
           </div>
 
-          <div className="pane-header-actions pane-side-actions">
-            <details
-              className="pane-menu"
-              ref={menuRef}
-              open={isMenuOpen}
-              onToggle={(event) => setIsMenuOpen((event.currentTarget as HTMLDetailsElement).open)}
-            >
-              <summary className="icon-button" aria-label="ペイン操作">
-                <Ellipsis size={16} />
-              </summary>
-              <div className="pane-menu-surface">
-                <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onShare(pane.id))}>
-                  <Share2 size={15} />
-                  結果を共有
-                </button>
-                <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onCopyLatest(pane.id))}>
-                  <Copy size={15} />
-                  応答をコピー
-                </button>
-                <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onDuplicate(pane.id))}>
-                  <Copy size={15} />
-                  設定を複製
-                </button>
-                <button
-                  type="button"
-                  className="menu-action"
-                  disabled={pane.status === 'running'}
-                  onClick={() => closeMenuAndRun(() => onResetSession(pane.id))}
-                >
-                  <RefreshCcw size={15} />
-                  履歴を初期化
-                </button>
-                <label className="menu-toggle">
-                  <input
-                    type="checkbox"
-                    checked={pane.autoShare}
-                    onChange={(event) => onUpdate(pane.id, { autoShare: event.target.checked })}
-                  />
-                  <span>完了時に共有</span>
-                </label>
-              </div>
-            </details>
-            <button
-              type="button"
-              className="secondary-button pane-session-button"
-              disabled={pane.status === 'running'}
-              onClick={() => onStartNewSession(pane.id)}
-            >
-              <RefreshCcw size={16} />
-              新規セッション
-            </button>
+          <div className="pane-header-actions pane-action-stack">
+            <div className="pane-action-row icon-row">
+              <button
+                type="button"
+                className="secondary-button pane-session-button"
+                disabled={pane.status === 'running'}
+                onClick={() => onStartNewSession(pane.id)}
+              >
+                <RefreshCcw size={16} />
+                新規セッション
+              </button>
 
-            <button type="button" className="icon-button danger" onClick={handleDelete} title="ペインを削除">
-              <Trash2 size={16} />
-            </button>
-            <button
-              type="button"
-              className="secondary-button pane-vscode-button"
-              disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath}
-              onClick={() => onOpenWorkspace(pane.id)}
-            >
-              <FolderOpen size={16} />
-              VSCodeで開く
-            </button>
+              <details
+                className="pane-menu"
+                ref={menuRef}
+                open={isMenuOpen}
+                onToggle={(event) => setIsMenuOpen((event.currentTarget as HTMLDetailsElement).open)}
+              >
+                <summary className="icon-button" aria-label="ペイン設定">
+                  <Ellipsis size={16} />
+                </summary>
+                <div className="pane-menu-surface">
+                  <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onShare(pane.id))}>
+                    <Share2 size={15} />
+                    全体共有
+                  </button>
+                  {shareTargets.length > 0 && (
+                    <div className="menu-share-group">
+                      <span className="menu-section-label">個別共有</span>
+                      <div className="menu-share-targets">
+                        {shareTargets.map((target) => (
+                          <button
+                            key={target.id}
+                            type="button"
+                            className="menu-action compact-menu-action"
+                            onClick={() => closeMenuAndRun(() => onShareToPane(pane.id, target.id))}
+                          >
+                            <Share2 size={14} />
+                            {target.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onCopyLatest(pane.id))}>
+                    <Copy size={15} />
+                    応答をコピー
+                  </button>
+                  <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onDuplicate(pane.id))}>
+                    <Copy size={15} />
+                    ペインを複製
+                  </button>
+                  <button
+                    type="button"
+                    className="menu-action"
+                    disabled={pane.status === 'running'}
+                    onClick={() => closeMenuAndRun(() => onResetSession(pane.id))}
+                  >
+                    <RefreshCcw size={15} />
+                    会話を初期化
+                  </button>
+                  <label className="menu-toggle">
+                    <input
+                      type="checkbox"
+                      checked={pane.autoShare}
+                      onChange={(event) => onUpdate(pane.id, { autoShare: event.target.checked })}
+                    />
+                    <span>完了時に全体共有</span>
+                  </label>
+                </div>
+              </details>
+
+              <button type="button" className="icon-button danger" onClick={handleDelete} title="ペインを削除">
+                <Trash2 size={16} />
+              </button>
+            </div>
+
+            <div className="pane-action-row launch-row">
+              <button
+                type="button"
+                className="secondary-button pane-launch-button"
+                disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath}
+                onClick={() => onOpenCommandPrompt(pane.id)}
+              >
+                CMD を開く
+              </button>
+              <button
+                type="button"
+                className="secondary-button pane-vscode-button"
+                disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath}
+                onClick={() => onOpenWorkspace(pane.id)}
+              >
+                <FolderOpen size={16} />
+                VSCodeで開く
+              </button>
+            </div>
           </div>
         </header>
 
@@ -359,7 +420,7 @@ export function TerminalPane({
           </span>
         </div>
 
-        <section className="primary-panel output-panel output-clickable">
+        <section className="primary-panel output-panel">
           <div className="panel-header slim">
             <div>
               <h3>出力</h3>
@@ -370,9 +431,9 @@ export function TerminalPane({
             </button>
           </div>
 
-          <button type="button" className="output-surface output-trigger" onClick={() => setIsOutputExpanded(true)}>
+          <div className="output-surface console-output" aria-label="出力コンソール">
             {outputText ? <pre>{outputText}</pre> : <p className="panel-placeholder">ここに実行結果と最新の応答が表示されます。</p>}
-          </button>
+          </div>
         </section>
 
         <section className="composer-panel minimal-composer">
@@ -384,6 +445,7 @@ export function TerminalPane({
           </div>
 
           <textarea
+            ref={promptRef}
             value={pane.prompt}
             onChange={(event) => onUpdate(pane.id, { prompt: event.target.value })}
             onKeyDown={(event) => {
@@ -414,12 +476,12 @@ export function TerminalPane({
 
             <div className="composer-actions">
               {pane.status === 'running' ? (
-                <button type="button" className="danger-button" onClick={() => onStop(pane.id)}>
+                <button type="button" className="danger-button stable-run-button" onClick={() => onStop(pane.id)}>
                   <Square size={16} />
                   停止
                 </button>
               ) : (
-                <button type="button" className="primary-button" disabled={!canRun} onClick={() => onRun(pane.id)}>
+                <button type="button" className="primary-button stable-run-button" disabled={!canRun} onClick={() => onRun(pane.id)}>
                   <Play size={16} />
                   実行
                 </button>
@@ -433,8 +495,7 @@ export function TerminalPane({
             <summary className="accordion-summary">
               <span className="accordion-label">
                 <Settings2 size={15} />
-                設定
-              </span>
+                設定</span>
               <span className="accordion-value">
                 {catalog?.label ?? pane.provider} / {currentModel?.name ?? pane.model}
               </span>
@@ -452,7 +513,7 @@ export function TerminalPane({
                       return (
                         <option key={provider} value={provider} disabled={disabled}>
                           {item.label}
-                          {disabled ? ' (SSH 未対応)' : ''}
+                          {disabled ? ' (SSH 未検出)' : ''}
                         </option>
                       )
                     })}
@@ -510,11 +571,7 @@ export function TerminalPane({
                 </label>
               </div>
 
-              <p className="field-note">
-                {pane.provider === 'codex'
-                  ? 'Codex は現在 full-auto 固定です。'
-                  : '標準は安全寄り、積極は自動編集を強めます。'}
-              </p>
+              <p className="field-note">{pane.provider === 'codex' ? 'Codex は現在 full-auto 固定です。' : '標準は安全寄り、積極は自動編集を強めます。'}</p>
             </div>
           </details>
 
@@ -558,15 +615,6 @@ export function TerminalPane({
                       <FolderPlus size={16} />
                       ワークスペースを選択
                     </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={!pane.localWorkspacePath}
-                      onClick={() => onOpenWorkspace(pane.id)}
-                    >
-                      <FolderOpen size={16} />
-                      VSCodeで開く
-                    </button>
                     {canRemoveLocalWorkspace && (
                       <button type="button" className="secondary-button" onClick={() => onRemoveLocalWorkspace(pane.id)}>
                         <Trash2 size={16} />
@@ -577,11 +625,8 @@ export function TerminalPane({
 
                   {localWorkspaces.length > 1 && (
                     <label>
-                      <span>保存済みワークスペース</span>
-                      <select
-                        value={pane.localWorkspacePath}
-                        onChange={(event) => onSelectLocalWorkspace(pane.id, event.target.value)}
-                      >
+                      <span>登録済みワークスペース</span>
+                      <select value={pane.localWorkspacePath} onChange={(event) => onSelectLocalWorkspace(pane.id, event.target.value)}>
                         {localWorkspaces.map((workspace) => (
                           <option key={workspace.id} value={workspace.path}>
                             {workspace.label}
@@ -636,67 +681,91 @@ export function TerminalPane({
                         )
                       ) : (
                         <div className="panel-placeholder browser-placeholder">
-                          {pane.localBrowserLoading ? 'フォルダ内容を読み込んでいます。' : '選択したフォルダの内容がここに表示されます。'}
+                          {pane.localBrowserLoading ? 'フォルダ内容を読み込み中です。' : '選択したフォルダの内容がここに表示されます。'}
                         </div>
                       )}
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="workspace-stack">
-                  <label>
-                    <span>SSHホスト</span>
-                    <input
-                      list={`ssh-hosts-${pane.id}`}
-                      value={pane.sshHost}
-                      onChange={(event) => onUpdate(pane.id, { sshHost: event.target.value })}
-                      placeholder="user@server または ssh config の Host"
-                    />
-                    <datalist id={`ssh-hosts-${pane.id}`}>
-                      {sshHosts.map((host) => (
-                        <option key={host.id} value={host.alias} />
-                      ))}
-                    </datalist>
-                  </label>
+                <div className="workspace-stack ssh-stack">
+                  <div className="pane-meta-grid compact-grid ssh-config-grid">
+                    <label>
+                      <span>SSHホスト</span>
+                      <input
+                        list={`ssh-hosts-${pane.id}`}
+                        value={pane.sshHost}
+                        onChange={(event) => onUpdate(pane.id, { sshHost: event.target.value })}
+                        placeholder="server または ssh config の Host"
+                      />
+                      <datalist id={`ssh-hosts-${pane.id}`}>
+                        {sshHosts.map((host) => (
+                          <option key={host.id} value={host.alias} />
+                        ))}
+                      </datalist>
+                    </label>
+
+                    <label>
+                      <span>ユーザー名</span>
+                      <input value={pane.sshUser} onChange={(event) => onUpdate(pane.id, { sshUser: event.target.value })} placeholder="ubuntu / root / deploy" />
+                    </label>
+
+                    <label>
+                      <span>ポート</span>
+                      <input value={pane.sshPort} onChange={(event) => onUpdate(pane.id, { sshPort: event.target.value })} placeholder="22" />
+                    </label>
+
+                    <label>
+                      <span>パスワード</span>
+                      <input type="password" value={pane.sshPassword} onChange={(event) => onUpdate(pane.id, { sshPassword: event.target.value })} placeholder="必要な場合のみ" />
+                    </label>
+
+                    <label>
+                      <span>鍵ファイル</span>
+                      <input value={pane.sshIdentityFile} onChange={(event) => onUpdate(pane.id, { sshIdentityFile: event.target.value })} placeholder="C:\\Users\\...\\id_ed25519" />
+                    </label>
+
+                    <label>
+                      <span>ProxyJump</span>
+                      <input value={pane.sshProxyJump} onChange={(event) => onUpdate(pane.id, { sshProxyJump: event.target.value })} placeholder="jump-host" />
+                    </label>
+
+                    <label className="full-span">
+                      <span>ProxyCommand</span>
+                      <input value={pane.sshProxyCommand} onChange={(event) => onUpdate(pane.id, { sshProxyCommand: event.target.value })} placeholder="nc %h %p など" />
+                    </label>
+
+                    <label className="full-span">
+                      <span>追加オプション</span>
+                      <input value={pane.sshExtraArgs} onChange={(event) => onUpdate(pane.id, { sshExtraArgs: event.target.value })} placeholder="-o PreferredAuthentications=password など" />
+                    </label>
+                  </div>
 
                   <div className="inline-actions wrap-actions">
                     <button type="button" className="secondary-button" onClick={() => onLoadRemote(pane.id)}>
                       <Wifi size={16} />
                       接続を更新
                     </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={!pane.remoteHomeDirectory}
-                      onClick={() => onBrowseRemote(pane.id, pane.remoteHomeDirectory || undefined)}
-                    >
+                    <button type="button" className="secondary-button" onClick={() => onGenerateSshKey(pane.id)}>
+                      鍵を生成
+                    </button>
+                    <button type="button" className="secondary-button" disabled={!pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>
+                      公開鍵を登録
+                    </button>
+                    <button type="button" className="secondary-button" disabled={!pane.remoteHomeDirectory} onClick={() => onBrowseRemote(pane.id, pane.remoteHomeDirectory || undefined)}>
                       <Home size={16} />
                       Home
                     </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={!pane.remoteParentPath}
-                      onClick={() => onBrowseRemote(pane.id, pane.remoteParentPath || undefined)}
-                    >
+                    <button type="button" className="secondary-button" disabled={!pane.remoteParentPath} onClick={() => onBrowseRemote(pane.id, pane.remoteParentPath || undefined)}>
                       <ChevronLeft size={16} />
                       親へ
                     </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={!pane.sshHost || !pane.remoteWorkspacePath}
-                      onClick={() => onOpenWorkspace(pane.id)}
-                    >
-                      <FolderOpen size={16} />
-                      VSCodeで開く
-                    </button>
                   </div>
 
-                  <div className="workspace-current">
+                  <div className="workspace-current ssh-current-card">
                     <span className="workspace-caption">現在の接続</span>
-                    <strong>{pane.sshHost || 'SSH 未設定'}</strong>
-                    <span>{pane.remoteWorkspacePath || pane.remoteBrowserPath || '接続先を選択してください。'}</span>
+                    <strong>{sshDisplayName || 'SSH 未設定'}</strong>
+                    <span>{pane.remoteWorkspacePath || pane.remoteBrowserPath || '接続先とワークスペースを設定してください。'}</span>
                   </div>
 
                   <label>
@@ -704,7 +773,7 @@ export function TerminalPane({
                     <input
                       list={`remote-workspaces-${pane.id}`}
                       value={pane.remoteWorkspacePath}
-                      onChange={(event) => onUpdate(pane.id, { remoteWorkspacePath: event.target.value })}
+                      onChange={(event) => onUpdate(pane.id, { remoteWorkspacePath: event.target.value, sshRemotePath: event.target.value })}
                       placeholder="~/projects/app など"
                     />
                     <datalist id={`remote-workspaces-${pane.id}`}>
@@ -716,14 +785,86 @@ export function TerminalPane({
                     </datalist>
                   </label>
 
+                  {pane.sshLocalKeys.length > 0 && (
+                    <label>
+                      <span>利用する公開鍵</span>
+                      <select
+                        value={pane.sshSelectedKeyPath}
+                        onChange={(event) => {
+                          const selected = pane.sshLocalKeys.find((item) => item.privateKeyPath === event.target.value) ?? null
+                          onUpdate(pane.id, {
+                            sshSelectedKeyPath: event.target.value,
+                            sshIdentityFile: event.target.value,
+                            sshPublicKeyText: selected?.publicKey ?? pane.sshPublicKeyText
+                          })
+                        }}
+                      >
+                        {pane.sshLocalKeys.map((key) => (
+                          <option key={key.privateKeyPath} value={key.privateKeyPath}>
+                            {key.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+
+                  {pane.sshPublicKeyText && (
+                    <div className="browser-panel">
+                      <div className="section-headline compact-headline">
+                        <strong>公開鍵</strong>
+                        <span>{getShortPathLabel(pane.sshSelectedKeyPath || pane.sshIdentityFile || '')}</span>
+                      </div>
+                      <div className="output-surface inline-console-output">
+                        <pre>{pane.sshPublicKeyText}</pre>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="browser-panel ssh-transfer-panel">
+                    <div className="section-headline compact-headline">
+                      <strong>SCP 転送</strong>
+                      <span>ファイル / フォルダ</span>
+                    </div>
+                    <div className="pane-meta-grid compact-grid ssh-transfer-grid">
+                      <label>
+                        <span>ローカルパス</span>
+                        <input value={pane.sshLocalPath} onChange={(event) => onUpdate(pane.id, { sshLocalPath: event.target.value })} placeholder="C:\\path\\to\\file-or-folder" />
+                      </label>
+                      <label>
+                        <span>リモートパス</span>
+                        <input value={pane.sshRemotePath} onChange={(event) => onUpdate(pane.id, { sshRemotePath: event.target.value })} placeholder="~/path/to/file-or-folder" />
+                      </label>
+                    </div>
+                    <div className="inline-actions wrap-actions">
+                      <button type="button" className="secondary-button" onClick={() => onTransferSshPath(pane.id, 'upload')}>
+                        SCP 送信
+                      </button>
+                      <button type="button" className="secondary-button" onClick={() => onTransferSshPath(pane.id, 'download')}>
+                        SCP 取得
+                      </button>
+                    </div>
+                  </div>
+
+                  {pane.sshDiagnostics.length > 0 && (
+                    <div className="browser-panel ssh-diagnostics-panel">
+                      <div className="section-headline compact-headline">
+                        <strong>接続診断</strong>
+                        <span>{pane.sshDiagnostics.length} 件</span>
+                      </div>
+                      <div className="diagnostic-list">
+                        {pane.sshDiagnostics.map((item, index) => (
+                          <div key={`${pane.id}-diag-${index}`} className="diagnostic-item">
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <label>
                     <span>新規フォルダ</span>
                     <div className="inline-actions remote-create-row">
-                      <input
-                        value={pane.remoteNewDirectoryName}
-                        onChange={(event) => onUpdate(pane.id, { remoteNewDirectoryName: event.target.value })}
-                        placeholder="folder-name"
-                      />
+                      <input value={pane.remoteNewDirectoryName} onChange={(event) => onUpdate(pane.id, { remoteNewDirectoryName: event.target.value })} placeholder="folder-name" />
                       <button type="button" className="secondary-button" onClick={() => onCreateRemoteDirectory(pane.id)}>
                         <FolderPlus size={16} />
                         作成
@@ -748,14 +889,14 @@ export function TerminalPane({
                                 <span>{entry.path}</span>
                               </div>
                             </button>
-                            <button type="button" className={entry.isWorkspace ? 'ghost-button workspace' : 'ghost-button'} onClick={() => onUpdate(pane.id, { remoteWorkspacePath: entry.path })}>
-                              {entry.isWorkspace ? '使用' : '指定'}
+                            <button type="button" className={entry.isWorkspace ? 'ghost-button workspace' : 'ghost-button'} onClick={() => onUpdate(pane.id, { remoteWorkspacePath: entry.path, sshRemotePath: entry.path })}>
+                              {entry.isWorkspace ? '使う' : '選択'}
                             </button>
                           </div>
                         ))
                       ) : (
                         <div className="panel-placeholder browser-placeholder">
-                          {pane.remoteBrowserLoading ? 'リモート一覧を読み込んでいます。' : '接続を更新するとリモートの候補が表示されます。'}
+                          {pane.remoteBrowserLoading ? 'リモート一覧を読み込み中です。' : '接続を更新するとリモート一覧が表示されます。'}
                         </div>
                       )}
                     </div>
@@ -777,20 +918,19 @@ export function TerminalPane({
             </div>
           </details>
 
-          {(sharedContext.length > 0 || pane.attachedContextIds.length > 0) && (
+          {(visibleSharedContext.length > 0 || pane.attachedContextIds.length > 0) && (
             <details className="pane-accordion">
               <summary className="accordion-summary">
                 <span className="accordion-label">
                   <Share2 size={15} />
-                  共有コンテキスト
-                </span>
-                <span className="accordion-value">{pane.attachedContextIds.length}件選択</span>
+                  共有コンテキスト</span>
+                <span className="accordion-value">{pane.attachedContextIds.length} 件選択</span>
               </summary>
 
               <div className="accordion-body">
                 <div className="chip-list">
-                  {sharedContext.length > 0 ? (
-                    sharedContext.map((item) => {
+                  {visibleSharedContext.length > 0 ? (
+                    visibleSharedContext.map((item) => {
                       const attached = pane.attachedContextIds.includes(item.id)
 
                       return (
@@ -802,6 +942,7 @@ export function TerminalPane({
                           title={item.detail}
                         >
                           <strong>{item.sourcePaneTitle}</strong>
+                          <span>{item.contentLabel} / {item.scope === 'global' ? '全体共有' : '個別共有'}</span>
                           <span>{item.summary}</span>
                         </button>
                       )
@@ -822,7 +963,7 @@ export function TerminalPane({
                   実行ログ
                 </span>
                 <span className="accordion-value">
-                  {sessionOptions.length}セッション
+                  {sessionOptions.length} セッション
                 </span>
               </summary>
 
@@ -851,7 +992,7 @@ export function TerminalPane({
                   <div className="activity-panel compact-panel">
                     <div className="section-headline compact-headline">
                       <strong>ストリーム</strong>
-                      <span>{visibleSession.streamEntries.length}件</span>
+                      <span>{visibleSession.streamEntries.length} 件</span>
                     </div>
                     <div className="activity-feed">
                       {visibleSession.streamEntries.map((entry) => (
@@ -871,7 +1012,7 @@ export function TerminalPane({
                   <div className="history-panel compact-panel">
                     <div className="section-headline compact-headline">
                       <strong>会話履歴</strong>
-                      <span>{visibleSession.logs.length}件</span>
+                      <span>{visibleSession.logs.length} 件</span>
                     </div>
                     <div className="history-feed">
                       {visibleSession.logs.map((entry) => (
@@ -921,3 +1062,19 @@ export function TerminalPane({
     </>
   )
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
