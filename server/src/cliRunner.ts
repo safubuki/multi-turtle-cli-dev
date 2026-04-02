@@ -297,16 +297,14 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
 }
 
 function classifyStatus(response: string, stderrText: string): CliExecResult['statusHint'] {
-  const combined = `${response}\n${stderrText}`.toLowerCase()
+  const combined = `${response}
+${stderrText}`.toLowerCase()
 
-  if (
-    /permission denied|fatal:|traceback|exception|failed|error:|襍ｷ蜍募､ｱ謨慾謗･邯壼､ｱ謨慾not found/.test(combined) &&
-    !/no error/.test(combined)
-  ) {
+  if (/permission denied|fatal:|traceback|exception|failed|error:|not found|enoent/.test(combined) && !/no error/.test(combined)) {
     return 'error'
   }
 
-  if (/遒ｺ隱鋼驕ｸ謚桍approval|approve|continue\?|邯夊｡芸yes\/no|蜈･蜉帙＠縺ｦ縺上□縺輔＞|which one|choose/.test(combined)) {
+  if (/approval|approve|continue\?|yes\/no|which one|choose|select|confirm|confirmation required|need your input/.test(combined)) {
     return 'attention'
   }
 

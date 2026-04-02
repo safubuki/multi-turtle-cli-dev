@@ -1,4 +1,4 @@
-﻿export type ProviderId = 'codex' | 'gemini' | 'copilot'
+export type ProviderId = 'codex' | 'gemini' | 'copilot'
 export type PaneStatus = 'idle' | 'running' | 'completed' | 'attention' | 'error'
 export type WorkspaceMode = 'local' | 'ssh'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
@@ -75,6 +75,7 @@ export interface RemoteWorkspace {
 export interface RemoteDirectoryEntry {
   label: string
   path: string
+  isDirectory: boolean
   isWorkspace: boolean
 }
 

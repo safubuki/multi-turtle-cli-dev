@@ -161,6 +161,16 @@ export function pickLocalWorkspace(): Promise<{ success: boolean; paths: string[
   })
 }
 
+export function pickSaveFilePath(defaultName: string): Promise<{ success: boolean; path: string | null }> {
+  return requestJson<{ success: boolean; path: string | null }>('/api/system/pick-save-file', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ defaultName })
+  })
+}
+
 export function browseLocalDirectory(path: string): Promise<LocalBrowseResponse> {
   return requestJson<LocalBrowseResponse>('/api/system/browse-local', {
     method: 'POST',
@@ -251,3 +261,4 @@ export function transferSshPath(
     body: JSON.stringify({ direction, host, localPath, remotePath, connection })
   })
 }
+

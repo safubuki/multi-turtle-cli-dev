@@ -1,7 +1,7 @@
-﻿import cors from 'cors'
+import cors from 'cors'
 import express from 'express'
 import { startCliRun } from './cliRunner.js'
-import { pickFolderDialog } from './nativeDialog.js'
+import { pickFolderDialog, pickSaveFileDialog } from './nativeDialog.js'
 import { getProviderCatalogs } from './providerCatalog.js'
 import {
   browseRemoteDirectory,
@@ -167,6 +167,23 @@ app.post('/api/system/browse-local', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'local browse failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/system/pick-save-file', async (req, res) => {
+  try {
+    const { defaultName } = req.body as { defaultName?: string }
+    const selectedPath = await pickSaveFileDialog(defaultName ?? 'download.txt')
+    res.json({
+      success: true,
+      path: selectedPath
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'save file picker failed',
       details: String(error)
     })
   }

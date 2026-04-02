@@ -1,4 +1,4 @@
-﻿export type ProviderId = 'codex' | 'gemini' | 'copilot'
+export type ProviderId = 'codex' | 'gemini' | 'copilot'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
 export type AutonomyMode = 'balanced' | 'max'
 
@@ -73,6 +73,7 @@ export interface RemoteWorkspace {
 export interface RemoteDirectoryEntry {
   label: string
   path: string
+  isDirectory: boolean
   isWorkspace: boolean
 }
 

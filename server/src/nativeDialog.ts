@@ -6,9 +6,9 @@ function getPowerShellPath(): string {
   return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
-function runPowerShellJson(script: string): Promise<string[]> {
+function runPowerShellJson(script: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const child = execFile(
+    execFile(
       getPowerShellPath(),
       ['-NoProfile', '-STA', '-Command', script],
       {
@@ -23,56 +23,66 @@ function runPowerShellJson(script: string): Promise<string[]> {
 
         const trimmed = stdout.trim()
         if (!trimmed) {
-          resolve([])
+          resolve(null)
           return
         }
 
         try {
-          const parsed = JSON.parse(trimmed)
-          if (Array.isArray(parsed)) {
-            resolve(parsed.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0))
-            return
-          }
-
-          resolve(typeof parsed === 'string' && parsed.trim() ? [parsed.trim()] : [])
+          resolve(JSON.parse(trimmed))
         } catch (parseError) {
           reject(new Error(`Dialog response parse failed: ${String(parseError)}`))
         }
       }
     )
-
-    child.on('error', reject)
   })
 }
 
 export async function pickFolderDialog(): Promise<string[]> {
   if (process.platform !== 'win32') {
-    throw new Error('ネイティブフォルダ選択は Windows のみ対応です。')
+    throw new Error('\u30cd\u30a4\u30c6\u30a3\u30d6\u306e\u30d5\u30a9\u30eb\u30c0\u9078\u629e\u306f Windows \u306e\u307f\u5bfe\u5fdc\u3067\u3059\u3002')
   }
 
   const script = `
     Add-Type -AssemblyName System.Windows.Forms
-    $dialog = New-Object System.Windows.Forms.OpenFileDialog
-    $dialog.Title = 'ワークスペースとして使うフォルダを選択'
-    $dialog.Filter = 'All files (*.*)|*.*'
-    $dialog.CheckFileExists = $false
-    $dialog.CheckPathExists = $true
-    $dialog.ValidateNames = $false
-    $dialog.AddExtension = $false
-    $dialog.Multiselect = $false
-    $dialog.FileName = 'フォルダを選択'
-    $dialog.InitialDirectory = [Environment]::GetFolderPath('Desktop')
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3068\u3057\u3066\u4f7f\u3046\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u629e'
+    $dialog.ShowNewFolderButton = $true
+    $dialog.SelectedPath = [Environment]::GetFolderPath('Desktop')
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-      $selectedPath = Split-Path -Parent $dialog.FileName
-      if ([string]::IsNullOrWhiteSpace($selectedPath)) {
-        @() | ConvertTo-Json -Compress
-      } else {
-        @($selectedPath) | ConvertTo-Json -Compress
-      }
+      @($dialog.SelectedPath) | ConvertTo-Json -Compress
     } else {
       @() | ConvertTo-Json -Compress
     }
   `
 
-  return runPowerShellJson(script)
+  const result = await runPowerShellJson(script)
+  if (Array.isArray(result)) {
+    return result.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+  }
+
+  return []
+}
+
+export async function pickSaveFileDialog(defaultName: string): Promise<string | null> {
+  if (process.platform !== 'win32') {
+    throw new Error('\u4fdd\u5b58\u5148\u306e\u9078\u629e\u306f Windows \u306e\u307f\u5bfe\u5fdc\u3067\u3059\u3002')
+  }
+
+  const safeDefaultName = JSON.stringify(defaultName || 'download.txt')
+  const script = `
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.SaveFileDialog
+    $dialog.Title = '\u4fdd\u5b58\u5148\u3092\u9078\u629e'
+    $dialog.FileName = ${safeDefaultName}
+    $dialog.InitialDirectory = [Environment]::GetFolderPath('Desktop')
+    $dialog.OverwritePrompt = $true
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+      $dialog.FileName | ConvertTo-Json -Compress
+    } else {
+      $null | ConvertTo-Json -Compress
+    }
+  `
+
+  const result = await runPowerShellJson(script)
+  return typeof result === 'string' && result.trim() ? result.trim() : null
 }

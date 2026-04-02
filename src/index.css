@@ -100,9 +100,12 @@ button {
 
 .topbar-copy {
   margin: 6px 0 0;
-  max-width: 52ch;
+  max-width: none;
   color: var(--muted);
   line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar-actions,
@@ -1877,5 +1880,188 @@ textarea {
 
   .ssh-transfer-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+.topbar-copy {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compact-utility-row {
+  gap: 8px;
+}
+
+.workspace-browser-shell {
+  padding: 10px 12px 12px;
+}
+
+.browser-headline {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.browser-headline > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.browser-current-path {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+.browser-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wide-toolbar-actions {
+  max-width: 48%;
+}
+
+.browser-list-shell {
+  display: grid;
+  gap: 8px;
+}
+
+.browser-row {
+  display: block;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.browser-row-main {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.browser-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.browser-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-ssh-stack {
+  gap: 12px;
+}
+
+.ssh-primary-grid {
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+}
+
+.ssh-mini-accordion {
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+
+.ssh-mini-summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  color: var(--text);
+  font-weight: 600;
+  list-style: none;
+}
+
+.ssh-mini-summary::-webkit-details-marker {
+  display: none;
+}
+
+.ssh-mini-accordion[open] .ssh-mini-summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.compact-ssh-grid {
+  padding: 12px;
+}
+
+.ssh-support-stack {
+  padding: 12px;
+}
+
+.remote-browser-shell {
+  border-color: rgba(84, 210, 194, 0.08);
+}
+
+.remote-browser-shell.is-drop-active {
+  border-color: rgba(84, 210, 194, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 194, 0.18);
+}
+
+.browser-inline-note {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.remote-browser-list-modern {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.modern-remote-entry {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.modern-remote-entry.drop-ready {
+  border-color: rgba(84, 210, 194, 0.34);
+  background: rgba(84, 210, 194, 0.08);
+}
+
+.modern-browser-button {
+  width: 100%;
+}
+
+.browser-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.browser-entry-actions .ghost-button {
+  min-width: 74px;
+}
+
+.metric-card.compact p {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+@media (max-width: 1180px) {
+  .wide-toolbar-actions {
+    max-width: none;
+  }
+
+  .ssh-primary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .browser-toolbar-actions,
+  .browser-entry-actions {
+    justify-content: flex-start;
   }
 }

@@ -594,7 +594,7 @@ target="$1"
 if [ -z "$target" ]; then
   target="$HOME"
 fi
-expanded="${'${target/#\\~/$HOME}'}"
+expanded="${'${target/#\~/$HOME}'}"
 if [ ! -d "$expanded" ]; then
   echo "Directory not found: $expanded" >&2
   exit 1
@@ -605,14 +605,18 @@ printf 'HOME\t%s\n' "$HOME"
 if [ "$resolved" != "/" ]; then
   printf 'PARENT\t%s\n' "$(dirname "$resolved")"
 fi
-find "$resolved" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r dir; do
-  [ -d "$dir" ] || continue
-  name="$(basename "$dir")"
-  workspace=0
-  if [ -d "$dir/.git" ] || [ -f "$dir/package.json" ] || [ -f "$dir/pnpm-workspace.yaml" ] || [ -f "$dir/turbo.json" ]; then
-    workspace=1
+find "$resolved" -mindepth 1 -maxdepth 1 \( -type d -o -type f \) -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r entry; do
+  [ -e "$entry" ] || continue
+  name="$(basename "$entry")"
+  if [ -d "$entry" ]; then
+    workspace=0
+    if [ -d "$entry/.git" ] || [ -f "$entry/package.json" ] || [ -f "$entry/pnpm-workspace.yaml" ] || [ -f "$entry/turbo.json" ]; then
+      workspace=1
+    fi
+    printf 'ENTRY\tDIR\t%s\t%s\t%s\n' "$name" "$entry" "$workspace"
+  else
+    printf 'ENTRY\tFILE\t%s\t%s\t0\n' "$name" "$entry"
   fi
-  printf 'DIR\t%s\t%s\t%s\n' "$name" "$dir" "$workspace"
 done
 `
 
@@ -623,27 +627,36 @@ done
   let homeDirectory: string | null = null
 
   for (const line of stdout.split(/\r?\n/)) {
-    const [kind, value, extra, flag] = line.split('\t')
-    if (kind === 'PATH' && value) {
-      currentPath = value
+    const [kind, entryType, value, extra, flag] = line.split('\t')
+    if (kind === 'PATH' && entryType) {
+      currentPath = entryType
       continue
     }
     if (kind === 'PARENT') {
-      parentPath = value || null
+      parentPath = entryType || null
       continue
     }
     if (kind === 'HOME') {
-      homeDirectory = value || null
+      homeDirectory = entryType || null
       continue
     }
-    if (kind === 'DIR' && value && extra) {
+    if (kind === 'ENTRY' && value && extra) {
       entries.push({
         label: value,
         path: extra,
-        isWorkspace: flag === '1'
+        isDirectory: entryType === 'DIR',
+        isWorkspace: entryType === 'DIR' && flag === '1'
       })
     }
   }
+
+  entries.sort((left, right) => {
+    if (left.isDirectory !== right.isDirectory) {
+      return left.isDirectory ? -1 : 1
+    }
+
+    return left.label.localeCompare(right.label, 'ja')
+  })
 
   return {
     path: currentPath,
@@ -652,7 +665,6 @@ done
     homeDirectory
   }
 }
-
 export async function createRemoteDirectory(
   host: string,
   connection: SshConnectionOptions | undefined,

@@ -1,4 +1,4 @@
-﻿import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Bot,
@@ -25,6 +25,7 @@ import {
   openTargetInCommandPrompt,
   openWorkspaceInVsCode,
   pickLocalWorkspace,
+  pickSaveFilePath,
   runPaneStream,
   stopPaneRun,
   transferSshPath
@@ -114,15 +115,15 @@ function summarize(text: string): string {
 function statusLabel(status: PaneStatus): string {
   switch (status) {
     case 'running':
-      return '実行中'
+      return '\u5b9f\u884c\u4e2d'
     case 'completed':
-      return '完了'
+      return '\u5b8c\u4e86'
     case 'attention':
-      return '入力/確認待ち'
+      return '\u5165\u529b / \u78ba\u8a8d\u5f85\u3061'
     case 'error':
-      return 'エラー'
+      return '\u30a8\u30e9\u30fc'
     default:
-      return '待機中'
+      return '\u5f85\u6a5f\u4e2d'
   }
 }
 
@@ -247,10 +248,10 @@ function hasSessionContent(pane: Pick<PaneState, 'logs' | 'streamEntries' | 'ses
 
 function buildSessionLabel(sessionId: string | null, createdAt: number): string {
   if (sessionId) {
-    return `繧ｻ繝・す繝ｧ繝ｳ ${sessionId.slice(0, 8)}`
+    return `\u30bb\u30c3\u30b7\u30e7\u30f3 ${sessionId.slice(0, 8)}`
   }
 
-  return `繧ｻ繝・す繝ｧ繝ｳ ${new Date(createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
+  return `\u30bb\u30c3\u30b7\u30e7\u30f3 ${new Date(createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
 }
 
 function createArchivedSessionRecord(pane: PaneState): PaneSessionRecord {
@@ -405,7 +406,7 @@ function createSharedContextItem(
     targetPaneIds: options.targetPaneIds ?? [],
     targetPaneTitles: options.targetPaneTitles ?? [],
     contentLabel: options.contentLabel,
-    workspaceLabel: target?.label ?? '未選択',
+    workspaceLabel: target?.label ?? '\u672a\u9078\u629e',
     summary: summarize(response),
     detail: clipText(response, 16_000),
     createdAt: Date.now()
@@ -427,22 +428,22 @@ function getShareablePayload(pane: PaneState): { text: string | null; contentLab
     if (selectedSession) {
       const latestAssistant = [...selectedSession.logs].reverse().find((entry) => entry.role === 'assistant')?.text
       if (latestAssistant?.trim()) {
-        return { text: latestAssistant, contentLabel: '驕ｸ謚樔ｸｭ繧ｻ繝・す繝ｧ繝ｳ' }
+        return { text: latestAssistant, contentLabel: '\u9078\u629e\u4e2d\u30bb\u30c3\u30b7\u30e7\u30f3' }
       }
 
       const combinedLogs = selectedSession.logs.map((entry) => `${entry.role.toUpperCase()}: ${entry.text}`).join('\n\n').trim()
       if (combinedLogs) {
-        return { text: combinedLogs, contentLabel: '驕ｸ謚樔ｸｭ繧ｻ繝・す繝ｧ繝ｳ' }
+        return { text: combinedLogs, contentLabel: '\u9078\u629e\u4e2d\u30bb\u30c3\u30b7\u30e7\u30f3' }
       }
 
       const combinedStream = selectedSession.streamEntries.map((entry) => `[${entry.kind}] ${entry.text}`).join('\n').trim()
       if (combinedStream) {
-        return { text: combinedStream, contentLabel: '驕ｸ謚樔ｸｭ繧ｻ繝・す繝ｧ繝ｳ' }
+        return { text: combinedStream, contentLabel: '\u9078\u629e\u4e2d\u30bb\u30c3\u30b7\u30e7\u30f3' }
       }
     }
   }
 
-  return { text: getLatestAssistantText(pane), contentLabel: '譛譁ｰ邨先棡' }
+  return { text: getLatestAssistantText(pane), contentLabel: '\u6700\u65b0\u7d50\u679c' }
 }
 
 function resetActiveSessionFields(pane: PaneState): PaneState {
@@ -496,7 +497,7 @@ function normalizeSharedContextItem(rawItem: Partial<SharedContextItem> | null |
     targetPaneTitles: Array.isArray(rawItem.targetPaneTitles)
       ? rawItem.targetPaneTitles.filter((item): item is string => typeof item === 'string')
       : [],
-    contentLabel: typeof rawItem.contentLabel === 'string' && rawItem.contentLabel.trim() ? rawItem.contentLabel : '譛譁ｰ邨先棡',
+    contentLabel: typeof rawItem.contentLabel === 'string' && rawItem.contentLabel.trim() ? rawItem.contentLabel : '\u6700\u65b0\u7d50\u679c',
     summary: typeof rawItem.summary === 'string' ? rawItem.summary : '',
     detail: typeof rawItem.detail === 'string' ? rawItem.detail : '',
     createdAt: typeof rawItem.createdAt === 'number' ? rawItem.createdAt : Date.now()
@@ -549,6 +550,7 @@ function normalizeRemoteDirectoryEntry(rawEntry: Partial<RemoteDirectoryEntry> |
   return {
     label: rawEntry.label,
     path: rawEntry.path,
+    isDirectory: rawEntry.isDirectory !== false,
     isWorkspace: Boolean(rawEntry.isWorkspace)
   }
 }
@@ -607,7 +609,7 @@ function normalizePane(
         .filter((entry): entry is RemoteDirectoryEntry => Boolean(entry))
     : []
   const statusText =
-    rawStatus === 'running' ? '蜑榊屓縺ｮ螳溯｡後・蛻・妙縺輔ｌ縺ｾ縺励◆' : typeof rawPane.statusText === 'string' ? rawPane.statusText : statusLabel(restoredStatus)
+    rawStatus === 'running' ? '\u524d\u56de\u306e\u5b9f\u884c\u306f\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f' : typeof rawPane.statusText === 'string' ? rawPane.statusText : statusLabel(restoredStatus)
 
   return {
     id: rawPane.id ?? createId('pane'),
@@ -938,11 +940,11 @@ function App() {
             : currentPane
         )
       )
-      appendPaneSystemMessage(paneId, `${targetPane.title} 縺ｫ蛟句挨蜈ｱ譛峨＠縺ｾ縺励◆`)
-      appendPaneSystemMessage(targetPane.id, `${pane.title} 縺九ｉ蜈ｱ譛峨ｒ蜿励￠蜿悶ｊ縺ｾ縺励◆`)
+      appendPaneSystemMessage(paneId, `${targetPane.title} \u306b\u500b\u5225\u5171\u6709\u3057\u307e\u3057\u305f`)
+      appendPaneSystemMessage(targetPane.id, `${pane.title} \u304b\u3089\u5171\u6709\u3092\u53d7\u3051\u53d6\u308a\u307e\u3057\u305f`)
       return
     }
-    appendPaneSystemMessage(paneId, '邨先棡繧貞・譛峨∈霑ｽ蜉縺励∪縺励◆')
+    appendPaneSystemMessage(paneId, '\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709\u3078\u8ffd\u52a0\u3057\u307e\u3057\u305f')
   }
 
   const handleDeleteSharedContext = (contextId: string) => {
@@ -964,7 +966,7 @@ function App() {
           ...pane,
           liveOutput: appendLiveOutputChunk(pane.liveOutput, event.text),
           lastActivityAt: eventAt,
-          statusText: '蠢懃ｭ斐ｒ逕滓・荳ｭ'
+          statusText: '陟｢諛・ｽｭ譁撰ｽ帝墓ｻ薙・闕ｳ・ｭ'
         }))
       })
       return
@@ -977,7 +979,7 @@ function App() {
         sessionId: event.sessionId,
         lastActivityAt: eventAt,
         liveOutput: appendLiveOutputLine(pane.liveOutput, sessionLine),
-        streamEntries: appendStreamEntry(pane.streamEntries, 'system', `繧ｻ繝・す繝ｧ繝ｳ髢句ｧ・ ${event.sessionId}`, eventAt)
+        streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb: ${event.sessionId}`, eventAt)
       }))
       return
     }
@@ -1023,11 +1025,11 @@ function App() {
           runningSince: null,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
-          lastError: event.statusHint === 'error' ? '蠢懃ｭ斐′繧ｨ繝ｩ繝ｼ縺ｧ邨ゆｺ・＠縺ｾ縺励◆' : null,
+          lastError: event.statusHint === 'error' ? '\u51e6\u7406\u304c\u30a8\u30e9\u30fc\u3067\u7d42\u4e86\u3057\u307e\u3057\u305f' : null,
           lastResponse: assistantEntry.text,
           liveOutput: nextLiveOutput,
           sessionId: event.sessionId ?? pane.sessionId,
-          streamEntries: appendStreamEntry(pane.streamEntries, 'system', `螳溯｡檎ｵゆｺ・ ${statusLabel(event.statusHint)}`, eventAt)
+          streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u7d50\u679c: ${statusLabel(event.statusHint)}`, eventAt)
         }
       })
 
@@ -1074,8 +1076,8 @@ function App() {
     if (!target) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: 'ワークスペースを選択してください',
-        lastError: 'ワークスペース未設定です'
+        statusText: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
       })
       return
     }
@@ -1084,8 +1086,8 @@ function App() {
     if (!prompt) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '指示を入力してください',
-        lastError: 'プロンプトが空です'
+        statusText: '\u6307\u793a\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: '\u30d7\u30ed\u30f3\u30d7\u30c8\u304c\u7a7a\u3067\u3059\u3002'
       })
       return
     }
@@ -1110,14 +1112,14 @@ function App() {
       ...currentPane,
       logs: appendLogEntry(currentPane.logs, userEntry),
       status: 'running',
-      statusText: 'CLI 繧貞ｮ溯｡御ｸｭ',
+      statusText: 'CLI \u3092\u5b9f\u884c\u4e2d\u3067\u3059',
       lastRunAt: startedAt,
       runningSince: startedAt,
       lastActivityAt: startedAt,
       lastError: null,
       selectedSessionKey: null,
       liveOutput: '',
-      streamEntries: appendStreamEntry([], 'system', `髢句ｧ・ ${currentPane.provider} / ${target.label}`, startedAt)
+      streamEntries: appendStreamEntry([], 'system', `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
 
     try {
@@ -1172,13 +1174,13 @@ function App() {
         mutatePane(paneId, (currentPane) => ({
           ...currentPane,
           status: 'attention',
-          statusText: '蛛懈ｭ｢縺励∪縺励◆',
+          statusText: '\u505c\u6b62\u3057\u307e\u3057\u305f',
           runningSince: null,
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
           liveOutput: appendLiveOutputLine(currentPane.liveOutput, '[system] stopped'),
-          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '螳溯｡後ｒ蛛懈ｭ｢縺励∪縺励◆', stoppedAt)
+          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '\u5b9f\u884c\u3092\u505c\u6b62\u3057\u307e\u3057\u305f', stoppedAt)
         }))
       }
     } finally {
@@ -1194,7 +1196,7 @@ function App() {
     mutatePane(paneId, (pane) => ({
       ...pane,
       status: 'attention',
-      statusText: '停止しています',
+      statusText: '\u505c\u6b62\u3057\u307e\u3057\u305f',
       runningSince: null
     }))
 
@@ -1203,7 +1205,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: '停止に失敗しました',
+        statusText: '\u505c\u6b62\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1334,13 +1336,13 @@ function App() {
       const copiedAt = Date.now()
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '譛譁ｰ蜃ｺ蜉帙ｒ繧ｯ繝ｪ繝・・繝懊・繝峨∈繧ｳ繝斐・縺励∪縺励◆', copiedAt),
+        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '\u6700\u65b0\u51fa\u529b\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u3078\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f', copiedAt),
         lastActivityAt: copiedAt
       }))
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: '繧ｳ繝斐・縺ｫ螟ｱ謨励＠縺ｾ縺励◆',
+        statusText: '\u30b3\u30d4\u30fc\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1368,7 +1370,7 @@ function App() {
       updatePane(paneId, {
         localBrowserLoading: false,
         status: 'error',
-        statusText: '繝輔か繝ｫ繝蜀・ｮｹ縺ｮ隱ｭ霎ｼ縺ｫ螟ｱ謨励＠縺ｾ縺励◆',
+        statusText: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1405,7 +1407,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: '繝輔か繝ｫ繝驕ｸ謚槭↓螟ｱ謨励＠縺ｾ縺励◆',
+        statusText: '\u30d5\u30a9\u30eb\u30c0\u9078\u629e\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1459,7 +1461,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'VSCode の起動に失敗しました',
+        statusText: 'VSCode \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1481,7 +1483,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'コマンドプロンプトを開けませんでした',
+        statusText: 'CMD \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1515,7 +1517,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'VSCode の起動に失敗しました',
+        statusText: 'VSCode \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1526,8 +1528,8 @@ function App() {
     if (!pane || !pane.sshHost.trim()) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: 'SSH ホストを入力してください',
-        lastError: 'SSH ホスト未設定です'
+        statusText: 'SSH \u30db\u30b9\u30c8\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: 'SSH \u30db\u30b9\u30c8\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
       })
       return
     }
@@ -1536,7 +1538,7 @@ function App() {
     const startedAt = Date.now()
     updatePane(paneId, {
       status: 'running',
-      statusText: 'SSH を確認中',
+      statusText: 'SSH \u63a5\u7d9a\u3092\u78ba\u8a8d\u4e2d\u3067\u3059',
       runningSince: startedAt,
       lastActivityAt: startedAt,
       lastError: null
@@ -1592,7 +1594,7 @@ function App() {
             remoteWorkspacePath:
               item.remoteWorkspacePath || workspacePayload.workspaces[0]?.path || browsePayload.path || item.remoteWorkspacePath,
             status: inspectionPayload.availableProviders.length === 0 ? 'attention' : 'idle',
-            statusText: inspectionPayload.availableProviders.length === 0 ? 'CLI 未検出' : 'SSH を更新しました',
+            statusText: inspectionPayload.availableProviders.length === 0 ? 'CLI \u672a\u691c\u51fa' : 'SSH \u3092\u66f4\u65b0\u3057\u307e\u3057\u305f',
             runningSince: null,
             lastActivityAt: updatedAt,
             lastFinishedAt: updatedAt
@@ -1602,7 +1604,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'SSH 接続に失敗しました',
+        statusText: 'SSH \u63a5\u7d9a\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         runningSince: null,
         lastError: error instanceof Error ? error.message : String(error)
       })
@@ -1614,8 +1616,8 @@ function App() {
     if (!pane || !pane.sshHost.trim()) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: 'SSH ホストを入力してください',
-        lastError: 'SSH ホスト未設定です'
+        statusText: 'SSH \u30db\u30b9\u30c8\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: 'SSH \u30db\u30b9\u30c8\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
       })
       return
     }
@@ -1644,7 +1646,7 @@ function App() {
       updatePane(paneId, {
         remoteBrowserLoading: false,
         status: 'error',
-        statusText: 'SSH 参照に失敗しました',
+        statusText: 'SSH \u4e00\u89a7\u306e\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1652,48 +1654,74 @@ function App() {
 
   const handleCreateRemoteDirectory = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim() || !pane.remoteBrowserPath.trim() || !pane.remoteNewDirectoryName.trim()) {
+    if (!pane || !pane.sshHost.trim() || !pane.remoteBrowserPath.trim()) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '作成先とフォルダ名を設定してください',
-        lastError: 'リモートフォルダ作成に必要な情報が不足しています'
+        statusText: '\u4f5c\u6210\u5148\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7\u3092\u8868\u793a\u3057\u3066\u304b\u3089\u4f5c\u6210\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
       })
       return
     }
 
+    const folderName = window.prompt('\u4f5c\u6210\u3059\u308b\u30d5\u30a9\u30eb\u30c0\u540d', '')
+    if (folderName === null) {
+      return
+    }
+
+    const trimmedName = folderName.trim()
+    if (!trimmedName) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '\u30d5\u30a9\u30eb\u30c0\u540d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: '\u65b0\u898f\u30d5\u30a9\u30eb\u30c0\u540d\u304c\u7a7a\u3067\u3059\u3002'
+      })
+      return
+    }
+
+    const startedAt = Date.now()
     updatePane(paneId, {
-      remoteBrowserLoading: true
+      remoteBrowserLoading: true,
+      status: 'running',
+      statusText: '\u30d5\u30a9\u30eb\u30c0\u3092\u4f5c\u6210\u4e2d',
+      runningSince: startedAt,
+      lastActivityAt: startedAt,
+      lastError: null
     })
 
     try {
       const payload = await createRemoteDirectory(
         pane.sshHost.trim(),
         pane.remoteBrowserPath.trim(),
-        pane.remoteNewDirectoryName.trim(),
+        trimmedName,
         buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
       )
       const browsePayload = await browseRemoteDirectory(
         pane.sshHost.trim(),
-        payload.path,
+        pane.remoteBrowserPath.trim(),
         buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
       )
+      const finishedAt = Date.now()
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
         remoteBrowserLoading: false,
-        remoteWorkspacePath: payload.path,
         remoteBrowserPath: browsePayload.path,
         remoteParentPath: browsePayload.parentPath,
         remoteBrowserEntries: browsePayload.entries,
-        remoteNewDirectoryName: '',
         sshRemotePath: payload.path,
+        status: 'completed',
+        statusText: '\u30d5\u30a9\u30eb\u30c0\u3092\u4f5c\u6210\u3057\u307e\u3057\u305f',
+        runningSince: null,
+        lastActivityAt: finishedAt,
+        lastFinishedAt: finishedAt,
         lastError: null,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', `フォルダ作成: ${payload.path}`, Date.now())
+        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', `\u30d5\u30a9\u30eb\u30c0\u4f5c\u6210: ${payload.path}`, finishedAt)
       }))
     } catch (error) {
       updatePane(paneId, {
         remoteBrowserLoading: false,
         status: 'error',
-        statusText: 'フォルダ作成に失敗しました',
+        statusText: '\u30d5\u30a9\u30eb\u30c0\u4f5c\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        runningSince: null,
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1708,13 +1736,13 @@ function App() {
         sshSelectedKeyPath: result.key.privateKeyPath,
         sshIdentityFile: pane.sshIdentityFile || result.key.privateKeyPath,
         sshPublicKeyText: result.key.publicKey,
-        sshDiagnostics: [...pane.sshDiagnostics.filter((item) => !item.startsWith('ローカル鍵:')), `ローカル鍵: ${result.key.privateKeyPath}`],
+        sshDiagnostics: [...pane.sshDiagnostics.filter((item) => !item.startsWith('\u30ed\u30fc\u30ab\u30eb\u9375:')), `\u30ed\u30fc\u30ab\u30eb\u9375: ${result.key.privateKeyPath}`],
         lastError: null
       }))
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'SSH 鍵の生成に失敗しました',
+        statusText: 'SSH \u9375\u306e\u751f\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1725,66 +1753,111 @@ function App() {
     if (!pane || !pane.sshHost.trim() || !pane.sshPublicKeyText.trim()) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '接続先と公開鍵を確認してください',
-        lastError: 'SSH 公開鍵を登録する条件が不足しています'
+        statusText: '\u63a5\u7d9a\u5148\u3068\u516c\u958b\u9375\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: 'SSH \u516c\u958b\u9375\u306e\u767b\u9332\u306b\u5fc5\u8981\u306a\u60c5\u5831\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002'
       })
       return
     }
 
     try {
       await installSshKey(pane.sshHost.trim(), pane.sshPublicKeyText.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? []))
-      appendPaneSystemMessage(paneId, '公開鍵を接続先へ登録しました')
+      appendPaneSystemMessage(paneId, '\u516c\u958b\u9375\u3092\u63a5\u7d9a\u5148\u3078\u767b\u9332\u3057\u307e\u3057\u305f')
       updatePane(paneId, {
         status: 'idle',
-        statusText: '公開鍵を登録しました',
+        statusText: '\u516c\u958b\u9375\u3092\u767b\u9332\u3057\u307e\u3057\u305f',
         lastError: null
       })
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: '公開鍵の登録に失敗しました',
+        statusText: '\u516c\u958b\u9375\u306e\u767b\u9332\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
   }
 
-  const handleTransferSshPath = async (paneId: string, direction: 'upload' | 'download') => {
+  const handleTransferSshPath = async (
+    paneId: string,
+    direction: 'upload' | 'download',
+    options?: { localPath?: string; remotePath?: string; remoteLabel?: string; isDirectory?: boolean }
+  ) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim() || !pane.sshLocalPath.trim() || !pane.sshRemotePath.trim()) {
+    if (!pane || !pane.sshHost.trim()) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '転送元と転送先を入力してください',
-        lastError: 'SCP に必要な情報が不足しています'
+        statusText: 'SSH \u63a5\u7d9a\u5148\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: '\u8ee2\u9001\u5148\u306e SSH \u63a5\u7d9a\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
       })
       return
     }
+
+    let localPath = options?.localPath?.trim() || pane.sshLocalPath.trim()
+    let remotePath = options?.remotePath?.trim() || pane.sshRemotePath.trim()
+
+    if (direction === 'download' && remotePath && !localPath) {
+      if (options?.isDirectory) {
+        const picked = await pickLocalWorkspace()
+        localPath = picked.paths[0] ?? ''
+      } else {
+        const fallbackName = options?.remoteLabel?.trim() || remotePath.split('/').filter(Boolean).pop() || 'download.txt'
+        const picked = await pickSaveFilePath(fallbackName)
+        localPath = picked.path ?? ''
+      }
+    }
+
+    if (!localPath || !remotePath) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: direction === 'upload' ? '\u9001\u4fe1\u5143\u3068\u9001\u4fe1\u5148\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044' : '\u53d6\u5f97\u5143\u3068\u4fdd\u5b58\u5148\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
+        lastError: '\u8ee2\u9001\u306b\u5fc5\u8981\u306a\u60c5\u5831\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002'
+      })
+      return
+    }
+
+    updatePane(paneId, {
+      sshLocalPath: localPath,
+      sshRemotePath: remotePath,
+      status: 'running',
+      statusText: direction === 'upload' ? '\u9001\u4fe1\u4e2d' : '\u53d7\u4fe1\u4e2d',
+      lastError: null
+    })
 
     try {
       await transferSshPath(
         direction,
         pane.sshHost.trim(),
-        pane.sshLocalPath.trim(),
-        pane.sshRemotePath.trim(),
+        localPath,
+        remotePath,
         buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
       )
       appendPaneSystemMessage(
         paneId,
-        direction === 'upload' ? `SCP 送信完了: ${pane.sshLocalPath} -> ${pane.sshRemotePath}` : `SCP 取得完了: ${pane.sshRemotePath} -> ${pane.sshLocalPath}`
+        direction === 'upload' ? `\u9001\u4fe1\u5b8c\u4e86: ${localPath} -> ${remotePath}` : `\u53d7\u4fe1\u5b8c\u4e86: ${remotePath} -> ${localPath}`
       )
+      const finishedAt = Date.now()
       updatePane(paneId, {
         status: 'completed',
-        statusText: direction === 'upload' ? 'SCP 送信完了' : 'SCP 取得完了',
-        lastError: null
+        statusText: direction === 'upload' ? '\u9001\u4fe1\u5b8c\u4e86' : '\u53d7\u4fe1\u5b8c\u4e86',
+        sshLocalPath: localPath,
+        sshRemotePath: remotePath,
+        lastError: null,
+        lastActivityAt: finishedAt,
+        lastFinishedAt: finishedAt
       })
+
+      if (direction === 'upload') {
+        void handleBrowseRemote(paneId, pane.remoteBrowserPath || pane.remoteWorkspacePath || undefined)
+      }
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'SCP 転送に失敗しました',
+        statusText: '\u8ee2\u9001\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        sshLocalPath: localPath,
+        sshRemotePath: remotePath,
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
   }
-
   useEffect(() => {
     if (!selectedPane || selectedPane.workspaceMode !== 'local' || !selectedPane.localWorkspacePath) {
       return
@@ -1809,7 +1882,9 @@ function App() {
       <div className="loading-screen">
         <div className="loading-panel">
           <Activity size={22} />
-          <p>CLI デッキを読み込み中です。</p>
+          <p>{'CLI \u30c7\u30c3\u30ad\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</p>
+          <h1>Multi Turtle CLI Develop Tool</h1>
+          <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck.</p>
         </div>
       </div>
     )
@@ -1819,21 +1894,21 @@ function App() {
     <div className="app-shell">
       <div className="background-layer" />
 
-      <header className="topbar compact">
+      <header className="topbar">
         <div>
-          <p className="eyebrow">Multi Turtle CLI Develop Tool</p>
+          <p className="eyebrow">MULTI TURTLE CLI DEVELOP TOOL</p>
           <h1>Multi Turtle CLI Develop Tool</h1>
-          <p className="topbar-copy">複数の CLI とワークスペースを一画面で切り替えながら進行管理します。</p>
+          <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck.</p>
         </div>
 
         <div className="topbar-actions">
           <button type="button" className="secondary-button" onClick={() => void refreshBootstrap()}>
             <RefreshCcw size={16} />
-            再読込
+            {'\u518d\u8aad\u8fbc'}
           </button>
           <button type="button" className="primary-button" onClick={handleAddPane}>
             <Plus size={16} />
-            ペイン追加
+            {'\u30da\u30a4\u30f3\u8ffd\u52a0'}
           </button>
         </div>
       </header>
@@ -1849,32 +1924,33 @@ function App() {
         <article className="metric-card compact">
           <header>
             <Activity size={16} />
-            <span>実行中</span>
+            <span>{'\u5b9f\u884c\u4e2d'}</span>
           </header>
           <strong>{metrics.running}</strong>
         </article>
         <article className="metric-card compact">
           <header>
             <CheckCircle2 size={16} />
-            <span>完了</span>
+            <span>{'\u5b8c\u4e86'}</span>
           </header>
           <strong>{metrics.completed}</strong>
-          <p>正常終了したタスク</p>
+          <p>{'\u6b63\u5e38\u306b\u7d42\u4e86\u3057\u305f\u30bf\u30b9\u30af'}</p>
         </article>
         <article className="metric-card compact">
           <header>
             <Bot size={16} />
-            <span>入力/確認待ち</span>
+            <span>{'\u78ba\u8a8d\u5f85\u3061'}</span>
           </header>
           <strong>{metrics.attention}</strong>
-          <p>確認や追加入力が必要なタスク</p>
+          <p>{'\u5165\u529b\u3084\u5224\u65ad\u304c\u5fc5\u8981\u306a\u30bf\u30b9\u30af'}</p>
         </article>
         <article className="metric-card compact">
           <header>
             <XCircle size={16} />
-            <span>停滞 / エラー</span>
+            <span>{'\u505c\u6ede / \u30a8\u30e9\u30fc'}</span>
           </header>
           <strong>{metrics.error + metrics.stalled}</strong>
+          <p>{'\u5931\u6557\u307e\u305f\u306f\u505c\u6ede\u3092\u691c\u51fa\u3057\u305f\u30bf\u30b9\u30af'}</p>
         </article>
       </section>
 
@@ -1882,11 +1958,11 @@ function App() {
         <section className="context-dock">
           <div className="panel-header context-dock-header">
             <Wifi size={16} />
-            <h2>共有コンテキスト</h2>
+            <h2>{'\u5171\u6709\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8'}</h2>
           </div>
           <div className="context-dock-note">
-            <span>全体 {sharedContext.filter((item) => item.scope === 'global').length}</span>
-            <span>個別 {sharedContext.filter((item) => item.scope === 'direct').length}</span>
+            <span>{`\u5168\u4f53 ${sharedContext.filter((item) => item.scope === 'global').length}`}</span>
+            <span>{`\u500b\u5225 ${sharedContext.filter((item) => item.scope === 'direct').length}`}</span>
           </div>
           <div className="context-dock-list">
             {sharedContext.map((item) => (
@@ -1895,26 +1971,26 @@ function App() {
                   <div>
                     <strong>{item.sourcePaneTitle}</strong>
                     <span className="context-dock-meta">
-                      {item.contentLabel} / {item.scope === 'global' ? '全体共有' : '個別共有'}
+                      {item.contentLabel} / {item.scope === 'global' ? '\u5168\u4f53\u5171\u6709' : '\u500b\u5225\u5171\u6709'}
                     </span>
                   </div>
                   <button
                     type="button"
                     className="icon-button danger compact-icon-button"
                     onClick={() => handleDeleteSharedContext(item.id)}
-                    title="共有を削除"
+                    title={'\u5171\u6709\u3092\u524a\u9664'}
                   >
                     <Trash2 size={14} />
                   </button>
                 </div>
                 <span>{item.summary}</span>
-                <span className="context-dock-meta">workspace: {item.workspaceLabel}</span>
+                <span className="context-dock-meta">{'\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9: '}{item.workspaceLabel}</span>
                 <span className="context-dock-meta">
                   {item.scope === 'global'
-                    ? `${panes.filter((pane) => pane.attachedContextIds.includes(item.id)).length} ペインで使用中`
+                    ? `${panes.filter((pane) => pane.attachedContextIds.includes(item.id)).length} \u30da\u30a4\u30f3\u3067\u4f7f\u7528\u4e2d`
                     : item.targetPaneTitles.length > 0
-                      ? `${item.targetPaneTitles.join(', ')} に個別共有`
-                      : '共有先なし'}
+                      ? `${item.targetPaneTitles.join(', ')} \u3078\u500b\u5225\u5171\u6709`
+                      : '\u5171\u6709\u5148\u306a\u3057'}
                 </span>
               </article>
             ))}
@@ -1940,7 +2016,8 @@ function App() {
                 onClick={() => setLayout('triple')}
               >
                 <SplitSquareHorizontal size={15} />
-                3蛻・              </button>
+                {'3\u5217'}
+              </button>
               <button
                 type="button"
                 className={layout === 'focus' ? 'switch-button active' : 'switch-button'}
@@ -2013,7 +2090,7 @@ function App() {
                 onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
                 onGenerateSshKey={(paneId) => void handleGenerateSshKey(paneId)}
                 onInstallSshPublicKey={(paneId) => void handleInstallSshPublicKey(paneId)}
-                onTransferSshPath={(paneId, direction) => void handleTransferSshPath(paneId, direction)}
+                onTransferSshPath={(paneId, direction, options) => void handleTransferSshPath(paneId, direction, options)}
                 shareTargets={panes.filter((item) => item.id !== pane.id).map((item) => ({ id: item.id, title: item.title }))}
                 onToggleContext={handleToggleContext}
               />
@@ -2026,7 +2103,6 @@ function App() {
 }
 
 export default App
-
 
 
 
