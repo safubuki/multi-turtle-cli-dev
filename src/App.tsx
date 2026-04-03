@@ -18,6 +18,7 @@ import {
   browseLocalDirectory,
   createRemoteDirectory,
   fetchBootstrap,
+  fetchLocalBrowseRoots,
   fetchRemoteWorkspaces,
   generateSshKey,
   inspectSshHost,
@@ -32,6 +33,8 @@ import {
 } from './lib/api'
 import type {
   BootstrapPayload,
+  LocalBrowseRoot,
+  LocalDirectoryEntry,
   LocalWorkspace,
   PaneLogEntry,
   PaneSessionRecord,
@@ -49,6 +52,15 @@ import type {
 } from './types'
 
 type LayoutMode = 'quad' | 'triple' | 'focus'
+
+interface WorkspacePickerState {
+  paneId: string
+  path: string
+  entries: LocalDirectoryEntry[]
+  roots: LocalBrowseRoot[]
+  loading: boolean
+  error: string | null
+}
 
 const PROVIDER_ORDER: ProviderId[] = ['codex', 'copilot', 'gemini']
 const EMPTY_CATALOGS = {} as Record<ProviderId, ProviderCatalogResponse>
@@ -110,6 +122,30 @@ function summarize(text: string): string {
   }
 
   return `${normalized.slice(0, 110).trim()}...`
+}
+
+function getAbsoluteLocalParentPath(currentPath: string): string | null {
+  const normalizedPath = currentPath.replace(/[\/]+$/, '').replace(/\//g, '\\')
+  if (!normalizedPath) {
+    return null
+  }
+
+  if (/^[A-Za-z]:\\?$/.test(normalizedPath) || normalizedPath === '\\') {
+    return null
+  }
+
+  const segments = normalizedPath.split('\\')
+  if (segments.length <= 1) {
+    return null
+  }
+
+  segments.pop()
+  let parent = segments.join('\\')
+  if (/^[A-Za-z]:$/.test(parent)) {
+    parent += '\\'
+  }
+
+  return parent || null
 }
 
 function statusLabel(status: PaneStatus): string {
@@ -542,6 +578,18 @@ function persistState(payload: {
   window.localStorage.setItem(STORAGE_KEYS.focusedPane, JSON.stringify(payload.focusedPaneId))
 }
 
+function normalizeLocalDirectoryEntry(rawEntry: Partial<LocalDirectoryEntry> | null | undefined): LocalDirectoryEntry | null {
+  if (!rawEntry?.label || !rawEntry.path) {
+    return null
+  }
+
+  return {
+    label: rawEntry.label,
+    path: rawEntry.path,
+    isDirectory: rawEntry.isDirectory !== false
+  }
+}
+
 function normalizeRemoteDirectoryEntry(rawEntry: Partial<RemoteDirectoryEntry> | null | undefined): RemoteDirectoryEntry | null {
   if (!rawEntry?.label || !rawEntry.path) {
     return null
@@ -591,11 +639,8 @@ function normalizePane(
       ? rawPane.reasoningEffort
       : modelInfo?.defaultReasoningEffort ?? 'medium'
   const workspaceMode = rawPane.workspaceMode === 'ssh' ? 'ssh' : 'local'
-  const allowedLocalPaths = new Set(localWorkspaces.map((item) => item.path))
-  const localWorkspacePath =
-    typeof rawPane.localWorkspacePath === 'string' && allowedLocalPaths.has(rawPane.localWorkspacePath)
-      ? rawPane.localWorkspacePath
-      : localWorkspaces[0]?.path ?? ''
+  const persistedLocalWorkspacePath = typeof rawPane.localWorkspacePath === 'string' ? rawPane.localWorkspacePath.trim() : ''
+  const localWorkspacePath = persistedLocalWorkspacePath || localWorkspaces[0]?.path || ''
   const rawStatus = rawPane.status ?? 'idle'
   const restoredStatus: PaneStatus =
     rawStatus === 'running'
@@ -623,7 +668,11 @@ function normalizePane(
     workspaceMode,
     localWorkspacePath,
     localBrowserPath: typeof rawPane.localBrowserPath === 'string' ? rawPane.localBrowserPath : '',
-    localBrowserEntries: Array.isArray(rawPane.localBrowserEntries) ? rawPane.localBrowserEntries : [],
+    localBrowserEntries: Array.isArray(rawPane.localBrowserEntries)
+      ? rawPane.localBrowserEntries
+          .map((entry) => normalizeLocalDirectoryEntry(entry))
+          .filter((entry): entry is LocalDirectoryEntry => Boolean(entry))
+      : [],
     localBrowserLoading: false,
     sshHost: typeof rawPane.sshHost === 'string' ? rawPane.sshHost : '',
     sshUser: typeof rawPane.sshUser === 'string' ? rawPane.sshUser : '',
@@ -687,6 +736,7 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [globalError, setGlobalError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
+  const [workspacePicker, setWorkspacePicker] = useState<WorkspacePickerState | null>(null)
 
   const panesRef = useRef<PaneState[]>([])
   const localWorkspacesRef = useRef<LocalWorkspace[]>([])
@@ -774,6 +824,7 @@ function App() {
   const catalogs = bootstrap?.providers ?? EMPTY_CATALOGS
   const selectedPane = panes.find((pane) => pane.id === focusedPaneId) ?? panes[0] ?? null
   const visiblePanes = layout === 'focus' ? (selectedPane ? [selectedPane] : []) : panes
+  const workspacePickerParentPath = workspacePicker ? getAbsoluteLocalParentPath(workspacePicker.path) : null
 
   const metrics = useMemo(() => {
     const result = {
@@ -966,19 +1017,17 @@ function App() {
           ...pane,
           liveOutput: appendLiveOutputChunk(pane.liveOutput, event.text),
           lastActivityAt: eventAt,
-          statusText: '陟｢諛・ｽｭ譁撰ｽ帝墓ｻ薙・闕ｳ・ｭ'
+          statusText: '\u5fdc\u7b54\u3092\u751f\u6210\u4e2d'
         }))
       })
       return
     }
 
     if (event.type === 'session') {
-      const sessionLine = `[session] ${event.sessionId}`
       mutatePane(paneId, (pane) => ({
         ...pane,
         sessionId: event.sessionId,
         lastActivityAt: eventAt,
-        liveOutput: appendLiveOutputLine(pane.liveOutput, sessionLine),
         streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb: ${event.sessionId}`, eventAt)
       }))
       return
@@ -990,7 +1039,6 @@ function App() {
       mutatePane(paneId, (pane) => ({
         ...pane,
         lastActivityAt: eventAt,
-        liveOutput: appendLiveOutputLine(pane.liveOutput, `[${kind}] ${normalizedText}`),
         streamEntries: appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt),
         lastError: event.type === 'stderr' ? normalizedText : pane.lastError
       }))
@@ -1059,7 +1107,6 @@ function App() {
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
           lastError: message,
-          liveOutput: appendLiveOutputLine(pane.liveOutput, `[stderr] ${message}`),
           streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', message, eventAt)
         }
       })
@@ -1163,7 +1210,6 @@ function App() {
             lastActivityAt: failedAt,
             lastFinishedAt: failedAt,
             lastError: message,
-            liveOutput: appendLiveOutputLine(currentPane.liveOutput, `[stderr] ${message}`),
             streamEntries: appendStreamEntry(currentPane.streamEntries, 'stderr', message, failedAt)
           }
         })
@@ -1179,7 +1225,6 @@ function App() {
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
-          liveOutput: appendLiveOutputLine(currentPane.liveOutput, '[system] stopped'),
           streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '\u5b9f\u884c\u3092\u505c\u6b62\u3057\u307e\u3057\u305f', stoppedAt)
         }))
       }
@@ -1387,30 +1432,125 @@ function App() {
       localWorkspacePath: selectedPath,
       localBrowserPath: '',
       localBrowserEntries: [],
-      localBrowserLoading: false
+      localBrowserLoading: true
     })
 
-    await handleBrowseLocal(paneId, selectedPath)
-  }
-
-  const handleAddLocalWorkspace = async (paneId: string) => {
     try {
-      const result = await pickLocalWorkspace()
-      const selected = result.paths[0]
-      if (!selected) {
-        return
-      }
-
-      const workspace = buildLocalWorkspaceRecord(selected)
-      setLocalWorkspaces((current) => mergeLocalWorkspaces([workspace], current))
-      await handleSelectLocalWorkspace(paneId, workspace.path)
+      const payload = await browseLocalDirectory(selectedPath)
+      const nextWorkspacePath = payload.path.trim() || selectedPath
+      mutatePane(paneId, (pane) => ({
+        ...pane,
+        workspaceMode: 'local',
+        localWorkspacePath: nextWorkspacePath,
+        localBrowserPath: nextWorkspacePath,
+        localBrowserEntries: payload.entries,
+        localBrowserLoading: false,
+        lastError: null
+      }))
     } catch (error) {
       updatePane(paneId, {
+        localBrowserLoading: false,
         status: 'error',
-        statusText: '\u30d5\u30a9\u30eb\u30c0\u9078\u629e\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        statusText: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
+  }
+
+  const handleBrowseWorkspacePicker = async (targetPath: string) => {
+    const normalizedTargetPath = targetPath.trim()
+    if (!normalizedTargetPath) {
+      return
+    }
+
+    setWorkspacePicker((current) =>
+      current
+        ? {
+            ...current,
+            loading: true,
+            error: null
+          }
+        : current
+    )
+
+    try {
+      const payload = await browseLocalDirectory(normalizedTargetPath)
+      setWorkspacePicker((current) =>
+        current
+          ? {
+              ...current,
+              path: payload.path,
+              entries: payload.entries.filter((entry) => entry.isDirectory),
+              loading: false,
+              error: null
+            }
+          : current
+      )
+    } catch (error) {
+      setWorkspacePicker((current) =>
+        current
+          ? {
+              ...current,
+              loading: false,
+              error: error instanceof Error ? error.message : String(error)
+            }
+          : current
+      )
+    }
+  }
+
+  const handleOpenWorkspacePicker = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    const startPath = pane?.localWorkspacePath || localWorkspacesRef.current[0]?.path || ''
+
+    setWorkspacePicker({
+      paneId,
+      path: startPath,
+      entries: [],
+      roots: [],
+      loading: true,
+      error: null
+    })
+
+    try {
+      const [rootsPayload, directoryPayload] = await Promise.all([
+        fetchLocalBrowseRoots(),
+        browseLocalDirectory(startPath)
+      ])
+
+      setWorkspacePicker({
+        paneId,
+        path: directoryPayload.path,
+        entries: directoryPayload.entries.filter((entry) => entry.isDirectory),
+        roots: rootsPayload.roots,
+        loading: false,
+        error: null
+      })
+    } catch (error) {
+      setWorkspacePicker({
+        paneId,
+        path: startPath,
+        entries: [],
+        roots: [],
+        loading: false,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const handleConfirmWorkspacePicker = async () => {
+    if (!workspacePicker?.path) {
+      return
+    }
+
+    const workspace = buildLocalWorkspaceRecord(workspacePicker.path)
+    setLocalWorkspaces((current) => mergeLocalWorkspaces([workspace], current))
+    await handleSelectLocalWorkspace(workspacePicker.paneId, workspace.path)
+    setWorkspacePicker(null)
+  }
+
+  const handleAddLocalWorkspace = async (paneId: string) => {
+    await handleOpenWorkspacePicker(paneId)
   }
 
   const handleRemoveLocalWorkspace = (paneId: string) => {
@@ -1863,7 +2003,10 @@ function App() {
       return
     }
 
-    if (selectedPane.localBrowserLoading || selectedPane.localBrowserPath === selectedPane.localWorkspacePath) {
+    const browserMatchesWorkspace = selectedPane.localBrowserPath === selectedPane.localWorkspacePath
+    const hasUsableEntries = selectedPane.localBrowserEntries.length > 0
+
+    if (selectedPane.localBrowserLoading || (browserMatchesWorkspace && hasUsableEntries)) {
       return
     }
 
@@ -2097,7 +2240,69 @@ function App() {
             ))}
           </div>
         </main>
+
       </div>
+
+      {workspacePicker && (
+        <div className="output-modal-backdrop">
+          <div className="output-modal workspace-picker-modal">
+            <div className="panel-header slim">
+              <div>
+                <h3>{'\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e'}</h3>
+                <p className="workspace-picker-current-path">{workspacePicker.path || '\u4f7f\u3044\u305f\u3044\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002'}</p>
+              </div>
+              <button type="button" className="secondary-button" onClick={() => setWorkspacePicker(null)}>{'\u9589\u3058\u308b'}</button>
+            </div>
+
+            <div className="workspace-picker-toolbar">
+              <div className="workspace-picker-roots">
+                {workspacePicker.roots.map((root) => (
+                  <button key={root.path} type="button" className={workspacePicker.path.toLowerCase().startsWith(root.path.toLowerCase()) ? 'switch-button active' : 'switch-button'} onClick={() => void handleBrowseWorkspacePicker(root.path)}>
+                    {root.label}
+                  </button>
+                ))}
+              </div>
+              <div className="workspace-picker-actions">
+                <button type="button" className="secondary-button" disabled={!workspacePickerParentPath || workspacePicker.loading} onClick={() => workspacePickerParentPath && void handleBrowseWorkspacePicker(workspacePickerParentPath)}>
+                  {'\u4e00\u3064\u4e0a\u3078'}
+                </button>
+                <button type="button" className="secondary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleBrowseWorkspacePicker(workspacePicker.path)}>
+                  {'\u518d\u8aad\u8fbc'}
+                </button>
+              </div>
+            </div>
+
+            {workspacePicker.error && (
+              <div className="global-error compact-error">
+                <XCircle size={16} />
+                <span>{workspacePicker.error}</span>
+              </div>
+            )}
+
+            <div className="workspace-picker-list">
+              {workspacePicker.loading ? (
+                <div className="panel-placeholder">{'\u30d5\u30a9\u30eb\u30c0\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</div>
+              ) : workspacePicker.entries.length > 0 ? (
+                workspacePicker.entries.map((entry) => (
+                  <button key={entry.path} type="button" className="workspace-picker-entry" onClick={() => void handleBrowseWorkspacePicker(entry.path)}>
+                    <strong>{entry.label}</strong>
+                    <span>{entry.path}</span>
+                  </button>
+                ))
+              ) : (
+                <div className="panel-placeholder">{'\u3053\u306e\u5834\u6240\u306b\u8868\u793a\u3067\u304d\u308b\u30d5\u30a9\u30eb\u30c0\u304c\u3042\u308a\u307e\u305b\u3093\u3002'}</div>
+              )}
+            </div>
+
+            <div className="output-modal-footer workspace-picker-footer">
+              <button type="button" className="secondary-button" onClick={() => setWorkspacePicker(null)}>{'\u30ad\u30e3\u30f3\u30bb\u30eb'}</button>
+              <button type="button" className="primary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleConfirmWorkspacePicker()}>
+                {'\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u4f7f\u3046'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

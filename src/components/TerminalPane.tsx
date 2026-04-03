@@ -120,20 +120,23 @@ const UI = {
   browseEmpty: '\u9078\u629e\u3057\u305f\u30d5\u30a9\u30eb\u30c0\u306e\u5185\u5bb9\u304c\u3053\u3053\u306b\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   currentConnection: '\u73fe\u5728\u306e\u63a5\u7d9a',
   connectionSettings: '\u63a5\u7d9a\u8a2d\u5b9a',
-  connectionSupport: '\u63a5\u7d9a\u88dc\u52a9',
+  connectionSupport: '\u30d7\u30ed\u30ad\u30b7 / \u88dc\u52a9\u8a2d\u5b9a',
   refreshConnection: '\u63a5\u7d9a\u3092\u66f4\u65b0',
   remoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   publicKey: '\u516c\u958b\u9375',
   generateKey: '\u9375\u3092\u751f\u6210',
   installKey: '\u516c\u958b\u9375\u3092\u767b\u9332',
   diagnostics: '\u63a5\u7d9a\u8a3a\u65ad',
-  dragHint: '\u30ed\u30fc\u30ab\u30eb\u4e00\u89a7\u304b\u3089\u3053\u3053\u3078\u30c9\u30e9\u30c3\u30b0\u3059\u308b\u3068\u9001\u4fe1\u3067\u304d\u307e\u3059\u3002',
+  dragHint: '\u30ed\u30fc\u30ab\u30eb\u4e00\u89a7\u304b\u3089\u30c9\u30e9\u30c3\u30b0\u3059\u308b\u3068\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u3067\u304d\u307e\u3059\u3002',
   remoteList: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7',
   remoteLoading: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
   remoteEmpty: '\u63a5\u7d9a\u3092\u66f4\u65b0\u3059\u308b\u3068\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   oneLevelUp: '\u4e00\u3064\u4e0a\u3078',
   createFolder: '\u30d5\u30a9\u30eb\u30c0\u4f5c\u6210',
-  receive: '\u53d7\u4fe1',
+  receive: '\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9',
+  downloadCurrent: '\u3053\u3053\u3092\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9',
+  localPc: '\u30ed\u30fc\u30ab\u30ebPC\uff08\u3053\u306ePC\uff09',
+  remotePc: '\u30ea\u30e2\u30fc\u30c8PC\uff08SSH\uff09',
   useWorkspace: '\u4f7f\u3046',
   sharedContext: '\u5171\u6709\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8',
   noSharedContext: '\u5171\u6709\u6e08\u307f\u306e\u6587\u8108\u306f\u307e\u3060\u3042\u308a\u307e\u305b\u3093\u3002',
@@ -432,7 +435,7 @@ export function TerminalPane({
 
         <div className="status-strip compact">
           <span className="tiny-badge">{catalog?.label ?? pane.provider}</span>
-          <span className="tiny-badge">{pane.workspaceMode === 'local' ? 'Local' : 'SSH'}</span>
+          <span className="tiny-badge">{pane.workspaceMode === 'local' ? UI.localPc : UI.remotePc}</span>
           <span className="tiny-badge">{workspaceLabel}</span>
           <span className={isStalled ? 'tiny-badge warning' : 'tiny-badge'}>{pane.status === 'running' ? `\u5b9f\u884c ${formatElapsed(pane.runningSince, now)}` : `\u6700\u7d42 ${formatClock(pane.lastRunAt)}`}</span>
         </div>
@@ -538,15 +541,15 @@ export function TerminalPane({
             </summary>
             <div className="accordion-body">
               <div className="workspace-switch compact-switch">
-                <button type="button" className={pane.workspaceMode === 'local' ? 'switch-button active' : 'switch-button'} onClick={() => onUpdate(pane.id, { workspaceMode: 'local' })}>Local</button>
-                <button type="button" className={pane.workspaceMode === 'ssh' ? 'switch-button active' : 'switch-button'} onClick={() => onUpdate(pane.id, { workspaceMode: 'ssh' })}>SSH</button>
+                <button type="button" className={pane.workspaceMode === 'local' ? 'switch-button active' : 'switch-button'} onClick={() => onUpdate(pane.id, { workspaceMode: 'local' })}>{UI.localPc}</button>
+                <button type="button" className={pane.workspaceMode === 'ssh' ? 'switch-button active' : 'switch-button'} onClick={() => onUpdate(pane.id, { workspaceMode: 'ssh' })}>{UI.remotePc}</button>
               </div>
 
               {pane.workspaceMode === 'local' ? (
                 <div className="workspace-stack">
                   <div className="workspace-current">
                     <span className="workspace-caption">{UI.currentWorkspace}</span>
-                    <strong>{selectedLocalWorkspace?.label ?? UI.unselected}</strong>
+                    <strong>{selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || UI.unselected)}</strong>
                     <span>{pane.localWorkspacePath || UI.browseEmpty}</span>
                   </div>
                   <div className="inline-actions wrap-actions compact-utility-row">
@@ -589,8 +592,8 @@ export function TerminalPane({
 
                   <div className="pane-meta-grid compact-grid ssh-primary-grid">
                     <label>
-                      <span>SSH Host</span>
-                      <input list={`ssh-hosts-${pane.id}`} value={pane.sshHost} onChange={(event) => onUpdate(pane.id, { sshHost: event.target.value })} placeholder="server or ssh-config host" />
+                      <span>SSH Host / IP</span>
+                      <input list={`ssh-hosts-${pane.id}`} value={pane.sshHost} onChange={(event) => onUpdate(pane.id, { sshHost: event.target.value })} placeholder="server.example.com / 192.168.1.20 / ssh-config host" />
                       <datalist id={`ssh-hosts-${pane.id}`}>{sshHosts.map((host) => <option key={host.id} value={host.alias} />)}</datalist>
                     </label>
                     <label>
@@ -607,7 +610,7 @@ export function TerminalPane({
                   <details className="ssh-mini-accordion">
                     <summary className="ssh-mini-summary">{UI.connectionSettings}</summary>
                     <div className="pane-meta-grid compact-grid ssh-config-grid compact-ssh-grid">
-                      <label><span>User</span><input value={pane.sshUser} onChange={(event) => onUpdate(pane.id, { sshUser: event.target.value })} placeholder="ubuntu / deploy" /></label>
+                      <label><span>User</span><input value={pane.sshUser} onChange={(event) => onUpdate(pane.id, { sshUser: event.target.value })} placeholder="yourusername / ubuntu" /></label>
                       <label><span>Port</span><input value={pane.sshPort} onChange={(event) => onUpdate(pane.id, { sshPort: event.target.value })} placeholder="22" /></label>
                       <label><span>Password</span><input type="password" value={pane.sshPassword} onChange={(event) => onUpdate(pane.id, { sshPassword: event.target.value })} placeholder="optional" /></label>
                       <label><span>Identity File</span><input value={pane.sshIdentityFile} onChange={(event) => onUpdate(pane.id, { sshIdentityFile: event.target.value })} placeholder="C:\\Users\\...\\id_ed25519" /></label>
@@ -623,6 +626,18 @@ export function TerminalPane({
                         </label>
                       )}
                     </div>
+
+                    <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions">
+                      <button type="button" className="secondary-button" onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
+                      <button type="button" className="secondary-button" disabled={!pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>{UI.installKey}</button>
+                    </div>
+
+                    {pane.sshPublicKeyText && (
+                      <div className="browser-panel">
+                        <div className="section-headline compact-headline"><strong>{UI.publicKey}</strong><span>{getShortPathLabel(pane.sshSelectedKeyPath || pane.sshIdentityFile || '')}</span></div>
+                        <div className="output-surface inline-console-output"><pre>{pane.sshPublicKeyText}</pre></div>
+                      </div>
+                    )}
                   </details>
 
                   <details className="ssh-mini-accordion">
@@ -630,21 +645,10 @@ export function TerminalPane({
                     <div className="workspace-stack ssh-support-stack">
                       <div className="pane-meta-grid compact-grid ssh-config-grid compact-ssh-grid">
                         <label><span>ProxyJump</span><input value={pane.sshProxyJump} onChange={(event) => onUpdate(pane.id, { sshProxyJump: event.target.value })} placeholder="jump-host" /></label>
-                        <label><span>ProxyCommand</span><input value={pane.sshProxyCommand} onChange={(event) => onUpdate(pane.id, { sshProxyCommand: event.target.value })} placeholder="nc %h %p" /></label>
+                        <label><span>ProxyCommand</span><input value={pane.sshProxyCommand} onChange={(event) => onUpdate(pane.id, { sshProxyCommand: event.target.value })} placeholder="connect-proxy -H proxy.example.com:8080 %h %p" /></label>
                         <label className="full-span"><span>Extra Args</span><input value={pane.sshExtraArgs} onChange={(event) => onUpdate(pane.id, { sshExtraArgs: event.target.value })} placeholder="-o PreferredAuthentications=password" /></label>
                       </div>
-
-                      <div className="inline-actions wrap-actions compact-utility-row">
-                        <button type="button" className="secondary-button" onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
-                        <button type="button" className="secondary-button" disabled={!pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>{UI.installKey}</button>
-                      </div>
-
-                      {pane.sshPublicKeyText && (
-                        <div className="browser-panel">
-                          <div className="section-headline compact-headline"><strong>{UI.publicKey}</strong><span>{getShortPathLabel(pane.sshSelectedKeyPath || pane.sshIdentityFile || '')}</span></div>
-                          <div className="output-surface inline-console-output"><pre>{pane.sshPublicKeyText}</pre></div>
-                        </div>
-                      )}
+                      <p className="ssh-help-note">{'HTTP(S) \u30d7\u30ed\u30ad\u30b7 URL \u306f ProxyCommand \u306b connect-proxy / corkscrew \u5f62\u5f0f\u3067\u8a2d\u5b9a\u3057\u307e\u3059\u3002\u4f8b: connect-proxy -H proxy.example.com:8080 %h %p'}</p>
 
                       {pane.sshDiagnostics.length > 0 && (
                         <div className="browser-panel ssh-diagnostics-panel">
@@ -662,7 +666,7 @@ export function TerminalPane({
                         <button type="button" className="ghost-button compact-ghost" disabled={!pane.remoteHomeDirectory} onClick={() => onBrowseRemote(pane.id, pane.remoteHomeDirectory || undefined)}><Home size={14} />Home</button>
                         <button type="button" className="ghost-button compact-ghost" disabled={!pane.remoteParentPath} onClick={() => onBrowseRemote(pane.id, pane.remoteParentPath || undefined)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>
                         <button type="button" className="ghost-button compact-ghost" disabled={!remoteBaseDropPath} onClick={() => onCreateRemoteDirectory(pane.id)}><FolderPlus size={14} />{UI.createFolder}</button>
-                        <button type="button" className="ghost-button compact-ghost" disabled={!remoteBaseDropPath} onClick={() => remoteBaseDropPath && onTransferSshPath(pane.id, 'download', { remotePath: remoteBaseDropPath, remoteLabel: currentRemoteLabel, isDirectory: true })}>{UI.receive}</button>
+                        <button type="button" className="ghost-button compact-ghost" disabled={!remoteBaseDropPath} onClick={() => remoteBaseDropPath && onTransferSshPath(pane.id, 'download', { remotePath: remoteBaseDropPath, remoteLabel: currentRemoteLabel, isDirectory: true })}>{UI.downloadCurrent}</button>
                       </div>
                     </div>
 

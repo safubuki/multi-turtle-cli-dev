@@ -36,6 +36,11 @@ export interface LocalDirectoryEntry {
   isDirectory: boolean
 }
 
+export interface LocalBrowseRoot {
+  label: string
+  path: string
+}
+
 export interface SshHost {
   id: string
   alias: string
@@ -271,6 +276,11 @@ export interface LocalBrowseResponse {
   success: boolean
   path: string
   entries: LocalDirectoryEntry[]
+}
+
+export interface LocalBrowseRootsResponse {
+  success: boolean
+  roots: LocalBrowseRoot[]
 }
 
 export interface RemoteWorkspaceResponse {

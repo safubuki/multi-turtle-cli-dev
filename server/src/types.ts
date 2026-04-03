@@ -34,6 +34,11 @@ export interface LocalDirectoryEntry {
   isDirectory: boolean
 }
 
+export interface LocalBrowseRoot {
+  label: string
+  path: string
+}
+
 export interface SshHost {
   id: string
   alias: string

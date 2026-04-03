@@ -1,6 +1,7 @@
 ﻿import type {
   BootstrapPayload,
   LocalBrowseResponse,
+  LocalBrowseRootsResponse,
   RemoteBrowseResponse,
   RemoteCreateDirectoryResponse,
   RemoteWorkspaceResponse,
@@ -152,12 +153,17 @@ export function openTargetInCommandPrompt(target: WorkspaceTarget): Promise<{ su
   })
 }
 
-export function pickLocalWorkspace(): Promise<{ success: boolean; paths: string[] }> {
+export function fetchLocalBrowseRoots(): Promise<LocalBrowseRootsResponse> {
+  return requestJson<LocalBrowseRootsResponse>('/api/system/local-roots')
+}
+
+export function pickLocalWorkspace(startPath?: string): Promise<{ success: boolean; paths: string[] }> {
   return requestJson<{ success: boolean; paths: string[] }>('/api/system/pick-folder', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
-    }
+    },
+    body: JSON.stringify({ startPath })
   })
 }
 

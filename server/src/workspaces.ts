@@ -1,7 +1,8 @@
 import { existsSync } from 'fs'
 import fs from 'fs/promises'
+import os from 'os'
 import path from 'path'
-import type { LocalDirectoryEntry, LocalWorkspace } from './types.js'
+import type { LocalBrowseRoot, LocalDirectoryEntry, LocalWorkspace } from './types.js'
 import { APP_ROOT, dedupeStrings, getPathName, toWorkspaceId } from './util.js'
 
 const WORKSPACE_MARKERS = ['package.json', 'pnpm-workspace.yaml', 'turbo.json', '.git']
@@ -21,6 +22,46 @@ function getConfiguredWorkspacePaths(): string[] {
 
 function detectIndicators(targetPath: string): string[] {
   return WORKSPACE_MARKERS.filter((marker) => existsSync(path.join(targetPath, marker)))
+}
+
+function pushBrowseRoot(results: LocalBrowseRoot[], seen: Set<string>, label: string, targetPath: string): void {
+  if (!targetPath || !existsSync(targetPath)) {
+    return
+  }
+
+  const normalizedPath = path.resolve(targetPath)
+  const key = normalizedPath.toLowerCase()
+  if (seen.has(key)) {
+    return
+  }
+
+  seen.add(key)
+  results.push({
+    label,
+    path: normalizedPath
+  })
+}
+
+export function listLocalBrowseRoots(): LocalBrowseRoot[] {
+  const results: LocalBrowseRoot[] = []
+  const seen = new Set<string>()
+  const home = os.homedir()
+
+  pushBrowseRoot(results, seen, '\u30db\u30fc\u30e0', home)
+  pushBrowseRoot(results, seen, '\u30c7\u30b9\u30af\u30c8\u30c3\u30d7', path.join(home, 'Desktop'))
+  pushBrowseRoot(results, seen, '\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8', path.join(home, 'Documents'))
+  pushBrowseRoot(results, seen, '\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9', path.join(home, 'Downloads'))
+
+  if (process.platform === 'win32') {
+    for (let code = 67; code <= 90; code += 1) {
+      const drive = `${String.fromCharCode(code)}:\\`
+      pushBrowseRoot(results, seen, drive.slice(0, 2), drive)
+    }
+  } else {
+    pushBrowseRoot(results, seen, '/', '/')
+  }
+
+  return results
 }
 
 export async function discoverLocalWorkspaces(): Promise<LocalWorkspace[]> {

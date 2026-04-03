@@ -1,4 +1,5 @@
 import cors from 'cors'
+import nodePath from 'path'
 import express from 'express'
 import { startCliRun } from './cliRunner.js'
 import { pickFolderDialog, pickSaveFileDialog } from './nativeDialog.js'
@@ -17,7 +18,7 @@ import {
 import { specSections } from './spec.js'
 import type { ActiveCliRun, AutonomyMode, RunRequestBody, RunStreamEvent, SshConnectionOptions } from './types.js'
 import { openInCommandPrompt, openInVsCode } from './vscode.js'
-import { browseLocalDirectory, discoverLocalWorkspaces } from './workspaces.js'
+import { browseLocalDirectory, discoverLocalWorkspaces, listLocalBrowseRoots } from './workspaces.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3001)
@@ -130,9 +131,25 @@ app.get('/api/bootstrap', async (_req, res) => {
   }
 })
 
-app.post('/api/system/pick-folder', async (_req, res) => {
+app.get('/api/system/local-roots', (_req, res) => {
   try {
-    const paths = await pickFolderDialog()
+    res.json({
+      success: true,
+      roots: listLocalBrowseRoots()
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'local roots failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/system/pick-folder', async (req, res) => {
+  try {
+    const { startPath } = req.body as { startPath?: string }
+    const paths = await pickFolderDialog(startPath)
     res.json({
       success: true,
       paths
@@ -148,8 +165,8 @@ app.post('/api/system/pick-folder', async (_req, res) => {
 
 app.post('/api/system/browse-local', async (req, res) => {
   try {
-    const { path } = req.body as { path?: string }
-    if (!path?.trim()) {
+    const { path: requestedPath } = req.body as { path?: string }
+    if (!requestedPath?.trim()) {
       res.status(400).json({
         success: false,
         error: 'path required'
@@ -157,10 +174,11 @@ app.post('/api/system/browse-local', async (req, res) => {
       return
     }
 
-    const entries = await browseLocalDirectory(path.trim())
+    const normalizedPath = nodePath.resolve(requestedPath.trim())
+    const entries = await browseLocalDirectory(normalizedPath)
     res.json({
       success: true,
-      path: path.trim(),
+      path: normalizedPath,
       entries
     })
   } catch (error) {

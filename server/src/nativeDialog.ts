@@ -37,19 +37,25 @@ function runPowerShellJson(script: string): Promise<unknown> {
   })
 }
 
-export async function pickFolderDialog(): Promise<string[]> {
+export async function pickFolderDialog(initialPath?: string): Promise<string[]> {
   if (process.platform !== 'win32') {
     throw new Error('\u30cd\u30a4\u30c6\u30a3\u30d6\u306e\u30d5\u30a9\u30eb\u30c0\u9078\u629e\u306f Windows \u306e\u307f\u5bfe\u5fdc\u3067\u3059\u3002')
   }
 
+  const safeInitialPath = JSON.stringify(initialPath?.trim() || '')
   const script = `
     Add-Type -AssemblyName System.Windows.Forms
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3068\u3057\u3066\u4f7f\u3046\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u629e'
+    $dialog.Description = '\u4fdd\u5b58\u5148\u306b\u4f7f\u3046\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u629e'
     $dialog.ShowNewFolderButton = $true
-    $dialog.SelectedPath = [Environment]::GetFolderPath('Desktop')
+    $initialPath = ${safeInitialPath}
+    if ($initialPath -and (Test-Path -LiteralPath $initialPath -PathType Container)) {
+      $dialog.SelectedPath = (Resolve-Path -LiteralPath $initialPath).Path
+    } else {
+      $dialog.SelectedPath = [Environment]::GetFolderPath('Desktop')
+    }
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-      @($dialog.SelectedPath) | ConvertTo-Json -Compress
+      @((Resolve-Path -LiteralPath $dialog.SelectedPath).Path) | ConvertTo-Json -Compress
     } else {
       @() | ConvertTo-Json -Compress
     }
