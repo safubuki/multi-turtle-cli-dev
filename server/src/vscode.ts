@@ -1,6 +1,6 @@
-﻿import { existsSync } from 'fs'
+import { existsSync } from 'fs'
 import path from 'path'
-import { spawn } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { pathToFileURL } from 'url'
 import { buildSshCommandArgs } from './ssh.js'
 import type { WorkspaceTarget } from './types.js'
@@ -67,6 +67,11 @@ function isCmdScript(command: string): boolean {
 function getCmdExecutable(): string {
   const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
   return path.join(systemRoot, 'System32', 'cmd.exe')
+}
+
+function getPowerShellExecutable(): string {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+  return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
 function buildRemoteFolderUri(host: string, remotePath: string): string {
@@ -143,6 +148,14 @@ function quoteForCmd(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
 
+function quoteForPowerShellLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+function buildPowerShellArrayLiteral(values: string[]): string {
+  return `@(${values.map((value) => quoteForPowerShellLiteral(value)).join(', ')})`
+}
+
 function isMissingBinaryError(error: unknown): boolean {
   return Boolean(
     error &&
@@ -179,6 +192,47 @@ function buildTerminalSpecs(commandText: string): TerminalLaunchSpec[] {
   return [{ command: 'open', args: ['-a', 'Terminal.app'] }]
 }
 
+function getLocalTerminalCwd(target: WorkspaceTarget): string | undefined {
+  if (target.kind !== 'local') {
+    return undefined
+  }
+
+  const basePath = target.resourceType === 'file' ? path.dirname(target.path) : target.path
+  return path.resolve(basePath)
+}
+
+function tryLaunchViaPowerShellStartProcess(filePath: string, args: string[], cwd?: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const scriptParts = [
+      `$ErrorActionPreference = 'Stop'`,
+      `$params = @{ FilePath = ${quoteForPowerShellLiteral(filePath)}; ArgumentList = ${buildPowerShellArrayLiteral(args)}; WindowStyle = 'Normal' }`
+    ]
+
+    if (cwd) {
+      scriptParts.push(`$params.WorkingDirectory = ${quoteForPowerShellLiteral(cwd)}`)
+    }
+
+    scriptParts.push('Start-Process @params | Out-Null')
+
+    execFile(
+      getPowerShellExecutable(),
+      ['-NoProfile', '-Command', scriptParts.join('; ')],
+      {
+        windowsHide: true,
+        cwd
+      },
+      (error, _stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr.trim() || error.message))
+          return
+        }
+
+        resolve()
+      }
+    )
+  })
+}
+
 export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
   const resourceType = target.resourceType ?? 'folder'
   const args =
@@ -210,11 +264,12 @@ export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
 }
 
 export async function openInCommandPrompt(target: WorkspaceTarget): Promise<void> {
-  const commandText =
-    process.platform === 'win32'
-      ? buildWindowsTerminalCommand(target)
-      : buildPosixTerminalCommand(target)
+  if (process.platform === 'win32') {
+    await openInWindowsCommandPrompt(target)
+    return
+  }
 
+  const commandText = buildPosixTerminalCommand(target)
   let lastError: unknown = null
 
   for (const spec of buildTerminalSpecs(commandText)) {
@@ -230,15 +285,49 @@ export async function openInCommandPrompt(target: WorkspaceTarget): Promise<void
   }
 
   if (isMissingBinaryError(lastError)) {
-    throw new Error(
-      process.platform === 'win32'
-        ? '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3002'
-        : '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3002 Ubuntu \u3067\u306f gnome-terminal \u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
-    )
+    throw new Error('\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3002 Ubuntu \u3067\u306f gnome-terminal \u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002')
   }
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error')
-  throw new Error(`${process.platform === 'win32' ? '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8' : '\u30bf\u30fc\u30df\u30ca\u30eb'}\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
+  throw new Error(`\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
+}
+
+async function openInWindowsCommandPrompt(target: WorkspaceTarget): Promise<void> {
+  const commandText = buildWindowsTerminalCommand(target)
+  const cwd = getLocalTerminalCwd(target)
+  const cmdExecutable = getCmdExecutable()
+  const startCommand = `start "" ${buildCmdCommandText(cmdExecutable, ['/k', commandText])}`
+  let lastError: unknown = null
+
+  const launchers: Array<() => Promise<void>> = [
+    () => tryLaunchViaPowerShellStartProcess(cmdExecutable, ['/k', commandText], cwd),
+    () =>
+      tryLaunch(cmdExecutable, ['/d', '/s', '/c', startCommand], {
+        cwd,
+        windowsHide: false
+      }),
+    () =>
+      tryLaunch(cmdExecutable, ['/k', commandText], {
+        cwd,
+        windowsHide: false
+      })
+  ]
+
+  for (const launch of launchers) {
+    try {
+      await launch()
+      return
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  if (isMissingBinaryError(lastError)) {
+    throw new Error('\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3002')
+  }
+
+  const detail = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error')
+  throw new Error(`\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
 }
 
 function buildWindowsTerminalCommand(target: WorkspaceTarget): string {

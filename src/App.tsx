@@ -1652,6 +1652,11 @@ function App() {
 
     try {
       await openWorkspaceInVsCode(target)
+      updatePane(paneId, {
+        status: 'idle',
+        statusText: 'VSCode \u3092\u8d77\u52d5\u3057\u307e\u3057\u305f',
+        lastError: null
+      })
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
@@ -1674,6 +1679,11 @@ function App() {
 
     try {
       await openTargetInCommandPrompt(target)
+      updatePane(paneId, {
+        status: 'idle',
+        statusText: '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u8d77\u52d5\u3057\u307e\u3057\u305f',
+        lastError: null
+      })
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
