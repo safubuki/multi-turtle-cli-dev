@@ -1,4 +1,4 @@
-﻿import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Bot,
@@ -111,12 +111,17 @@ function appendLiveOutputChunk(existing: string, incoming: string): string {
 }
 
 function appendShellOutputLine(existing: string, incoming: string): string {
-  const normalized = sanitizeTerminalText(incoming).trimEnd()
-  if (!normalized) {
-    return existing
+  const normalized = sanitizeTerminalText(incoming).replace(/\r/g, '').replace(/\n$/, '')
+
+  if (!existing) {
+    return normalized
   }
 
-  return clipText(existing.trim() ? `${existing.trimEnd()}\n${normalized}` : normalized, MAX_SHELL_OUTPUT)
+  if (!normalized.length) {
+    return clipText(`${existing}\n`, MAX_SHELL_OUTPUT)
+  }
+
+  return clipText(`${existing}\n${normalized}`, MAX_SHELL_OUTPUT)
 }
 
 function buildShellPromptLabel(pane: PaneState, cwd?: string | null): string {
@@ -435,6 +440,7 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     model,
     reasoningEffort: defaultReasoning,
     autonomyMode: 'balanced',
+    codexFastMode: 'off',
     status: 'idle',
     statusText: statusLabel('idle'),
     shellCommand: '',
@@ -514,6 +520,7 @@ function createSharedContextItem(
     workspaceLabel: target?.label ?? '\u672a\u9078\u629e',
     summary: summarize(response),
     detail: clipText(response, 16_000),
+    consumedByPaneIds: [],
     createdAt: Date.now()
   }
 }
@@ -651,6 +658,9 @@ function normalizeSharedContextItem(rawItem: Partial<SharedContextItem> | null |
     contentLabel: typeof rawItem.contentLabel === 'string' && rawItem.contentLabel.trim() ? rawItem.contentLabel : '\u6700\u65b0\u7d50\u679c',
     summary: typeof rawItem.summary === 'string' ? rawItem.summary : '',
     detail: typeof rawItem.detail === 'string' ? rawItem.detail : '',
+    consumedByPaneIds: Array.isArray(rawItem.consumedByPaneIds)
+      ? rawItem.consumedByPaneIds.filter((item): item is string => typeof item === 'string')
+      : [],
     createdAt: typeof rawItem.createdAt === 'number' ? rawItem.createdAt : Date.now()
   }
 }
@@ -772,7 +782,7 @@ function normalizePane(
   const statusText =
     rawStatus === 'running'
       ? '\u524d\u56de\u306e\u5b9f\u884c\u306f\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f'
-      : rawStatusText.includes('外部ターミナル')
+      : rawStatusText.includes('�O���^�[�~�i��')
         ? statusLabel(restoredStatus)
         : rawStatusText || statusLabel(restoredStatus)
 
@@ -786,6 +796,7 @@ function normalizePane(
     model,
     reasoningEffort,
     autonomyMode: rawPane.autonomyMode === 'max' ? 'max' : 'balanced',
+    codexFastMode: rawPane.codexFastMode === 'fast' ? 'fast' : 'off',
     status: restoredStatus,
     statusText,
     shellCommand: typeof rawPane.shellCommand === 'string' ? rawPane.shellCommand : '',
@@ -1051,7 +1062,8 @@ function App() {
     updatePane(paneId, {
       provider,
       model: nextModel?.id ?? '',
-      reasoningEffort: nextModel?.defaultReasoningEffort ?? 'medium'
+      reasoningEffort: nextModel?.defaultReasoningEffort ?? 'medium',
+      codexFastMode: 'off'
     })
   }
 
@@ -1304,24 +1316,58 @@ function App() {
 
     const memory = [...pane.logs, userEntry].slice(-8)
     const attachedContext = sharedContext.filter((item) => pane.attachedContextIds.includes(item.id))
+    const consumedContextIds = attachedContext.map((item) => item.id)
+    const sharedContextPayload = attachedContext.map((item) => ({
+      sourcePaneTitle: item.sourcePaneTitle,
+      provider: item.provider,
+      workspaceLabel: item.workspaceLabel,
+      summary: item.summary,
+      detail: item.detail
+    }))
     const controller = new AbortController()
 
     controllersRef.current[paneId] = controller
     stopRequestedRef.current.delete(paneId)
     streamErroredRef.current.delete(paneId)
 
+    if (consumedContextIds.length > 0) {
+      setSharedContext((current) =>
+        current
+          .flatMap((item) => {
+            if (!consumedContextIds.includes(item.id)) {
+              return [item]
+            }
+
+            if (item.scope === 'direct' && item.targetPaneIds.includes(paneId)) {
+              return []
+            }
+
+            return [
+              {
+                ...item,
+                consumedByPaneIds: item.consumedByPaneIds.includes(paneId)
+                  ? item.consumedByPaneIds
+                  : [...item.consumedByPaneIds, paneId]
+              }
+            ]
+          })
+          .slice(0, MAX_SHARED_CONTEXT)
+      )
+    }
+
     mutatePane(paneId, (currentPane) => ({
       ...currentPane,
       logs: appendLogEntry(currentPane.logs, userEntry),
       status: 'running',
-      statusText: 'CLI \u3092\u5b9f\u884c\u4e2d\u3067\u3059',
+      statusText: 'CLI ����s���ł�',
       lastRunAt: startedAt,
       runningSince: startedAt,
       lastActivityAt: startedAt,
       lastError: null,
       selectedSessionKey: null,
       liveOutput: '',
-      streamEntries: appendStreamEntry([], 'system', `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
+      attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
+      streamEntries: appendStreamEntry([], 'system', `�J�n: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
 
     try {
@@ -1332,11 +1378,12 @@ function App() {
           model: pane.model,
           reasoningEffort: pane.reasoningEffort,
           autonomyMode: pane.autonomyMode,
+          codexFastMode: pane.codexFastMode,
           target,
           prompt,
           sessionId: pane.sessionId,
           memory,
-          sharedContext: attachedContext
+          sharedContext: sharedContextPayload
         },
         (event) => handleStreamEvent(paneId, event),
         controller.signal
@@ -1512,8 +1559,8 @@ function App() {
 
     const message =
       targetIds.length === 1
-        ? '選択中のペインを削除しても良いですか？'
-        : `選択中の ${targetIds.length} 件のペインを削除しても良いですか？`
+        ? '�I�𒆂̃y�C����폜���Ă�ǂ��ł����H'
+        : `�I�𒆂� ${targetIds.length} ���̃y�C����폜���Ă�ǂ��ł����H`
 
     if (!window.confirm(message)) {
       return
@@ -1619,7 +1666,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'コピーに失敗しました',
+        statusText: '�R�s�[�Ɏ��s���܂���',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1627,12 +1674,12 @@ function App() {
 
   const handleCopyLatest = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    await copyPaneText(paneId, pane ? getLatestAssistantText(pane) : null, '最新応答をクリップボードへコピーしました')
+    await copyPaneText(paneId, pane ? getLatestAssistantText(pane) : null, '�ŐV������N���b�v�{�[�h�փR�s�[���܂���')
   }
 
   const handleCopyOutput = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    await copyPaneText(paneId, pane ? getPaneOutputText(pane) : null, '表示中の出力をクリップボードへコピーしました')
+    await copyPaneText(paneId, pane ? getPaneOutputText(pane) : null, '�\�����̏o�͂�N���b�v�{�[�h�փR�s�[���܂���')
   }
 
   const handleBrowseLocal = async (paneId: string, targetPath: string) => {
@@ -1664,7 +1711,7 @@ function App() {
       updatePane(paneId, {
         localBrowserLoading: false,
         status: 'error',
-        statusText: 'フォルダ内容の読み込みに失敗しました',
+        statusText: '�t�H���_��e�̓ǂݍ��݂Ɏ��s���܂���',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1921,8 +1968,8 @@ function App() {
       mutatePane(paneId, (current) => ({
         ...current,
         shellCommand: '',
-        shellLastError: 'ワークスペースまたは SSH 接続先を設定してください',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] ワークスペースまたは SSH 接続先を設定してください'),
+        shellLastError: '���[�N�X�y�[�X�܂��� SSH �ڑ����ݒ肵�Ă�������',
+        shellOutput: appendShellOutputLine(current.shellOutput, '[error] ���[�N�X�y�[�X�܂��� SSH �ڑ����ݒ肵�Ă�������'),
         shellLastRunAt: Date.now()
       }))
       return
@@ -1932,8 +1979,8 @@ function App() {
       mutatePane(paneId, (current) => ({
         ...current,
         shellCommand: '',
-        shellLastError: '簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] 簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。'),
+        shellLastError: '�ȈՓ���^�[�~�i�� API ��������܂���BTAKO �̃T�[�o�[��ċN�����Ă��������B',
+        shellOutput: appendShellOutputLine(current.shellOutput, '[error] �ȈՓ���^�[�~�i�� API ��������܂���BTAKO �̃T�[�o�[��ċN�����Ă��������B'),
         shellLastRunAt: Date.now()
       }))
       return
@@ -2536,37 +2583,53 @@ function App() {
           <div className="context-dock-note">
             <span>{`\u5168\u4f53 ${sharedContext.filter((item) => item.scope === 'global').length}`}</span>
             <span>{`\u500b\u5225 ${sharedContext.filter((item) => item.scope === 'direct').length}`}</span>
+            <span>{'\u6b21\u56de\u306e\u5b9f\u884c1\u56de\u3060\u3051\u306b\u53cd\u6620'}</span>
           </div>
           <div className="context-dock-list">
-            {sharedContext.map((item) => (
-              <article key={item.id} className="context-dock-item">
-                <div className="context-dock-item-head">
-                  <div>
-                    <strong>{item.sourcePaneTitle}</strong>
-                    <span className="context-dock-meta">
-                      {item.contentLabel} / {item.scope === 'global' ? '\u5168\u4f53\u5171\u6709' : '\u500b\u5225\u5171\u6709'}
-                    </span>
+            {sharedContext.map((item) => {
+              const pendingPaneTitles = panes.filter((pane) => pane.attachedContextIds.includes(item.id)).map((pane) => pane.title)
+              const consumedPaneTitles = panes.filter((pane) => item.consumedByPaneIds.includes(pane.id)).map((pane) => pane.title)
+              const directTargets = item.targetPaneTitles.length > 0
+                ? item.targetPaneTitles
+                : panes.filter((pane) => item.targetPaneIds.includes(pane.id)).map((pane) => pane.title)
+
+              return (
+                <article key={item.id} className="context-dock-item">
+                  <div className="context-dock-item-head">
+                    <div>
+                      <strong>{item.sourcePaneTitle}</strong>
+                      <span className="context-dock-meta">
+                        {item.contentLabel} / {item.scope === 'global' ? '\u5168\u4f53\u5171\u6709' : '\u500b\u5225\u5171\u6709'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="icon-button danger compact-icon-button"
+                      onClick={() => handleDeleteSharedContext(item.id)}
+                      title={'\u5171\u6709\u3092\u524a\u9664'}
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="icon-button danger compact-icon-button"
-                    onClick={() => handleDeleteSharedContext(item.id)}
-                    title={'\u5171\u6709\u3092\u524a\u9664'}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                <span>{item.summary}</span>
-                <span className="context-dock-meta">{'\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9: '}{item.workspaceLabel}</span>
-                <span className="context-dock-meta">
-                  {item.scope === 'global'
-                    ? `${panes.filter((pane) => pane.attachedContextIds.includes(item.id)).length} \u30da\u30a4\u30f3\u3067\u4f7f\u7528\u4e2d`
-                    : item.targetPaneTitles.length > 0
-                      ? `${item.targetPaneTitles.join(', ')} \u3078\u500b\u5225\u5171\u6709`
-                      : '\u5171\u6709\u5148\u306a\u3057'}
-                </span>
-              </article>
-            ))}
+                  <span>{item.summary}</span>
+                  <span className="context-dock-meta">{'\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9: '}{item.workspaceLabel}</span>
+                  <span className="context-dock-meta">
+                    {item.scope === 'global'
+                      ? pendingPaneTitles.length > 0
+                        ? '\u6b21\u56de\u4f7f\u7528\u4e88\u5b9a: ' + pendingPaneTitles.join(', ')
+                        : '\u6b21\u56de\u4f7f\u7528\u4e88\u5b9a: \u307e\u3060\u3042\u308a\u307e\u305b\u3093'
+                      : directTargets.length > 0
+                        ? '\u500b\u5225\u5171\u6709\u5148: ' + directTargets.join(', ')
+                        : '\u500b\u5225\u5171\u6709\u5148: \u306a\u3057'}
+                  </span>
+                  <span className="context-dock-meta">
+                    {consumedPaneTitles.length > 0
+                      ? '\u4f7f\u7528\u6e08\u307f: ' + consumedPaneTitles.join(', ')
+                      : '\u4f7f\u7528\u6e08\u307f: \u307e\u3060\u3042\u308a\u307e\u305b\u3093'}
+                  </span>
+                </article>
+              )
+            })}
           </div>
         </section>
       )}

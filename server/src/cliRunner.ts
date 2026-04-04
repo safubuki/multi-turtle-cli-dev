@@ -5,6 +5,7 @@ import type {
   ActiveCliRun,
   AutonomyMode,
   CliExecResult,
+  CodexFastMode,
   ProviderId,
   ReasoningEffort,
   RunStreamEvent,
@@ -20,6 +21,7 @@ interface RunOptions {
   prompt: string
   reasoningEffort: ReasoningEffort
   autonomyMode: AutonomyMode
+  codexFastMode: CodexFastMode
   sessionId: string | null
   target: WorkspaceTarget
   onEvent?: (event: RunStreamEvent) => void
@@ -347,15 +349,20 @@ function getCliCommandPath(provider: ProviderId): string {
 function getCliScriptPath(provider: ProviderId): string | null {
   for (const npmRoot of getCandidateNpmRoots()) {
     const nodeModulesRoot = path.join(npmRoot, 'node_modules')
-    const candidate =
+    const candidates =
       provider === 'codex'
-        ? path.join(nodeModulesRoot, '@openai', 'codex', 'bin', 'codex.js')
+        ? [path.join(nodeModulesRoot, '@openai', 'codex', 'bin', 'codex.js')]
         : provider === 'gemini'
-          ? path.join(nodeModulesRoot, '@google', 'gemini-cli', 'dist', 'index.js')
-          : path.join(nodeModulesRoot, '@github', 'copilot', 'npm-loader.js')
+          ? [
+              path.join(nodeModulesRoot, '@google', 'gemini-cli', 'bundle', 'gemini.js'),
+              path.join(nodeModulesRoot, '@google', 'gemini-cli', 'dist', 'index.js')
+            ]
+          : [path.join(nodeModulesRoot, '@github', 'copilot', 'npm-loader.js')]
 
-    if (fs.existsSync(candidate)) {
-      return candidate
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate
+      }
     }
   }
 
@@ -368,7 +375,7 @@ function resolveCommand(provider: ProviderId): { command: string; prefixArgs: st
   if (process.platform === 'win32' && scriptPath) {
     return {
       command: process.execPath,
-      prefixArgs: provider === 'gemini' ? ['--no-warnings=DEP0040', scriptPath] : [scriptPath]
+      prefixArgs: [scriptPath]
     }
   }
 
@@ -378,10 +385,17 @@ function resolveCommand(provider: ProviderId): { command: string; prefixArgs: st
   }
 }
 
+function buildProviderPrompt(options: RunOptions): string {
+  return options.provider === 'codex' && options.codexFastMode === 'fast'
+    ? ['/fast', '', options.prompt].join('\n')
+    : options.prompt
+}
+
 async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec> {
   const supportsReasoning = await modelSupportsReasoning(options.provider, options.model)
   const resolvedSessionId = sanitizeSessionId(options.sessionId)
   const launcher = resolveCommand(options.provider)
+  const providerPrompt = buildProviderPrompt(options)
 
   if (options.provider === 'codex') {
     const outputFilePath = createCodexOutputCapturePath()
@@ -416,7 +430,7 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
     return {
       command: launcher.command,
       args,
-      stdinPrompt: options.prompt,
+      stdinPrompt: providerPrompt,
       outputFilePath
     }
   }
@@ -432,7 +446,9 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
       '--approval-mode',
       approvalMode,
       '--include-directories',
-      options.target.path
+      options.target.path,
+      '--prompt',
+      providerPrompt
     ]
 
     if (resolvedSessionId) {
@@ -442,7 +458,7 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
     return {
       command: launcher.command,
       args,
-      stdinPrompt: options.prompt
+      stdinPrompt: null
     }
   }
 
@@ -480,6 +496,7 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
 }
 
 async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec> {
+  const providerPrompt = buildProviderPrompt(options)
   if (options.target.kind !== 'ssh') {
     throw new Error('Remote launch requires ssh target.')
   }
@@ -524,6 +541,8 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
             approvalMode,
             '--include-directories',
             options.target.path,
+            '--prompt',
+            providerPrompt,
             ...(resolvedSessionId ? ['--resume', resolvedSessionId] : [])
           ]
         : [
@@ -565,7 +584,7 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
       },
       ['bash', '-lc', remoteCommand]
     ),
-    stdinPrompt: options.provider === 'copilot' ? null : options.prompt
+    stdinPrompt: options.provider === 'copilot' ? null : options.provider === 'gemini' ? null : providerPrompt
   }
 }
 

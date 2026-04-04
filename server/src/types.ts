@@ -1,6 +1,7 @@
 export type ProviderId = 'codex' | 'gemini' | 'copilot'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
 export type AutonomyMode = 'balanced' | 'max'
+export type CodexFastMode = 'off' | 'fast'
 
 export interface ProviderModelInfo {
   id: string
@@ -123,6 +124,7 @@ export interface RunRequestBody {
   model: string
   reasoningEffort: ReasoningEffort
   autonomyMode: AutonomyMode
+  codexFastMode: CodexFastMode
   target: WorkspaceTarget
   prompt: string
   sessionId: string | null
@@ -214,3 +216,4 @@ export interface ActiveShellRun {
   promise: Promise<ShellExecResult>
   stop: () => void
 }
+

@@ -33,6 +33,10 @@ function normalizeAutonomyMode(value: unknown): AutonomyMode {
   return value === 'max' ? 'max' : 'balanced'
 }
 
+function normalizeCodexFastMode(value: unknown): 'off' | 'fast' {
+  return value === 'fast' ? 'fast' : 'off'
+}
+
 function detectHostPlatform(): 'windows' | 'linux' | 'macos' | 'unknown' {
   if (process.platform === 'win32') {
     return 'windows'
@@ -590,6 +594,7 @@ app.post('/api/run', async (req, res) => {
   const body: RunRequestBody = {
     ...rawBody,
     autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
+    codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
     sessionId: rawBody.sessionId ?? null
   }
 
@@ -607,6 +612,7 @@ app.post('/api/run', async (req, res) => {
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       autonomyMode: body.autonomyMode,
+      codexFastMode: body.codexFastMode,
       prompt: buildCombinedPrompt(body),
       sessionId: body.sessionId,
       target: body.target
@@ -650,6 +656,7 @@ app.post('/api/run/stream', async (req, res) => {
   const body: RunRequestBody = {
     ...rawBody,
     autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
+    codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
     sessionId: rawBody.sessionId ?? null
   }
 
@@ -681,6 +688,7 @@ app.post('/api/run/stream', async (req, res) => {
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       autonomyMode: body.autonomyMode,
+      codexFastMode: body.codexFastMode,
       prompt: buildCombinedPrompt(body),
       sessionId: body.sessionId,
       target: body.target,

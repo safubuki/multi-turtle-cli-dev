@@ -5,9 +5,7 @@ import {
   Bot,
   ChevronDown,
   ChevronLeft,
-  Copy,
-  Ellipsis,
-  FileText,
+  Copy,  FileText,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -82,14 +80,14 @@ const UI = {
   currentPrefix: '\u73fe\u5728 / ',
   deleteConfirm: '\u3053\u306e\u30da\u30a4\u30f3\u3092\u524a\u9664\u3057\u3066\u3082\u826f\u3044\u3067\u3059\u304b\uff1f',
   newSession: '\u65b0\u898f\u30bb\u30c3\u30b7\u30e7\u30f3',
-  paneMenu: '\u30da\u30a4\u30f3\u8a2d\u5b9a',
-  shareGlobal: '\u5168\u4f53\u5171\u6709',
-  shareDirect: '\u500b\u5225\u5171\u6709',
+  paneMenu: '\u5171\u6709',
+  shareGlobal: '\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709\u306b\u8ffd\u52a0',
+  shareDirect: '\u76f8\u624b\u30da\u30a4\u30f3\u3078\u500b\u5225\u5171\u6709',
   copyResponse: '\u5fdc\u7b54\u3092\u30b3\u30d4\u30fc',
   copyOutput: '\u51fa\u529b\u3092\u30b3\u30d4\u30fc',
   duplicatePane: '\u30da\u30a4\u30f3\u3092\u8907\u88fd',
   resetConversation: '\u4f1a\u8a71\u3092\u521d\u671f\u5316',
-  autoShare: '\u5b8c\u4e86\u6642\u306b\u5168\u4f53\u5171\u6709',
+  autoShare: '\u5b8c\u4e86\u6642\u306b\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709',
   deletePane: '\u30da\u30a4\u30f3\u3092\u524a\u9664',
   openVsCode: 'VSCode\u3067\u958b\u304f',
   output: 'AI\u7d50\u679c\u51fa\u529b',
@@ -103,17 +101,17 @@ const UI = {
   runningHint: 'CLI \u3092\u5b9f\u884c\u4e2d\u3067\u3059\u3002',
   stop: '\u505c\u6b62',
   run: '\u5b9f\u884c',
-  settings: 'CLI/AI\u30e2\u30c7\u30eb\u9078\u629e',
+  settings: 'CLI/AI\u30e2\u30c7\u30eb\u9078\u629e/\u8a2d\u5b9a',
   workspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u8a2d\u5b9a',
   cli: 'CLI',
   model: '\u30e2\u30c7\u30eb',
   reasoning: '\u63a8\u8ad6\u30ec\u30d9\u30eb',
-  executionStyle: '\u5b9f\u884c\u30b9\u30bf\u30a4\u30eb',
-  readonlyCodex: 'Codex \u306f\u73fe\u5728 full-auto \u56fa\u5b9a\u3067\u3059\u3002',
-  styleHint: '\u6a19\u6e96\u306f\u5b89\u5168\u5bc4\u308a\u3001\u7a4d\u6975\u306f\u81ea\u52d5\u7de8\u96c6\u3092\u5f37\u3081\u307e\u3059\u3002',
+  executionStyle: '\u627f\u8a8d\u30ec\u30d9\u30eb',
+  readonlyCodex: 'Codex \u306f --full-auto \u56fa\u5b9a\u3067\u3059\u3002Fast\u30e2\u30fc\u30c9\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u5148\u982d\u306b /fast \u3092\u4ed8\u3051\u3066\u5b9f\u884c\u3057\u307e\u3059\u3002',
+  styleHint: 'Gemini \u306f --approval-mode auto_edit / yolo\u3001Copilot \u306f --allow-all-tools / --allow-all \u306b\u5bfe\u5fdc\u3057\u307e\u3059\u3002',
   unchanged: '\u5909\u66f4\u4e0d\u53ef',
-  normal: '\u6a19\u6e96',
-  active: '\u7a4d\u6975',
+  normal: '\u7de8\u96c6\u307e\u3067\u81ea\u52d5\u627f\u8a8d',
+  active: '\u5236\u9650\u306a\u304f\u81ea\u52d5\u627f\u8a8d',
   currentWorkspace: '\u73fe\u5728\u306e\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   chooseWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
   removeFromList: '\u4e00\u89a7\u304b\u3089\u5916\u3059',
@@ -150,6 +148,11 @@ const UI = {
   stream: '\u30b9\u30c8\u30ea\u30fc\u30e0',
   conversation: '\u4f1a\u8a71\u5c65\u6b74',
   embeddedTerminal: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb',
+  fastMode: 'Fast\u30e2\u30fc\u30c9',
+  fastOff: '\u901a\u5e38',
+  fastOn: '\u6709\u52b9 (/fast)',
+  shareHint: '\u5171\u6709\u306f\u6b21\u56de\u306e\u5b9f\u884c1\u56de\u3060\u3051\u306b\u53cd\u6620\u3057\u307e\u3059\u3002\u5168\u4f53\u5171\u6709\u306f\u5404\u30da\u30a4\u30f3\u3067\u9078\u629e\u3057\u3066\u4f7f\u3044\u3001\u500b\u5225\u5171\u6709\u306f\u76f8\u624b\u30da\u30a4\u30f3\u306b\u3059\u3050\u8ffd\u52a0\u3057\u307e\u3059\u3002',
+  shellExpand: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u62e1\u5927',
   terminalPlaceholder: '\u3053\u3053\u3067 cd / ping / git / npm / ssh \u7d4c\u7531\u306e\u30ea\u30e2\u30fc\u30c8\u5b9f\u884c\u3092\u6271\u3048\u307e\u3059\u3002',
   terminalPromptPlaceholder: '',
   terminalRun: '\u30b3\u30de\u30f3\u30c9\u5b9f\u884c',
@@ -257,17 +260,14 @@ export function TerminalPane({
   onStop,
   onShare,
   onShareToPane,
-  onCopyLatest,
   onCopyOutput,
   onDuplicate,
   onStartNewSession,
-  onResetSession,
   onDelete,
   onLoadRemote,
   onBrowseRemote,
   onCreateRemoteDirectory,
   onOpenWorkspace,
-  onOpenCommandPrompt,
   onRunShell,
   onOpenPath,
   onAddLocalWorkspace,
@@ -282,12 +282,15 @@ export function TerminalPane({
   onToggleContext
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
+  const [isShellExpanded, setIsShellExpanded] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [remoteDropTarget, setRemoteDropTarget] = useState<string | null>(null)
   const menuRef = useRef<HTMLDetailsElement | null>(null)
   const promptRef = useRef<HTMLTextAreaElement | null>(null)
   const shellInputRef = useRef<HTMLInputElement | null>(null)
+  const shellModalInputRef = useRef<HTMLInputElement | null>(null)
   const shellConsoleRef = useRef<HTMLDivElement | null>(null)
+  const shellModalConsoleRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!isMenuOpen) {
@@ -324,13 +327,20 @@ export function TerminalPane({
 
 
   useEffect(() => {
-    const element = shellConsoleRef.current
-    if (!element) {
+    const elements = [shellConsoleRef.current, shellModalConsoleRef.current].filter(Boolean) as HTMLDivElement[]
+    for (const element of elements) {
+      element.scrollTop = element.scrollHeight
+    }
+  }, [pane.shellOutput, pane.shellCommand, isShellExpanded])
+
+  useEffect(() => {
+    if (pane.shellRunning) {
       return
     }
 
-    element.scrollTop = element.scrollHeight
-  }, [pane.shellOutput, pane.shellCommand])
+    const target = isShellExpanded ? shellModalInputRef.current : shellInputRef.current
+    target?.focus()
+  }, [pane.shellRunning, pane.shellOpen, isShellExpanded])
 
   const catalog = catalogs[pane.provider]
   const currentModel = catalog?.models.find((model) => model.id === pane.model) ?? catalog?.models[0]
@@ -424,13 +434,11 @@ export function TerminalPane({
           <div className="pane-header-actions pane-action-stack">
             <div className="pane-action-row icon-row">
               <button type="button" className="icon-button" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} title={UI.backToTop}><ArrowUp size={16} /></button>
-              <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
-
               <details className="pane-menu" ref={menuRef} open={isMenuOpen} onToggle={(event) => setIsMenuOpen((event.currentTarget as HTMLDetailsElement).open)}>
                 <summary className="icon-button" aria-label={UI.paneMenu}>
-                  <Ellipsis size={16} />
+                  <Share2 size={16} />
                 </summary>
-                <div className="pane-menu-surface">
+                <div className="pane-menu-surface share-menu-surface">
                   <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onShare(pane.id))}><Share2 size={15} />{UI.shareGlobal}</button>
                   {shareTargets.length > 0 && (
                     <div className="menu-share-group">
@@ -445,21 +453,19 @@ export function TerminalPane({
                       </div>
                     </div>
                   )}
-                  <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onCopyLatest(pane.id))}><Copy size={15} />{UI.copyResponse}</button>
-                  <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onDuplicate(pane.id))}><Copy size={15} />{UI.duplicatePane}</button>
-                  <button type="button" className="menu-action" disabled={pane.status === 'running'} onClick={() => closeMenuAndRun(() => onResetSession(pane.id))}><RefreshCcw size={15} />{UI.resetConversation}</button>
-                  <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onOpenCommandPrompt(pane.id))}><FolderOpen size={15} />{UI.terminalExternal}</button>
+                  <p className="menu-help">{UI.shareHint}</p>
                   <label className="menu-toggle">
                     <input type="checkbox" checked={pane.autoShare} onChange={(event) => onUpdate(pane.id, { autoShare: event.target.checked })} />
                     <span>{UI.autoShare}</span>
                   </label>
                 </div>
               </details>
-
+              <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
             </div>
 
             <div className="pane-action-row launch-row">
               <button type="button" className="secondary-button pane-session-button" disabled={pane.status === 'running'} onClick={() => onStartNewSession(pane.id)}><RefreshCcw size={16} />{UI.newSession}</button>
+              <button type="button" className="secondary-button pane-vscode-button" disabled={pane.status === 'running'} onClick={() => onDuplicate(pane.id)}><Copy size={16} />{UI.duplicatePane}</button>
               <button type="button" className="secondary-button pane-vscode-button" disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath} onClick={() => onOpenWorkspace(pane.id)}><FolderOpen size={16} />{UI.openVsCode}</button>
             </div>
           </div>
@@ -562,6 +568,19 @@ export function TerminalPane({
                   <select value={pane.autonomyMode} disabled={pane.provider === 'codex'} onChange={(event) => onUpdate(pane.id, { autonomyMode: event.target.value === 'max' ? 'max' : 'balanced' })}>
                     <option value="balanced">{UI.normal}</option>
                     <option value="max">{UI.active}</option>
+                  </select>
+                </label>
+                <label>
+                  <span>{UI.fastMode}</span>
+                  <select value={pane.codexFastMode} disabled={pane.provider !== 'codex'} onChange={(event) => onUpdate(pane.id, { codexFastMode: event.target.value === 'fast' ? 'fast' : 'off' })}>
+                    {pane.provider === 'codex' ? (
+                      <>
+                        <option value="off">{UI.fastOff}</option>
+                        <option value="fast">{UI.fastOn}</option>
+                      </>
+                    ) : (
+                      <option value="off">{UI.unchanged}</option>
+                    )}
                   </select>
                 </label>
               </div>
@@ -744,6 +763,13 @@ export function TerminalPane({
               </span>
             </summary>
             <div className="accordion-body shell-panel shell-panel-inline">
+              <div className="panel-header slim shell-panel-header">
+                <div>
+                  <h3>{UI.embeddedTerminal}</h3>
+                  <p>{currentShellPath || (pane.workspaceMode === 'local' ? UI.workspaceUnset : UI.sshUnset)}</p>
+                </div>
+                <button type="button" className="icon-button" onClick={() => setIsShellExpanded(true)} title={UI.shellExpand}><Maximize2 size={16} /></button>
+              </div>
               <div className="output-surface console-output shell-console shell-console-interactive" aria-label="embedded-terminal-output" ref={shellConsoleRef} onClick={() => shellInputRef.current?.focus()}>
                 {pane.shellOutput ? <pre>{pane.shellOutput}</pre> : null}
                 <div className="shell-console-entry">
@@ -780,11 +806,12 @@ export function TerminalPane({
                 <div className="chip-list">
                   {visibleSharedContext.length > 0 ? visibleSharedContext.map((item) => {
                     const attached = pane.attachedContextIds.includes(item.id)
+                    const consumed = item.consumedByPaneIds.includes(pane.id)
                     return (
                       <button key={item.id} type="button" className={attached ? 'context-chip active' : 'context-chip'} onClick={() => onToggleContext(pane.id, item.id)} title={item.detail}>
                         <strong>{item.sourcePaneTitle}</strong>
                         <span>{item.contentLabel} / {item.scope === 'global' ? UI.shareGlobal : UI.shareDirect}</span>
-                        <span>{item.summary}</span>
+                        <span>{attached ? UI.shareHint : consumed ? '使用済み / もう一度使うなら再選択' : item.summary}</span>
                       </button>
                     )
                   }) : <div className="empty-chip-row">{UI.noSharedContext}</div>}
@@ -850,6 +877,42 @@ export function TerminalPane({
             </div>
             <div className="output-modal-body">{hasOutput ? <pre>{outputText}</pre> : null}</div>
             <div className="output-modal-footer"><button type="button" className="secondary-button" disabled={!outputText} onClick={() => onCopyOutput(pane.id)}><Copy size={16} />{UI.copyOutput}</button></div>
+          </div>
+        </div>
+      )}
+
+      {isShellExpanded && (
+        <div className="output-modal-backdrop">
+          <div className="output-modal shell-output-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-header slim">
+              <div><h3>{UI.embeddedTerminal}</h3><p>{pane.title}</p></div>
+              <button type="button" className="icon-button" onClick={() => setIsShellExpanded(false)} title="close"><X size={16} /></button>
+            </div>
+            <div className="output-modal-body shell-modal-body">
+              <div className="output-surface console-output shell-console shell-console-interactive" ref={shellModalConsoleRef} onClick={() => shellModalInputRef.current?.focus()}>
+                {pane.shellOutput ? <pre>{pane.shellOutput}</pre> : null}
+                <div className="shell-console-entry">
+                  <span className="shell-prompt">{shellPromptLabel}</span>
+                  <input
+                    ref={shellModalInputRef}
+                    className="shell-inline-input"
+                    value={pane.shellCommand}
+                    onChange={(event) => onUpdate(pane.id, { shellCommand: event.target.value })}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && canRunShell && !pane.shellRunning) {
+                        event.preventDefault()
+                        onRunShell(pane.id)
+                      }
+                    }}
+                    disabled={pane.shellRunning}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                  />
+                  {pane.shellRunning ? <LoaderCircle size={14} className="spin shell-inline-spinner" /> : null}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

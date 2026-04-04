@@ -1,18 +1,25 @@
-﻿import path from 'path'
+import path from 'path'
 import { spawn, type ChildProcess } from 'child_process'
+import iconv from 'iconv-lite'
 import { buildSshCommandArgs } from './ssh.js'
 import type { ActiveShellRun, ShellExecResult, ShellRunEvent, ShellRunRequestBody, WorkspaceTarget } from './types.js'
 import { shellEscapePosix } from './util.js'
 
 const CWD_MARKER = '__TAKO_SHELL_CWD__:'
 
-function getPowerShellExecutable(): string {
-  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
-  return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+type ShellEncoding = 'utf8' | 'cp932'
+
+interface BufferedDecoder {
+  write: (chunk: Buffer) => string
+  end: () => string
 }
 
-function quoteForPowerShell(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`
+function getCmdExecutable(): string {
+  return process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe'
+}
+
+function quoteForCmd(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`
 }
 
 function resolveLocalWorkingDirectory(target: Extract<WorkspaceTarget, { kind: 'local' }>, cwd?: string | null): string {
@@ -25,38 +32,37 @@ function resolveRemoteWorkingDirectory(target: Extract<WorkspaceTarget, { kind: 
   return (cwd?.trim() || basePath || '~').trim()
 }
 
-type ShellEncoding = 'utf8' | 'shift_jis'
+function createBufferDecoder(encoding: ShellEncoding): BufferedDecoder {
+  if (encoding === 'cp932') {
+    const decoder = iconv.getDecoder('cp932')
+    return {
+      write: (chunk) => decoder.write(chunk),
+      end: () => decoder.end() ?? ''
+    }
+  }
 
-function createTextDecoder(encoding: ShellEncoding): TextDecoder {
-  try {
-    return new TextDecoder(encoding === 'shift_jis' ? 'shift-jis' : 'utf-8')
-  } catch {
-    return new TextDecoder('utf-8')
+  const decoder = new TextDecoder('utf-8')
+  return {
+    write: (chunk) => decoder.decode(chunk, { stream: true }),
+    end: () => decoder.decode()
   }
 }
 
 function buildLocalWindowsSpec(target: Extract<WorkspaceTarget, { kind: 'local' }>, command: string, cwd?: string | null) {
   const workingDirectory = resolveLocalWorkingDirectory(target, cwd)
   const script = [
-    "$ErrorActionPreference = 'Continue'",
-    '[Console]::InputEncoding = [System.Text.Encoding]::GetEncoding(932)',
-    '[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(932)',
-    '$OutputEncoding = [Console]::OutputEncoding',
-    `Set-Location -LiteralPath ${quoteForPowerShell(workingDirectory)}`,
-    "$__takoOutput = Invoke-Expression @'",
+    `cd /d ${quoteForCmd(workingDirectory)}`,
     command,
-    "'@ *>&1 | ForEach-Object { $_.ToString() }",
-    'foreach ($__takoLine in $__takoOutput) { Write-Output $__takoLine }',
-    '$takoExitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } elseif ($?) { 0 } else { 1 }',
-    `Write-Output ('${CWD_MARKER}' + (Get-Location).Path)`,
-    'exit $takoExitCode'
-  ].join('\n')
+    'set "__TAKO_EXIT__=!ERRORLEVEL!"',
+    `echo ${CWD_MARKER}%CD%`,
+    'exit /b !__TAKO_EXIT__!'
+  ].join(' & ')
 
   return {
-    command: getPowerShellExecutable(),
-    args: ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    command: getCmdExecutable(),
+    args: ['/d', '/v:on', '/s', '/c', script],
     workingDirectory,
-    encoding: 'shift_jis' as const
+    encoding: 'cp932' as const
   }
 }
 
@@ -107,16 +113,18 @@ function buildShellSpec(target: WorkspaceTarget, command: string, cwd?: string |
   return buildRemoteSpec(target, command, cwd)
 }
 
-function emitLines(onEvent: ((event: ShellRunEvent) => void) | undefined, type: 'stdout' | 'stderr', buffer: string, final: boolean, state: { cwd: string }) {
+function emitLines(
+  onEvent: ((event: ShellRunEvent) => void) | undefined,
+  type: 'stdout' | 'stderr',
+  buffer: string,
+  final: boolean,
+  state: { cwd: string }
+) {
   const normalized = buffer.replace(/\r/g, '')
   const lines = normalized.split('\n')
   const carry = final ? '' : lines.pop() ?? ''
 
   for (const line of lines) {
-    if (!line.trim()) {
-      continue
-    }
-
     if (line.startsWith(CWD_MARKER)) {
       const nextCwd = line.slice(CWD_MARKER.length).trim()
       if (nextCwd) {
@@ -166,17 +174,17 @@ export async function startShellRun(options: ShellRunRequestBody & { onEvent?: (
     let stdoutText = ''
     let stderrText = ''
     const state = { cwd: spec.workingDirectory }
-    const stdoutDecoder = createTextDecoder(spec.encoding)
-    const stderrDecoder = createTextDecoder(spec.encoding)
+    const stdoutDecoder = createBufferDecoder(spec.encoding)
+    const stderrDecoder = createBufferDecoder(spec.encoding)
 
-    child.stdout.on('data', (chunk) => {
-      const text = stdoutDecoder.decode(chunk, { stream: true })
+    child.stdout.on('data', (chunk: Buffer) => {
+      const text = stdoutDecoder.write(chunk)
       stdoutText += text
       stdoutBuffer = emitLines(options.onEvent, 'stdout', stdoutBuffer + text, false, state)
     })
 
-    child.stderr.on('data', (chunk) => {
-      const text = stderrDecoder.decode(chunk, { stream: true })
+    child.stderr.on('data', (chunk: Buffer) => {
+      const text = stderrDecoder.write(chunk)
       stderrText += text
       stderrBuffer = emitLines(options.onEvent, 'stderr', stderrBuffer + text, false, state)
     })
@@ -186,8 +194,8 @@ export async function startShellRun(options: ShellRunRequestBody & { onEvent?: (
     })
 
     child.once('close', (code) => {
-      const stdoutTail = stdoutDecoder.decode()
-      const stderrTail = stderrDecoder.decode()
+      const stdoutTail = stdoutDecoder.end()
+      const stderrTail = stderrDecoder.end()
       if (stdoutTail) {
         stdoutText += stdoutTail
         stdoutBuffer += stdoutTail
@@ -200,10 +208,10 @@ export async function startShellRun(options: ShellRunRequestBody & { onEvent?: (
       stdoutBuffer = emitLines(options.onEvent, 'stdout', stdoutBuffer, true, state)
       stderrBuffer = emitLines(options.onEvent, 'stderr', stderrBuffer, true, state)
 
-      if (stdoutBuffer.trim()) {
+      if (stdoutBuffer.length > 0) {
         options.onEvent?.({ type: 'stdout', text: stdoutBuffer.replace(/\r/g, '') })
       }
-      if (stderrBuffer.trim()) {
+      if (stderrBuffer.length > 0) {
         options.onEvent?.({ type: 'stderr', text: stderrBuffer.replace(/\r/g, '') })
       }
 

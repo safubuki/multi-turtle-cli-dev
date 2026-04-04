@@ -3,6 +3,7 @@ export type PaneStatus = 'idle' | 'running' | 'completed' | 'attention' | 'error
 export type WorkspaceMode = 'local' | 'ssh'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
 export type AutonomyMode = 'balanced' | 'max'
+export type CodexFastMode = 'off' | 'fast'
 export type HostPlatform = 'windows' | 'linux' | 'macos' | 'unknown'
 
 export interface ProviderModelInfo {
@@ -130,6 +131,14 @@ export interface PaneLogEntry {
   text: string
   createdAt: number
 }
+export interface SharedContextPayload {
+  sourcePaneTitle: string
+  provider: ProviderId
+  workspaceLabel: string
+  summary: string
+  detail: string
+}
+
 
 export interface PaneStreamEntry {
   id: string
@@ -161,6 +170,7 @@ export interface SharedContextItem {
   contentLabel: string
   summary: string
   detail: string
+  consumedByPaneIds: string[]
   createdAt: number
 }
 
@@ -182,6 +192,7 @@ export interface PaneState {
   model: string
   reasoningEffort: ReasoningEffort
   autonomyMode: AutonomyMode
+  codexFastMode: CodexFastMode
   status: PaneStatus
   statusText: string
   workspaceMode: WorkspaceMode
@@ -235,11 +246,12 @@ export interface RunPaneRequest {
   model: string
   reasoningEffort: ReasoningEffort
   autonomyMode: AutonomyMode
+  codexFastMode: CodexFastMode
   target: WorkspaceTarget
   prompt: string
   sessionId: string | null
   memory: PaneLogEntry[]
-  sharedContext: SharedContextItem[]
+  sharedContext: SharedContextPayload[]
 }
 
 export interface RunPaneResponse {
@@ -380,3 +392,4 @@ export interface SshTransferResponse {
   localPath: string
   remotePath: string
 }
+
