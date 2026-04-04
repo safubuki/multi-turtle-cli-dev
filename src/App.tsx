@@ -1652,10 +1652,14 @@ function App() {
 
     try {
       await openWorkspaceInVsCode(target)
+      updatePane(paneId, {
+        statusText: 'VSCode を起動しました',
+        lastError: null
+      })
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'VSCode \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        statusText: 'VSCode を起動できませんでした',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1674,10 +1678,14 @@ function App() {
 
     try {
       await openTargetInCommandPrompt(target)
+      updatePane(paneId, {
+        statusText: 'ターミナルを起動しました',
+        lastError: null
+      })
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'CMD \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        statusText: 'ターミナルを起動できませんでした',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1708,10 +1716,14 @@ function App() {
 
     try {
       await openWorkspaceInVsCode(target)
+      updatePane(paneId, {
+        statusText: 'VSCode を起動しました',
+        lastError: null
+      })
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'VSCode \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        statusText: 'VSCode を起動できませんでした',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -2259,7 +2271,6 @@ function App() {
                 sshHosts={bootstrap?.sshHosts ?? []}
                 sharedContext={sharedContext}
                 now={now}
-                hostPlatform={bootstrap?.hostPlatform ?? 'unknown'}
                 isFocused={pane.id === focusedPaneId}
                 onFocus={(paneId) => handleSelectPane(paneId)}
                 onUpdate={updatePane}

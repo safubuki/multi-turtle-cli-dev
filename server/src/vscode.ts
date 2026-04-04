@@ -1,7 +1,6 @@
 ﻿import { existsSync } from 'fs'
 import path from 'path'
 import { spawn } from 'child_process'
-import { pathToFileURL } from 'url'
 import { buildSshCommandArgs } from './ssh.js'
 import type { WorkspaceTarget } from './types.js'
 import { shellEscapePosix } from './util.js'
@@ -15,6 +14,30 @@ type TerminalLaunchSpec = {
   command: string
   args: string[]
   cwd?: string
+}
+
+function getWindowsTerminalCandidates(): string[] {
+  if (process.platform !== 'win32') {
+    return []
+  }
+
+  const candidates = [
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'wt.exe') : null,
+    process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Local', 'Microsoft', 'WindowsApps', 'wt.exe') : null,
+    'wt.exe'
+  ]
+
+  const seen = new Set<string>()
+  return candidates
+    .filter((value): value is string => Boolean(value))
+    .filter((candidate) => {
+      const key = candidate.toLowerCase()
+      if (seen.has(key)) {
+        return false
+      }
+      seen.add(key)
+      return !candidate.includes(path.sep) || existsSync(candidate)
+    })
 }
 
 function getCodeCommandCandidates(): string[] {
@@ -61,7 +84,7 @@ function getCodeCommandCandidates(): string[] {
 }
 
 function isCmdScript(command: string): boolean {
-  return /\.cmd$/i.test(command)
+  return /\.(cmd|bat)$/i.test(command)
 }
 
 function getCmdExecutable(): string {
@@ -69,14 +92,19 @@ function getCmdExecutable(): string {
   return path.join(systemRoot, 'System32', 'cmd.exe')
 }
 
+function getPowerShellExecutable(): string {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+  return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
+function getLocalBasePath(target: Extract<WorkspaceTarget, { kind: 'local' }>): string {
+  return path.resolve(target.resourceType === 'file' ? path.dirname(target.path) : target.path)
+}
+
 function buildRemoteFolderUri(host: string, remotePath: string): string {
   const normalized = remotePath.replace(/\\/g, '/')
   const pathname = normalized.startsWith('/') ? normalized : `/${normalized}`
   return `vscode-remote://ssh-remote+${encodeURIComponent(host)}${encodeURI(pathname)}`
-}
-
-function buildLocalFolderUri(localPath: string): string {
-  return pathToFileURL(path.resolve(localPath)).toString()
 }
 
 function buildRemoteFileUri(host: string, remotePath: string): string {
@@ -91,9 +119,8 @@ function buildCmdCommandText(command: string, args: string[]): string {
 
 function getSpawnCommand(command: string, args: string[]): { command: string; args: string[] } {
   if (process.platform === 'win32' && isCmdScript(command)) {
-    const cmdPath = getCmdExecutable()
     return {
-      command: cmdPath,
+      command: getCmdExecutable(),
       args: ['/d', '/s', '/c', buildCmdCommandText(command, args)]
     }
   }
@@ -143,58 +170,134 @@ function quoteForCmd(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
 
-function isMissingBinaryError(error: unknown): boolean {
-  return Boolean(
-    error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      String((error as { code?: unknown }).code ?? '').toUpperCase() === 'ENOENT'
-  )
+function quoteForPowerShell(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
 }
 
-function buildTerminalSpecs(commandText: string): TerminalLaunchSpec[] {
-  if (process.platform === 'win32') {
-    return [
-      {
-        command: getCmdExecutable(),
-        args: ['/k', commandText]
+function buildPowerShellArray(values: string[]): string {
+  return `@(${values.map((value) => quoteForPowerShell(value)).join(', ')})`
+}
+
+function tryStartProcessWindows(command: string, args: string[], cwd?: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const executable = isCmdScript(command) ? getCmdExecutable() : command
+    const executableArgs = isCmdScript(command) ? ['/d', '/s', '/c', buildCmdCommandText(command, args)] : args
+
+    let script = `$ErrorActionPreference = 'Stop'; Start-Process -FilePath ${quoteForPowerShell(executable)}`
+    if (executableArgs.length > 0) {
+      script += ` -ArgumentList ${buildPowerShellArray(executableArgs)}`
+    }
+    if (cwd?.trim()) {
+      script += ` -WorkingDirectory ${quoteForPowerShell(cwd)}`
+    }
+
+    const child = spawn(getPowerShellExecutable(), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      windowsHide: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString()
+    })
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+
+    child.once('error', (error) => {
+      reject(error)
+    })
+
+    child.once('close', (code) => {
+      if (code === 0) {
+        resolve()
+        return
       }
-    ]
+
+      const detail = stderr.trim() || stdout.trim() || `PowerShell exited with code ${code ?? 'unknown'}`
+      reject(new Error(detail))
+    })
+  })
+}
+
+function isMissingBinaryError(error: unknown): boolean {
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '').toUpperCase()
+      : ''
+  const detail = error instanceof Error ? error.message : String(error ?? '')
+  return code === 'ENOENT' || /cannot find the file specified|no such file or directory|not recognized/i.test(detail)
+}
+
+function buildTerminalSpecs(target: WorkspaceTarget, cwd?: string): TerminalLaunchSpec[] {
+  if (process.platform === 'win32') {
+    const powerShellCommand = buildWindowsPowerShellCommand(target)
+    const powerShellArgs = ['-NoExit', '-NoLogo', '-Command', powerShellCommand]
+    const specs: TerminalLaunchSpec[] = []
+
+    specs.push({
+      command: getPowerShellExecutable(),
+      args: powerShellArgs,
+      cwd
+    })
+
+    for (const candidate of getWindowsTerminalCandidates()) {
+      specs.push({
+        command: candidate,
+        args: ['-w', 'new', ...(cwd ? ['-d', cwd] : []), getPowerShellExecutable(), ...powerShellArgs],
+        cwd
+      })
+    }
+
+    specs.push({
+      command: getCmdExecutable(),
+      args: ['/k', buildWindowsCmdCommand(target)],
+      cwd
+    })
+
+    return specs
   }
+
+  const commandText = buildPosixTerminalCommand(target)
 
   if (process.platform === 'linux') {
     return [
-      { command: 'x-terminal-emulator', args: ['-e', 'bash', '-lc', commandText] },
-      { command: 'gnome-terminal', args: ['--', 'bash', '-lc', commandText] },
-      { command: 'kgx', args: ['--', 'bash', '-lc', commandText] },
-      { command: 'konsole', args: ['-e', 'bash', '-lc', commandText] },
-      { command: 'mate-terminal', args: ['--', 'bash', '-lc', commandText] },
-      { command: 'xfce4-terminal', args: ['--command', `bash -lc ${shellEscapePosix(commandText)}`] },
-      { command: 'xterm', args: ['-e', 'bash', '-lc', commandText] },
-      { command: 'kitty', args: ['bash', '-lc', commandText] },
-      { command: 'wezterm', args: ['start', 'bash', '-lc', commandText] }
+      { command: 'x-terminal-emulator', args: ['-e', 'bash', '-lc', commandText], cwd },
+      { command: 'gnome-terminal', args: ['--', 'bash', '-lc', commandText], cwd },
+      { command: 'kgx', args: ['--', 'bash', '-lc', commandText], cwd },
+      { command: 'konsole', args: ['-e', 'bash', '-lc', commandText], cwd },
+      { command: 'mate-terminal', args: ['--', 'bash', '-lc', commandText], cwd },
+      { command: 'xfce4-terminal', args: ['--command', `bash -lc ${shellEscapePosix(commandText)}`], cwd },
+      { command: 'xterm', args: ['-e', 'bash', '-lc', commandText], cwd },
+      { command: 'kitty', args: ['bash', '-lc', commandText], cwd },
+      { command: 'wezterm', args: ['start', 'bash', '-lc', commandText], cwd }
     ]
   }
 
-  return [{ command: 'open', args: ['-a', 'Terminal.app'] }]
+  return [{ command: 'open', args: ['-a', 'Terminal.app'], cwd }]
 }
 
 export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
   const resourceType = target.resourceType ?? 'folder'
   const args =
     target.kind === 'local'
-      ? resourceType === 'file'
-        ? [path.resolve(target.path)]
-        : ['--folder-uri', buildLocalFolderUri(target.path)]
+      ? ['--new-window', path.resolve(target.path)]
       : resourceType === 'file'
-        ? ['--file-uri', buildRemoteFileUri(target.host, target.path)]
-        : ['--folder-uri', buildRemoteFolderUri(target.host, target.path)]
+        ? ['--new-window', '--file-uri', buildRemoteFileUri(target.host, target.path)]
+        : ['--new-window', '--folder-uri', buildRemoteFolderUri(target.host, target.path)]
+  const cwd = target.kind === 'local' ? getLocalBasePath(target) : undefined
 
   let lastError: unknown = null
 
   for (const command of getCodeCommandCandidates()) {
     try {
-      await tryLaunch(command, args)
+      if (process.platform === 'win32') {
+        await tryStartProcessWindows(command, args, cwd)
+      } else {
+        await tryLaunch(command, args, { cwd })
+      }
       return
     } catch (error) {
       lastError = error
@@ -202,27 +305,27 @@ export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
   }
 
   if (isMissingBinaryError(lastError)) {
-    throw new Error('VSCode \u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002')
+    throw new Error('\u0056\u0053\u0043\u006f\u0064\u0065 \u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002')
   }
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error')
-  throw new Error(`VSCode \u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
+  throw new Error(`\u0056\u0053\u0043\u006f\u0064\u0065 \u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
 }
 
 export async function openInCommandPrompt(target: WorkspaceTarget): Promise<void> {
-  const commandText =
-    process.platform === 'win32'
-      ? buildWindowsTerminalCommand(target)
-      : buildPosixTerminalCommand(target)
-
+  const cwd = target.kind === 'local' ? getLocalBasePath(target) : undefined
   let lastError: unknown = null
 
-  for (const spec of buildTerminalSpecs(commandText)) {
+  for (const spec of buildTerminalSpecs(target, cwd)) {
     try {
-      await tryLaunch(spec.command, spec.args, {
-        cwd: spec.cwd,
-        windowsHide: false
-      })
+      if (process.platform === 'win32') {
+        await tryStartProcessWindows(spec.command, spec.args, spec.cwd)
+      } else {
+        await tryLaunch(spec.command, spec.args, {
+          cwd: spec.cwd,
+          windowsHide: false
+        })
+      }
       return
     } catch (error) {
       lastError = error
@@ -232,25 +335,22 @@ export async function openInCommandPrompt(target: WorkspaceTarget): Promise<void
   if (isMissingBinaryError(lastError)) {
     throw new Error(
       process.platform === 'win32'
-        ? '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3002'
-        : '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3002 Ubuntu \u3067\u306f gnome-terminal \u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
+        ? '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002'
+        : '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002 Ubuntu \u3067\u306f gnome-terminal \u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
     )
   }
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error')
-  throw new Error(`${process.platform === 'win32' ? '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8' : '\u30bf\u30fc\u30df\u30ca\u30eb'}\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
+  throw new Error(`\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
 }
 
-function buildWindowsTerminalCommand(target: WorkspaceTarget): string {
+function buildWindowsCmdCommand(target: WorkspaceTarget): string {
   if (target.kind === 'local') {
-    const basePath = target.resourceType === 'file' ? path.dirname(target.path) : target.path
-    return `cd /d ${quoteForCmd(path.resolve(basePath))}`
+    return `cd /d ${quoteForCmd(getLocalBasePath(target))}`
   }
 
   const remotePath = target.resourceType === 'file' ? path.posix.dirname(target.path) : target.path
-  const remoteCommand = remotePath
-    ? `cd ${shellEscapePosix(remotePath)} && exec \${SHELL:-bash} -l`
-    : 'exec \${SHELL:-bash} -l'
+  const remoteCommand = remotePath ? `cd ${shellEscapePosix(remotePath)} && exec \${SHELL:-bash} -l` : 'exec \${SHELL:-bash} -l'
   const sshArgs = buildSshCommandArgs(
     {
       host: target.host,
@@ -259,19 +359,34 @@ function buildWindowsTerminalCommand(target: WorkspaceTarget): string {
     ['-t', 'bash', '-lc', remoteCommand]
   )
 
-  return `ssh ${sshArgs.map(quoteForCmd).join(' ')}`
+  return `ssh ${sshArgs.map((value) => quoteForCmd(value)).join(' ')}`
+}
+
+function buildWindowsPowerShellCommand(target: WorkspaceTarget): string {
+  if (target.kind === 'local') {
+    return `Set-Location -LiteralPath ${quoteForPowerShell(getLocalBasePath(target))}`
+  }
+
+  const remotePath = target.resourceType === 'file' ? path.posix.dirname(target.path) : target.path
+  const remoteCommand = remotePath ? `cd ${shellEscapePosix(remotePath)} && exec \${SHELL:-bash} -l` : 'exec \${SHELL:-bash} -l'
+  const sshArgs = buildSshCommandArgs(
+    {
+      host: target.host,
+      connection: target.connection
+    },
+    ['-t', 'bash', '-lc', remoteCommand]
+  )
+
+  return `& ssh ${sshArgs.map((value) => quoteForPowerShell(value)).join(' ')}`
 }
 
 function buildPosixTerminalCommand(target: WorkspaceTarget): string {
   if (target.kind === 'local') {
-    const basePath = target.resourceType === 'file' ? path.dirname(target.path) : target.path
-    return `cd ${shellEscapePosix(path.resolve(basePath))} && exec \${SHELL:-bash} -l`
+    return `cd ${shellEscapePosix(getLocalBasePath(target))} && exec \${SHELL:-bash} -l`
   }
 
   const remotePath = target.resourceType === 'file' ? path.posix.dirname(target.path) : target.path
-  const remoteCommand = remotePath
-    ? `cd ${shellEscapePosix(remotePath)} && exec \${SHELL:-bash} -l`
-    : 'exec \${SHELL:-bash} -l'
+  const remoteCommand = remotePath ? `cd ${shellEscapePosix(remotePath)} && exec \${SHELL:-bash} -l` : 'exec \${SHELL:-bash} -l'
   const sshArgs = buildSshCommandArgs(
     {
       host: target.host,

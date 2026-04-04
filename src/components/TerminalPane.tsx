@@ -21,7 +21,7 @@ import {
   Wifi,
   X
 } from 'lucide-react'
-import type { HostPlatform, LocalWorkspace, PaneState, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
+import type { LocalWorkspace, PaneState, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
 
 interface TransferOptions {
   localPath?: string
@@ -37,7 +37,6 @@ interface TerminalPaneProps {
   sshHosts: SshHost[]
   sharedContext: SharedContextItem[]
   now: number
-  hostPlatform: HostPlatform
   isFocused: boolean
   onFocus: (paneId: string) => void
   onUpdate: (paneId: string, updates: Partial<PaneState>) => void
@@ -235,7 +234,6 @@ export function TerminalPane({
   sshHosts,
   sharedContext,
   now,
-  hostPlatform,
   isFocused,
   onFocus,
   onUpdate,
@@ -314,7 +312,7 @@ export function TerminalPane({
   const isStalled = pane.status === 'running' && pane.lastActivityAt !== null && now - pane.lastActivityAt > 45_000
   const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
-  const openTerminalLabel = hostPlatform === 'windows' ? '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8' : '\u30bf\u30fc\u30df\u30ca\u30eb'
+  const openTerminalLabel = '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u958b\u304f'
   const localParentPath = useMemo(() => getLocalParentPath(pane.localBrowserPath || pane.localWorkspacePath, pane.localWorkspacePath), [pane.localBrowserPath, pane.localWorkspacePath])
   const sshDisplayName = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim()
   const workspaceLabel = pane.workspaceMode === 'local' ? selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || UI.unselected) : pane.remoteWorkspacePath ? getShortPathLabel(pane.remoteWorkspacePath) : sshDisplayName || UI.sshUnset
