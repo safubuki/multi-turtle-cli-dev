@@ -165,6 +165,9 @@ export interface SharedContextItem {
 }
 
 export interface PaneState {
+  settingsOpen: boolean
+  workspaceOpen: boolean
+  shellOpen: boolean
   shellCommand: string
   shellOutput: string
   localShellPath: string

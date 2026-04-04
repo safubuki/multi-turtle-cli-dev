@@ -29,12 +29,12 @@ async function extractErrorMessage(response: Response): Promise<string> {
 
   if (contentType.includes('text/html')) {
     if (response.url.includes('/api/shell/stream') || text.includes('Cannot POST /api/shell/stream')) {
-      return '??????? API ?????????TAKO ????????????????'
+      return '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
     }
     if (response.url.includes('/api/run/stream') || text.includes('Cannot POST /api/run/stream')) {
-      return 'CLI ?? API ?????????TAKO ????????????????'
+      return 'CLI \u5b9f\u884c API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
     }
-    return 'TAKO ????????????????????????????'
+    return 'TAKO \u30b5\u30fc\u30d0\u30fc\u306e\u5fdc\u7b54\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
   }
 
   try {

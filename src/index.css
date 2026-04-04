@@ -123,8 +123,8 @@ button {
   color: var(--muted);
   line-height: 1.45;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: unset;
 }
 
 .topbar-actions,
@@ -480,6 +480,12 @@ button {
   transform: translateY(-1px);
   border-color: rgba(84, 210, 194, 0.4);
   box-shadow: 0 0 0 1px rgba(84, 210, 194, 0.2);
+}
+
+.matrix-tile.selected {
+  border-color: rgba(84, 210, 194, 0.52);
+  background: rgba(84, 210, 194, 0.12);
+  box-shadow: 0 0 0 1px rgba(84, 210, 194, 0.26);
 }
 
 .pane-grid {
@@ -1168,7 +1174,7 @@ textarea {
 }
 
 .topbar-copy {
-  max-width: 42ch;
+  max-width: none;
   font-size: 0.92rem;
 }
 
@@ -1354,6 +1360,13 @@ textarea {
   font-weight: 600;
 }
 
+.accordion-meta {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .accordion-value {
   min-width: 0;
   color: var(--muted);
@@ -1362,6 +1375,20 @@ textarea {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.accordion-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  transition: transform 160ms ease, color 160ms ease;
+  flex: 0 0 auto;
+}
+
+.accordion-caret.is-open {
+  transform: rotate(180deg);
+  color: #c7f6ec;
 }
 
 .pane-accordion[open] .accordion-summary {
@@ -1990,8 +2017,8 @@ textarea {
 
 .topbar-copy {
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: unset;
 }
 
 .compact-utility-row {
@@ -2340,4 +2367,88 @@ textarea {
   .workspace-picker-footer .primary-button {
     width: 100%;
   }
+}
+
+
+.topbar-copy {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.shell-panel-inline {
+  gap: 0;
+}
+
+.shell-console-interactive {
+  min-height: 260px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: text;
+}
+
+.shell-console-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.shell-inline-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #eef4f6;
+  font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
+  font-size: 0.94rem;
+  line-height: 1.55;
+}
+
+.shell-inline-input:disabled {
+  color: var(--muted);
+}
+
+.shell-inline-spinner {
+  flex: 0 0 auto;
+  color: var(--cyan);
+}
+
+.ssh-mini-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ssh-mini-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.ssh-mini-accordion[open] .ssh-mini-caret {
+  transform: rotate(180deg);
+  color: var(--text);
+}
+
+
+.topbar-brand {
+  width: 100%;
+}
+
+.topbar-copy-block {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.topbar-copy {
+  display: block;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
 }

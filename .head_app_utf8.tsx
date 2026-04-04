@@ -176,36 +176,6 @@ function getAbsoluteLocalParentPath(currentPath: string): string | null {
   return parent || null
 }
 
-function normalizeComparablePath(value: string): string {
-  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '')
-  if (/^[A-Za-z]:$/.test(normalized)) {
-    return `${normalized}/`
-  }
-
-  return normalized
-}
-
-function clampLocalPathToWorkspace(targetPath: string, workspaceRoot: string): string {
-  const normalizedTarget = normalizeComparablePath(targetPath)
-  const normalizedRoot = normalizeComparablePath(workspaceRoot)
-
-  if (!normalizedRoot) {
-    return targetPath.trim()
-  }
-
-  if (!normalizedTarget) {
-    return workspaceRoot.trim()
-  }
-
-  const targetLower = normalizedTarget.toLowerCase()
-  const rootLower = normalizedRoot.toLowerCase()
-  if (targetLower === rootLower || targetLower.startsWith(`${rootLower}/`)) {
-    return targetPath.trim()
-  }
-
-  return workspaceRoot.trim()
-}
-
 function statusLabel(status: PaneStatus): string {
   switch (status) {
     case 'running':
@@ -428,9 +398,6 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
   return {
     id: createId('pane'),
     title: `Task ${index + 1}`,
-    settingsOpen: false,
-    workspaceOpen: false,
-    shellOpen: false,
     provider,
     model,
     reasoningEffort: defaultReasoning,
@@ -779,9 +746,6 @@ function normalizePane(
   return {
     id: rawPane.id ?? createId('pane'),
     title: typeof rawPane.title === 'string' && rawPane.title.trim() ? rawPane.title : 'Task',
-    settingsOpen: rawPane.settingsOpen === true,
-    workspaceOpen: rawPane.workspaceOpen === true,
-    shellOpen: rawPane.shellOpen === true,
     provider,
     model,
     reasoningEffort,
@@ -864,7 +828,6 @@ function App() {
   const [sharedContext, setSharedContext] = useState<SharedContextItem[]>(persistedRef.current.sharedContext)
   const [layout, setLayout] = useState<LayoutMode>(persistedRef.current.layout)
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(persistedRef.current.focusedPaneId)
-  const [selectedPaneIds, setSelectedPaneIds] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [globalError, setGlobalError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
@@ -922,10 +885,6 @@ function App() {
       setFocusedPaneId(panes[0].id)
     }
   }, [focusedPaneId, panes])
-
-  useEffect(() => {
-    setSelectedPaneIds((current) => current.filter((paneId) => panes.some((pane) => pane.id === paneId)))
-  }, [panes])
 
   const refreshBootstrap = async () => {
     setLoading(true)
@@ -1021,25 +980,11 @@ function App() {
     })
   }
 
-  const handleSelectPane = (paneId: string, shouldScroll = false, toggleSelection = false) => {
+  const handleSelectPane = (paneId: string, shouldScroll = false) => {
     setFocusedPaneId(paneId)
-    setSelectedPaneIds((current) => {
-      if (!toggleSelection) {
-        return current.length === 0 ? current : []
-      }
-
-      return current.includes(paneId)
-        ? current.filter((item) => item !== paneId)
-        : [...current, paneId]
-    })
-
-    if (shouldScroll && !toggleSelection) {
+    if (shouldScroll) {
       scrollToPane(paneId)
     }
-  }
-
-  const handleMatrixClick = (event: { ctrlKey: boolean; metaKey: boolean }, paneId: string) => {
-    handleSelectPane(paneId, layout !== 'focus', event.ctrlKey || event.metaKey)
   }
 
   const handleProviderChange = (paneId: string, provider: ProviderId) => {
@@ -1419,50 +1364,27 @@ function App() {
     const created = createInitialPane(panesRef.current.length, bootstrap, localWorkspacesRef.current)
     setPanes((current) => [...current, created])
     setFocusedPaneId(created.id)
-    setSelectedPaneIds([])
   }
 
-  const closeAllPaneAccordions = () => {
-    setPanes((current) =>
-      current.map((pane) => ({
-        ...pane,
-        settingsOpen: false,
-        workspaceOpen: false,
-        shellOpen: false
-      }))
-    )
-  }
-
-  const deletePanesById = (paneIds: string[]) => {
-    const ids = [...new Set(paneIds)]
-    if (ids.length === 0) {
-      return
-    }
-
+  const handleDeletePane = (paneId: string) => {
     const removedContextIds = sharedContextRef.current
-      .filter((item) => ids.includes(item.sourcePaneId))
+      .filter((item) => item.sourcePaneId === paneId)
       .map((item) => item.id)
 
-    for (const paneId of ids) {
-      stopRequestedRef.current.add(paneId)
-      controllersRef.current[paneId]?.abort()
-      delete controllersRef.current[paneId]
-      shellStopRequestedRef.current.add(paneId)
-      shellControllersRef.current[paneId]?.abort()
-      delete shellControllersRef.current[paneId]
-      void stopPaneRun(paneId).catch(() => undefined)
-      void stopShellRun(paneId).catch(() => undefined)
-    }
+    stopRequestedRef.current.add(paneId)
+    controllersRef.current[paneId]?.abort()
+    delete controllersRef.current[paneId]
+    void stopPaneRun(paneId).catch(() => undefined)
 
     setSharedContext((current) =>
       current
-        .filter((item) => !ids.includes(item.sourcePaneId))
+        .filter((item) => item.sourcePaneId !== paneId)
         .map((item) =>
-          item.targetPaneIds.some((targetPaneId) => ids.includes(targetPaneId))
+          item.targetPaneIds.includes(paneId)
             ? {
                 ...item,
-                targetPaneIds: item.targetPaneIds.filter((id) => !ids.includes(id)),
-                targetPaneTitles: item.targetPaneTitles.filter((_, index) => !ids.includes(item.targetPaneIds[index]))
+                targetPaneIds: item.targetPaneIds.filter((id) => id !== paneId),
+                targetPaneTitles: item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
               }
             : item
         )
@@ -1471,9 +1393,9 @@ function App() {
 
     let nextFocusId: string | null = null
     setPanes((current) => {
-      const removedIndex = current.findIndex((pane) => ids.includes(pane.id))
+      const index = current.findIndex((pane) => pane.id === paneId)
       const remaining = current
-        .filter((pane) => !ids.includes(pane.id))
+        .filter((pane) => pane.id !== paneId)
         .map((pane) => ({
           ...pane,
           attachedContextIds: pane.attachedContextIds.filter((item) => !removedContextIds.includes(item))
@@ -1485,68 +1407,12 @@ function App() {
         return [replacement]
       }
 
-      nextFocusId = remaining[Math.max(0, removedIndex - 1)]?.id ?? remaining[0]?.id ?? null
+      nextFocusId = remaining[Math.max(0, index - 1)]?.id ?? remaining[0]?.id ?? null
       return remaining
     })
 
     setFocusedPaneId(nextFocusId)
-    setSelectedPaneIds([])
   }
-
-  const handleDeletePane = (paneId: string) => {
-    deletePanesById([paneId])
-  }
-
-  const handleDeleteSelectedPanes = () => {
-    if (selectedPaneIds.length === 0) {
-      return
-    }
-
-    const targetIds = panes
-      .filter((pane) => selectedPaneIds.includes(pane.id))
-      .map((pane) => pane.id)
-
-    if (targetIds.length === 0) {
-      return
-    }
-
-    const message =
-      targetIds.length === 1
-        ? '選択中のペインを削除しても良いですか？'
-        : `選択中の ${targetIds.length} 件のペインを削除しても良いですか？`
-
-    if (!window.confirm(message)) {
-      return
-    }
-
-    deletePanesById(targetIds)
-  }
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Delete' || selectedPaneIds.length === 0) {
-        return
-      }
-
-      const activeElement = document.activeElement
-      if (
-        activeElement instanceof HTMLInputElement ||
-        activeElement instanceof HTMLTextAreaElement ||
-        activeElement instanceof HTMLSelectElement ||
-        (activeElement instanceof HTMLElement && activeElement.isContentEditable)
-      ) {
-        return
-      }
-
-      event.preventDefault()
-      handleDeleteSelectedPanes()
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [selectedPaneIds, panes])
 
   const handleDuplicatePane = (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
@@ -1636,14 +1502,7 @@ function App() {
   }
 
   const handleBrowseLocal = async (paneId: string, targetPath: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const workspaceRoot = pane.localWorkspacePath.trim()
-    const nextPath = workspaceRoot ? clampLocalPathToWorkspace(targetPath, workspaceRoot) : targetPath.trim()
-    if (!nextPath) {
+    if (!targetPath.trim()) {
       return
     }
 
@@ -1652,7 +1511,7 @@ function App() {
     })
 
     try {
-      const payload = await browseLocalDirectory(nextPath)
+      const payload = await browseLocalDirectory(targetPath)
       mutatePane(paneId, (pane) => ({
         ...pane,
         localBrowserLoading: false,
@@ -1664,7 +1523,7 @@ function App() {
       updatePane(paneId, {
         localBrowserLoading: false,
         status: 'error',
-        statusText: 'フォルダ内容の読み込みに失敗しました',
+        statusText: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1899,43 +1758,23 @@ function App() {
     const command = pane.shellCommand.trim()
     if (!command) {
       updatePane(paneId, {
-        shellCommand: '',
-        shellLastError: null
-      })
-      return
-    }
-
-    if (/^(clear|cls)$/i.test(command)) {
-      updatePane(paneId, {
-        shellCommand: '',
-        shellOutput: '',
-        shellLastExitCode: null,
-        shellLastError: null,
-        shellLastRunAt: Date.now()
+        shellLastError: '\u30b3\u30de\u30f3\u30c9\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044'
       })
       return
     }
 
     const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
     if (!target) {
-      mutatePane(paneId, (current) => ({
-        ...current,
-        shellCommand: '',
-        shellLastError: 'ワークスペースまたは SSH 接続先を設定してください',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] ワークスペースまたは SSH 接続先を設定してください'),
-        shellLastRunAt: Date.now()
-      }))
+      updatePane(paneId, {
+        shellLastError: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u307e\u305f\u306f SSH \u63a5\u7d9a\u5148\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044'
+      })
       return
     }
 
     if (!bootstrap?.features.shell) {
-      mutatePane(paneId, (current) => ({
-        ...current,
-        shellCommand: '',
-        shellLastError: '簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] 簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。'),
-        shellLastRunAt: Date.now()
-      }))
+      updatePane(paneId, {
+        shellLastError: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
+      })
       return
     }
 
@@ -2029,14 +1868,11 @@ function App() {
       )
     } catch (error) {
       if (!shellStopRequestedRef.current.has(paneId)) {
-        const message = error instanceof Error ? error.message : String(error)
-        mutatePane(paneId, (current) => ({
-          ...current,
+        updatePane(paneId, {
           shellRunning: false,
-          shellLastError: message,
-          shellOutput: appendShellOutputLine(current.shellOutput, `[error] ${message}`),
+          shellLastError: error instanceof Error ? error.message : String(error),
           shellLastRunAt: Date.now()
-        }))
+        })
       }
     } finally {
       delete shellControllersRef.current[paneId]
@@ -2063,7 +1899,7 @@ function App() {
       ...pane,
       shellRunning: false,
       shellLastError: null,
-      shellOutput: appendShellOutputLine(pane.shellOutput, '^C'),
+      shellOutput: appendShellOutputLine(pane.shellOutput, '[stopped]'),
       shellLastRunAt: Date.now()
     }))
   }
@@ -2443,7 +2279,10 @@ function App() {
       return
     }
 
-    if (selectedPane.localBrowserLoading || selectedPane.localBrowserPath) {
+    const browserMatchesWorkspace = selectedPane.localBrowserPath === selectedPane.localWorkspacePath
+    const hasUsableEntries = selectedPane.localBrowserEntries.length > 0
+
+    if (selectedPane.localBrowserLoading || (browserMatchesWorkspace && hasUsableEntries)) {
       return
     }
 
@@ -2579,9 +2418,6 @@ function App() {
                 <Plus size={16} />
                 {'\u30da\u30a4\u30f3\u8ffd\u52a0'}
               </button>
-              <button type="button" className="secondary-button" onClick={closeAllPaneAccordions}>
-                {'\u898b\u305f\u76ee\u30ad\u30ec\u30a4'}
-              </button>
               <button
                 type="button"
                 className={layout === 'quad' ? 'switch-button active' : 'switch-button'}
@@ -2620,8 +2456,8 @@ function App() {
                 <button
                   key={`matrix-${pane.id}`}
                   type="button"
-                  className={`matrix-tile status-${isStalled ? 'attention' : pane.status} ${isFocused ? 'active' : ''} ${selectedPaneIds.includes(pane.id) ? 'selected' : ''}`}
-                  onClick={(event) => handleMatrixClick(event, pane.id)}
+                  className={`matrix-tile status-${isStalled ? 'attention' : pane.status} ${isFocused ? 'active' : ''}`}
+                  onClick={() => handleSelectPane(pane.id, layout !== 'focus')}
                 >
                   <span className="matrix-index">{String(index + 1).padStart(2, '0')}</span>
                   <strong>{pane.title}</strong>

@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+﻿import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import {
   AlertTriangle,
+  ArrowUp,
   Bot,
+  ChevronDown,
   ChevronLeft,
   Copy,
   Ellipsis,
@@ -116,13 +118,13 @@ const UI = {
   chooseWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
   removeFromList: '\u4e00\u89a7\u304b\u3089\u5916\u3059',
   savedWorkspaces: '\u767b\u9332\u6e08\u307f\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
-  folderContents: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9',
+  folderContents: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u306e\u5185\u5bb9',
   browseLoading: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
   browseEmpty: '\u9078\u629e\u3057\u305f\u30d5\u30a9\u30eb\u30c0\u306e\u5185\u5bb9\u304c\u3053\u3053\u306b\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   currentConnection: '\u73fe\u5728\u306e\u63a5\u7d9a',
   connectionSettings: '\u63a5\u7d9a\u8a2d\u5b9a',
   connectionSupport: '\u30d7\u30ed\u30ad\u30b7 / \u88dc\u52a9\u8a2d\u5b9a',
-  refreshConnection: '\u63a5\u7d9a\u3092\u66f4\u65b0',
+  refreshConnection: '\u30ea\u30e2\u30fc\u30c8\u306b\u63a5\u7d9a',
   remoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   publicKey: '\u516c\u958b\u9375',
   generateKey: '\u9375\u3092\u751f\u6210',
@@ -154,7 +156,9 @@ const UI = {
   terminalClear: '\u30af\u30ea\u30a2',
   terminalStop: '\u505c\u6b62',
   terminalExternal: '\u5916\u90e8\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8a66\u3059',
-  terminalPath: '\u73fe\u5728\u30d1\u30b9'
+  terminalPath: '\u73fe\u5728\u30d1\u30b9',
+  workspaceTop: '\u30c8\u30c3\u30d7\u3078',
+  backToTop: '\u30c8\u30c3\u30d7\u306b\u623b\u308b'
 } as const
 
 const LOCAL_DRAG_MIME = 'application/x-multi-turtle-local-path'
@@ -265,7 +269,6 @@ export function TerminalPane({
   onOpenWorkspace,
   onOpenCommandPrompt,
   onRunShell,
-  onStopShell,
   onOpenPath,
   onAddLocalWorkspace,
   onSelectLocalWorkspace,
@@ -283,7 +286,7 @@ export function TerminalPane({
   const [remoteDropTarget, setRemoteDropTarget] = useState<string | null>(null)
   const menuRef = useRef<HTMLDetailsElement | null>(null)
   const promptRef = useRef<HTMLTextAreaElement | null>(null)
-  const shellInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const shellInputRef = useRef<HTMLInputElement | null>(null)
   const shellConsoleRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -319,17 +322,6 @@ export function TerminalPane({
   }, [pane.prompt])
 
 
-  useEffect(() => {
-    const element = shellInputRef.current
-    if (!element) {
-      return
-    }
-
-    element.style.height = '0px'
-    const nextHeight = Math.min(Math.max(element.scrollHeight, 42), 126)
-    element.style.height = `${nextHeight}px`
-    element.style.overflowY = element.scrollHeight > 126 ? 'auto' : 'hidden'
-  }, [pane.shellCommand])
 
   useEffect(() => {
     const element = shellConsoleRef.current
@@ -338,7 +330,7 @@ export function TerminalPane({
     }
 
     element.scrollTop = element.scrollHeight
-  }, [pane.shellOutput])
+  }, [pane.shellOutput, pane.shellCommand])
 
   const catalog = catalogs[pane.provider]
   const currentModel = catalog?.models.find((model) => model.id === pane.model) ?? catalog?.models[0]
@@ -431,6 +423,7 @@ export function TerminalPane({
 
           <div className="pane-header-actions pane-action-stack">
             <div className="pane-action-row icon-row">
+              <button type="button" className="icon-button" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} title={UI.backToTop}><ArrowUp size={16} /></button>
               <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
 
               <details className="pane-menu" ref={menuRef} open={isMenuOpen} onToggle={(event) => setIsMenuOpen((event.currentTarget as HTMLDetailsElement).open)}>
@@ -532,10 +525,13 @@ export function TerminalPane({
         </section>
 
         <div className="pane-accordion-group">
-          <details className="pane-accordion settings-accordion">
+          <details className="pane-accordion settings-accordion" open={pane.settingsOpen} onToggle={(event) => onUpdate(pane.id, { settingsOpen: (event.currentTarget as HTMLDetailsElement).open })}>
             <summary className="accordion-summary">
               <span className="accordion-label"><Settings2 size={15} />{UI.settings}</span>
-              <span className="accordion-value">{catalog?.label ?? pane.provider} / {currentModel?.name ?? pane.model}</span>
+              <span className="accordion-meta">
+                <span className="accordion-value">{catalog?.label ?? pane.provider} / {currentModel?.name ?? pane.model}</span>
+                <span className={`accordion-caret ${pane.settingsOpen ? 'is-open' : ''}`}><ChevronDown size={14} /></span>
+              </span>
             </summary>
             <div className="accordion-body">
               <div className="pane-meta-grid compact-grid">
@@ -572,55 +568,13 @@ export function TerminalPane({
               <p className="field-note">{pane.provider === 'codex' ? UI.readonlyCodex : UI.styleHint}</p>
             </div>
           </details>
-
-          <details className="pane-accordion shell-accordion">
-            <summary className="accordion-summary">
-              <span className="accordion-label"><Square size={15} />{UI.embeddedTerminal}</span>
-              <span className="accordion-value">{currentShellPath || (pane.workspaceMode === 'local' ? UI.workspaceUnset : UI.sshUnset)}</span>
-            </summary>
-            <div className="accordion-body shell-panel">
-              <div className="output-surface console-output shell-console" aria-label="embedded-terminal-output" ref={shellConsoleRef}>
-                {pane.shellOutput ? <pre>{pane.shellOutput}</pre> : null}
-              </div>
-              <div className="shell-input-row">
-                <div className="shell-command-line">
-                  <span className="shell-prompt">{shellPromptLabel}</span>
-                  <textarea
-                    ref={shellInputRef}
-                    value={pane.shellCommand}
-                    onChange={(event) => onUpdate(pane.id, { shellCommand: event.target.value })}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey && canRunShell && !pane.shellRunning) {
-                        event.preventDefault()
-                        onRunShell(pane.id)
-                      }
-                    }}
-                  />
-                </div>
-                <div className="shell-input-actions">
-                  {pane.shellRunning ? (
-                    <button type="button" className="danger-button shell-action-button" onClick={() => onStopShell(pane.id)}><Square size={16} />{UI.terminalStop}</button>
-                  ) : (
-                    <button type="button" className="secondary-button shell-action-button" disabled={!canRunShell} onClick={() => onRunShell(pane.id)}><Play size={16} />{UI.terminalRun}</button>
-                  )}
-                  <button type="button" className="secondary-button shell-action-button" disabled={!pane.shellOutput} onClick={() => onUpdate(pane.id, { shellOutput: '', shellLastError: null, shellLastExitCode: null })}><Trash2 size={16} />{UI.terminalClear}</button>
-                </div>
-              </div>
-              <div className="shell-status-row">
-                <span className="workspace-caption">{UI.terminalPath}: {currentShellPath || '-'}</span>
-                {pane.shellRunning ? (
-                  <span className="shell-status running"><LoaderCircle size={14} className="spin" />{UI.runningHint}</span>
-                ) : pane.shellLastError ? (
-                  <span className="shell-status error"><AlertTriangle size={14} />{pane.shellLastError}</span>
-                ) : null}
-              </div>
-            </div>
-          </details>
-
-          <details className="pane-accordion workspace-accordion">
+          <details className="pane-accordion workspace-accordion" open={pane.workspaceOpen} onToggle={(event) => onUpdate(pane.id, { workspaceOpen: (event.currentTarget as HTMLDetailsElement).open })}>
             <summary className="accordion-summary">
               <span className="accordion-label"><FolderOpen size={15} />{UI.workspace}</span>
-              <span className="accordion-value">{workspaceLabel}</span>
+              <span className="accordion-meta">
+                <span className="accordion-value">{workspaceLabel}</span>
+                <span className={`accordion-caret ${pane.workspaceOpen ? 'is-open' : ''}`}><ChevronDown size={14} /></span>
+              </span>
             </summary>
             <div className="accordion-body">
               <div className="workspace-switch compact-switch">
@@ -650,7 +604,10 @@ export function TerminalPane({
                   <div className="browser-panel workspace-browser-shell">
                     <div className="section-headline compact-headline browser-headline">
                       <div><strong>{UI.folderContents}</strong><span className="browser-current-path">{getShortPathLabel(pane.localBrowserPath || pane.localWorkspacePath || '')}</span></div>
-                      <div className="browser-toolbar-actions">{localParentPath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, localParentPath)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>}</div>
+                      <div className="browser-toolbar-actions">
+                        <button type="button" className="ghost-button compact-ghost" disabled={(pane.localBrowserPath || pane.localWorkspacePath) === pane.localWorkspacePath} onClick={() => onBrowseLocal(pane.id, pane.localWorkspacePath)}><Home size={14} />{UI.workspaceTop}</button>
+                        {localParentPath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, localParentPath)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>}
+                      </div>
                     </div>
                     <div className="browser-simple-list browser-list-shell">
                       {pane.localBrowserEntries.length > 0 ? (
@@ -686,12 +643,10 @@ export function TerminalPane({
                     </label>
                   </div>
 
-                  <div className="inline-actions wrap-actions compact-utility-row">
-                    <button type="button" className="secondary-button" onClick={() => onLoadRemote(pane.id)}><Wifi size={16} />{UI.refreshConnection}</button>
-                  </div>
+
 
                   <details className="ssh-mini-accordion">
-                    <summary className="ssh-mini-summary">{UI.connectionSettings}</summary>
+                    <summary className="ssh-mini-summary"><span className="ssh-mini-summary-row"><span>{UI.connectionSettings}</span><span className="ssh-mini-caret"><ChevronDown size={14} /></span></span></summary>
                     <div className="pane-meta-grid compact-grid ssh-config-grid compact-ssh-grid">
                       <label><span>User</span><input value={pane.sshUser} onChange={(event) => onUpdate(pane.id, { sshUser: event.target.value })} placeholder="yourusername / ubuntu" /></label>
                       <label><span>Port</span><input value={pane.sshPort} onChange={(event) => onUpdate(pane.id, { sshPort: event.target.value })} placeholder="22" /></label>
@@ -724,7 +679,7 @@ export function TerminalPane({
                   </details>
 
                   <details className="ssh-mini-accordion">
-                    <summary className="ssh-mini-summary">{UI.connectionSupport}</summary>
+                    <summary className="ssh-mini-summary"><span className="ssh-mini-summary-row"><span>{UI.connectionSupport}</span><span className="ssh-mini-caret"><ChevronDown size={14} /></span></span></summary>
                     <div className="workspace-stack ssh-support-stack">
                       <div className="pane-meta-grid compact-grid ssh-config-grid compact-ssh-grid">
                         <label><span>ProxyJump</span><input value={pane.sshProxyJump} onChange={(event) => onUpdate(pane.id, { sshProxyJump: event.target.value })} placeholder="jump-host" /></label>
@@ -741,6 +696,10 @@ export function TerminalPane({
                       )}
                     </div>
                   </details>
+
+                  <div className="inline-actions wrap-actions compact-utility-row">
+                    <button type="button" className="secondary-button" onClick={() => onLoadRemote(pane.id)}><Wifi size={16} />{UI.refreshConnection}</button>
+                  </div>
 
                   <div className={`browser-panel workspace-browser-shell remote-browser-shell ${remoteDropTarget === remoteBaseDropPath ? 'is-drop-active' : ''}`} onDragOver={(event) => { if (remoteBaseDropPath) { allowRemoteDrop(event, remoteBaseDropPath) } }} onDragLeave={clearRemoteDrop} onDrop={(event) => { if (remoteBaseDropPath) { handleRemoteDrop(event, remoteBaseDropPath) } }}>
                     <div className="section-headline compact-headline browser-headline ssh-browser-headline">
@@ -776,6 +735,41 @@ export function TerminalPane({
               )}
             </div>
           </details>
+          <details className="pane-accordion shell-accordion" open={pane.shellOpen} onToggle={(event) => onUpdate(pane.id, { shellOpen: (event.currentTarget as HTMLDetailsElement).open })}>
+            <summary className="accordion-summary">
+              <span className="accordion-label"><Square size={15} />{UI.embeddedTerminal}</span>
+              <span className="accordion-meta">
+                <span className="accordion-value">{currentShellPath || (pane.workspaceMode === 'local' ? UI.workspaceUnset : UI.sshUnset)}</span>
+                <span className={`accordion-caret ${pane.shellOpen ? 'is-open' : ''}`}><ChevronDown size={14} /></span>
+              </span>
+            </summary>
+            <div className="accordion-body shell-panel shell-panel-inline">
+              <div className="output-surface console-output shell-console shell-console-interactive" aria-label="embedded-terminal-output" ref={shellConsoleRef} onClick={() => shellInputRef.current?.focus()}>
+                {pane.shellOutput ? <pre>{pane.shellOutput}</pre> : null}
+                <div className="shell-console-entry">
+                  <span className="shell-prompt">{shellPromptLabel}</span>
+                  <input
+                    ref={shellInputRef}
+                    className="shell-inline-input"
+                    value={pane.shellCommand}
+                    onChange={(event) => onUpdate(pane.id, { shellCommand: event.target.value })}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && canRunShell && !pane.shellRunning) {
+                        event.preventDefault()
+                        onRunShell(pane.id)
+                      }
+                    }}
+                    disabled={pane.shellRunning}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                  />
+                  {pane.shellRunning ? <LoaderCircle size={14} className="spin shell-inline-spinner" /> : null}
+                </div>
+              </div>
+            </div>
+          </details>
+
           {(visibleSharedContext.length > 0 || pane.attachedContextIds.length > 0) && (
             <details className="pane-accordion">
               <summary className="accordion-summary">
@@ -862,3 +856,4 @@ export function TerminalPane({
     </>
   )
 }
+
