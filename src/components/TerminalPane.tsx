@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent 
 import {
   AlertTriangle,
   Bot,
-  CheckCheck,
   ChevronLeft,
   Copy,
   Ellipsis,
@@ -22,7 +21,7 @@ import {
   Wifi,
   X
 } from 'lucide-react'
-import type { LocalWorkspace, PaneState, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
+import type { HostPlatform, LocalWorkspace, PaneState, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
 
 interface TransferOptions {
   localPath?: string
@@ -38,6 +37,7 @@ interface TerminalPaneProps {
   sshHosts: SshHost[]
   sharedContext: SharedContextItem[]
   now: number
+  hostPlatform: HostPlatform
   isFocused: boolean
   onFocus: (paneId: string) => void
   onUpdate: (paneId: string, updates: Partial<PaneState>) => void
@@ -48,6 +48,7 @@ interface TerminalPaneProps {
   onShare: (paneId: string) => void
   onShareToPane: (sourcePaneId: string, targetPaneId: string) => void
   onCopyLatest: (paneId: string) => void
+  onCopyOutput: (paneId: string) => void
   onDuplicate: (paneId: string) => void
   onStartNewSession: (paneId: string) => void
   onResetSession: (paneId: string) => void
@@ -82,17 +83,16 @@ const UI = {
   shareGlobal: '\u5168\u4f53\u5171\u6709',
   shareDirect: '\u500b\u5225\u5171\u6709',
   copyResponse: '\u5fdc\u7b54\u3092\u30b3\u30d4\u30fc',
+  copyOutput: '\u51fa\u529b\u3092\u30b3\u30d4\u30fc',
   duplicatePane: '\u30da\u30a4\u30f3\u3092\u8907\u88fd',
   resetConversation: '\u4f1a\u8a71\u3092\u521d\u671f\u5316',
   autoShare: '\u5b8c\u4e86\u6642\u306b\u5168\u4f53\u5171\u6709',
   deletePane: '\u30da\u30a4\u30f3\u3092\u524a\u9664',
-  openCmd: 'CMD \u3092\u958b\u304f',
   openVsCode: 'VSCode\u3067\u958b\u304f',
   output: '\u51fa\u529b',
   outputEmpty: '\u307e\u3060\u51fa\u529b\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   outputPlaceholder: '\u3053\u3053\u306b\u5b9f\u884c\u7d50\u679c\u3068\u6700\u65b0\u306e\u5fdc\u7b54\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   outputExpand: '\u51fa\u529b\u3092\u62e1\u5927',
-  outputExpanded: '\u51fa\u529b\u306e\u62e1\u5927\u8868\u793a',
   instruction: '\u6307\u793a',
   workspaceUnset: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u672a\u8a2d\u5b9a',
   promptPlaceholder: '\u3084\u308a\u305f\u3044\u3053\u3068\u3092\u5165\u529b\u3057\u307e\u3059\u3002Ctrl+Enter \u3067\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002',
@@ -235,6 +235,7 @@ export function TerminalPane({
   sshHosts,
   sharedContext,
   now,
+  hostPlatform,
   isFocused,
   onFocus,
   onUpdate,
@@ -245,6 +246,7 @@ export function TerminalPane({
   onShare,
   onShareToPane,
   onCopyLatest,
+  onCopyOutput,
   onDuplicate,
   onStartNewSession,
   onResetSession,
@@ -312,6 +314,7 @@ export function TerminalPane({
   const isStalled = pane.status === 'running' && pane.lastActivityAt !== null && now - pane.lastActivityAt > 45_000
   const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
+  const openTerminalLabel = hostPlatform === 'windows' ? '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8' : '\u30bf\u30fc\u30df\u30ca\u30eb'
   const localParentPath = useMemo(() => getLocalParentPath(pane.localBrowserPath || pane.localWorkspacePath, pane.localWorkspacePath), [pane.localBrowserPath, pane.localWorkspacePath])
   const sshDisplayName = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim()
   const workspaceLabel = pane.workspaceMode === 'local' ? selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || UI.unselected) : pane.remoteWorkspacePath ? getShortPathLabel(pane.remoteWorkspacePath) : sshDisplayName || UI.sshUnset
@@ -389,10 +392,7 @@ export function TerminalPane({
 
           <div className="pane-header-actions pane-action-stack">
             <div className="pane-action-row icon-row">
-              <button type="button" className="secondary-button pane-session-button" disabled={pane.status === 'running'} onClick={() => onStartNewSession(pane.id)}>
-                <RefreshCcw size={16} />
-                {UI.newSession}
-              </button>
+              <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
 
               <details className="pane-menu" ref={menuRef} open={isMenuOpen} onToggle={(event) => setIsMenuOpen((event.currentTarget as HTMLDetailsElement).open)}>
                 <summary className="icon-button" aria-label={UI.paneMenu}>
@@ -423,12 +423,12 @@ export function TerminalPane({
                 </div>
               </details>
 
-              <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
             </div>
 
             <div className="pane-action-row launch-row">
-              <button type="button" className="secondary-button pane-launch-button" disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath} onClick={() => onOpenCommandPrompt(pane.id)}>{UI.openCmd}</button>
+              <button type="button" className="secondary-button pane-session-button" disabled={pane.status === 'running'} onClick={() => onStartNewSession(pane.id)}><RefreshCcw size={16} />{UI.newSession}</button>
               <button type="button" className="secondary-button pane-vscode-button" disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath} onClick={() => onOpenWorkspace(pane.id)}><FolderOpen size={16} />{UI.openVsCode}</button>
+              <button type="button" className="secondary-button pane-launch-button" disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath} onClick={() => onOpenCommandPrompt(pane.id)}>{openTerminalLabel}</button>
             </div>
           </div>
         </header>
@@ -768,11 +768,11 @@ export function TerminalPane({
         <div className="output-modal-backdrop">
           <div className="output-modal" onClick={(event) => event.stopPropagation()}>
             <div className="panel-header slim">
-              <div><h3>{UI.outputExpanded}</h3><p>{pane.title}</p></div>
+              <div><h3>{UI.output}</h3><p>{pane.title}</p></div>
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(false)} title="close"><X size={16} /></button>
             </div>
             <div className="output-modal-body">{outputText ? <pre>{outputText}</pre> : <p className="panel-placeholder">{UI.outputEmpty}</p>}</div>
-            <div className="output-modal-footer"><button type="button" className="secondary-button" onClick={() => onCopyLatest(pane.id)}><CheckCheck size={16} />{UI.copyResponse}</button></div>
+            <div className="output-modal-footer"><button type="button" className="secondary-button" disabled={!outputText} onClick={() => onCopyOutput(pane.id)}><Copy size={16} />{UI.copyOutput}</button></div>
           </div>
         </div>
       )}

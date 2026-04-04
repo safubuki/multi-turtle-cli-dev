@@ -3,6 +3,7 @@ export type PaneStatus = 'idle' | 'running' | 'completed' | 'attention' | 'error
 export type WorkspaceMode = 'local' | 'ssh'
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
 export type AutonomyMode = 'balanced' | 'max'
+export type HostPlatform = 'windows' | 'linux' | 'macos' | 'unknown'
 
 export interface ProviderModelInfo {
   id: string
@@ -96,6 +97,7 @@ export interface BootstrapPayload {
   localWorkspaces: LocalWorkspace[]
   sshHosts: SshHost[]
   remoteRoots: string[]
+  hostPlatform: HostPlatform
   features: {
     vscode: boolean
     ssh: boolean

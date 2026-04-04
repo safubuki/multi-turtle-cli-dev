@@ -458,6 +458,52 @@ function getLatestAssistantText(pane: PaneState): string | null {
   return latestAssistant?.text ?? null
 }
 
+function getPaneOutputText(pane: Pick<PaneState, 'liveOutput' | 'lastResponse'>): string | null {
+  if (pane.liveOutput.trim()) {
+    return pane.liveOutput
+  }
+
+  if (pane.lastResponse?.trim()) {
+    return pane.lastResponse
+  }
+
+  return null
+}
+
+async function writeClipboardText(text: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {
+      // Fallback for environments where the async clipboard API is blocked.
+    }
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard API is unavailable')
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '0'
+  textarea.style.left = '0'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+
+  if (!copied) {
+    throw new Error('Copy command failed')
+  }
+}
+
 function getShareablePayload(pane: PaneState): { text: string | null; contentLabel: string } {
   if (pane.selectedSessionKey) {
     const selectedSession = pane.sessionHistory.find((session) => session.key === pane.selectedSessionKey)
@@ -1369,28 +1415,36 @@ function App() {
     }))
   }
 
-  const handleCopyLatest = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    const text = pane ? getLatestAssistantText(pane) : null
-    if (!text) {
+  const copyPaneText = async (paneId: string, text: string | null, successMessage: string) => {
+    if (!text?.trim()) {
       return
     }
 
     try {
-      await navigator.clipboard.writeText(text)
+      await writeClipboardText(text)
       const copiedAt = Date.now()
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '\u6700\u65b0\u51fa\u529b\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u3078\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f', copiedAt),
+        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', successMessage, copiedAt),
         lastActivityAt: copiedAt
       }))
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: '\u30b3\u30d4\u30fc\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        statusText: 'コピーに失敗しました',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
+  }
+
+  const handleCopyLatest = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    await copyPaneText(paneId, pane ? getLatestAssistantText(pane) : null, '最新応答をクリップボードへコピーしました')
+  }
+
+  const handleCopyOutput = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    await copyPaneText(paneId, pane ? getPaneOutputText(pane) : null, '表示中の出力をクリップボードへコピーしました')
   }
 
   const handleBrowseLocal = async (paneId: string, targetPath: string) => {
@@ -2026,8 +2080,9 @@ function App() {
         <div className="loading-panel">
           <Activity size={22} />
           <p>{'CLI \u30c7\u30c3\u30ad\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</p>
-          <h1>Multi Turtle CLI Develop Tool</h1>
-          <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck.</p>
+          <p className="eyebrow">MULTI CLI DEVELOPMENT TOOL</p>
+          <h1>Turtle AI Kantan Operator (T.A.K.O)</h1>
+          <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck. Remote-ready over SSH.</p>
         </div>
       </div>
     )
@@ -2039,9 +2094,9 @@ function App() {
 
       <header className="topbar">
         <div>
-          <p className="eyebrow">MULTI TURTLE CLI DEVELOP TOOL</p>
-          <h1>Multi Turtle CLI Develop Tool</h1>
-          <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck.</p>
+          <p className="eyebrow">MULTI CLI DEVELOPMENT TOOL</p>
+          <h1>Turtle AI Kantan Operator (T.A.K.O)</h1>
+          <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck. Remote-ready over SSH.</p>
         </div>
 
         <div className="topbar-actions">
@@ -2204,6 +2259,7 @@ function App() {
                 sshHosts={bootstrap?.sshHosts ?? []}
                 sharedContext={sharedContext}
                 now={now}
+                hostPlatform={bootstrap?.hostPlatform ?? 'unknown'}
                 isFocused={pane.id === focusedPaneId}
                 onFocus={(paneId) => handleSelectPane(paneId)}
                 onUpdate={updatePane}
@@ -2216,6 +2272,7 @@ function App() {
                   shareFromPane(sourcePaneId, undefined, { scope: 'direct', targetPaneId })
                 }
                 onCopyLatest={(paneId) => void handleCopyLatest(paneId)}
+                onCopyOutput={(paneId) => void handleCopyOutput(paneId)}
                 onDuplicate={handleDuplicatePane}
                 onStartNewSession={handleStartNewSession}
                 onResetSession={handleResetSession}

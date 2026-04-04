@@ -31,6 +31,19 @@ function normalizeAutonomyMode(value: unknown): AutonomyMode {
   return value === 'max' ? 'max' : 'balanced'
 }
 
+function detectHostPlatform(): 'windows' | 'linux' | 'macos' | 'unknown' {
+  if (process.platform === 'win32') {
+    return 'windows'
+  }
+  if (process.platform === 'linux') {
+    return 'linux'
+  }
+  if (process.platform === 'darwin') {
+    return 'macos'
+  }
+  return 'unknown'
+}
+
 function normalizeConnection(value: unknown): SshConnectionOptions | undefined {
   if (!value || typeof value !== 'object') {
     return undefined
@@ -114,6 +127,7 @@ app.get('/api/bootstrap', async (_req, res) => {
       localWorkspaces,
       sshHosts,
       remoteRoots: getRemoteWorkspaceRoots(),
+      hostPlatform: detectHostPlatform(),
       features: {
         vscode: true,
         ssh: true,
@@ -609,5 +623,5 @@ app.post('/api/run/stop', (req, res) => {
 })
 
 app.listen(port, () => {
-  console.log(`Multi Turtle CLI Deck server listening on http://localhost:${port}`)
+  console.log(`T.A.K.O server listening on http://localhost:${port}`)
 })
