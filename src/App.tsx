@@ -6,7 +6,6 @@ import {
   Grid2x2,
   LayoutPanelTop,
   Plus,
-  RefreshCcw,
   SplitSquareHorizontal,
   Trash2,
   Wifi,
@@ -28,7 +27,9 @@ import {
   pickLocalWorkspace,
   pickSaveFilePath,
   runPaneStream,
+  runShellStream,
   stopPaneRun,
+  stopShellRun,
   transferSshPath
 } from './lib/api'
 import type {
@@ -45,6 +46,7 @@ import type {
   ReasoningEffort,
   RemoteDirectoryEntry,
   RunStreamEvent,
+  ShellRunEvent,
   SharedContextItem,
   SshConnectionOptions,
   SshHost,
@@ -75,8 +77,10 @@ const MAX_LOGS = 24
 const MAX_STREAM_ENTRIES = 80
 const MAX_SESSION_HISTORY = 18
 const MAX_LIVE_OUTPUT = 64_000
+const MAX_SHELL_OUTPUT = 48_000
 const MAX_SHARED_CONTEXT = 16
 const STALL_MS = 45_000
+const TITLE_IMAGE_URL = new URL('../assets/title.png', import.meta.url).href
 
 function createId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
@@ -105,6 +109,30 @@ function appendLiveOutputChunk(existing: string, incoming: string): string {
 
   return clipText(`${existing}${normalized}`, MAX_LIVE_OUTPUT)
 }
+
+function appendShellOutputLine(existing: string, incoming: string): string {
+  const normalized = sanitizeTerminalText(incoming).trimEnd()
+  if (!normalized) {
+    return existing
+  }
+
+  return clipText(existing.trim() ? `${existing.trimEnd()}\n${normalized}` : normalized, MAX_SHELL_OUTPUT)
+}
+
+function buildShellPromptLabel(pane: PaneState, cwd?: string | null): string {
+  const currentPath =
+    pane.workspaceMode === 'local'
+      ? (cwd?.trim() || pane.localShellPath.trim() || pane.localWorkspacePath.trim() || '~')
+      : (cwd?.trim() || pane.remoteShellPath.trim() || pane.remoteWorkspacePath.trim() || '~')
+
+  if (pane.workspaceMode === 'local') {
+    return `${currentPath}>`
+  }
+
+  const sshLabel = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim() || 'ssh'
+  return `${sshLabel}:${currentPath}$`
+}
+
 
 function appendLiveOutputLine(existing: string, incoming: string): string {
   const normalized = sanitizeTerminalText(incoming).trim()
@@ -376,6 +404,14 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     autonomyMode: 'balanced',
     status: 'idle',
     statusText: statusLabel('idle'),
+    shellCommand: '',
+    shellOutput: '',
+    localShellPath: firstWorkspace?.path ?? '',
+    remoteShellPath: '',
+    shellRunning: false,
+    shellLastExitCode: null,
+    shellLastError: null,
+    shellLastRunAt: null,
     workspaceMode: 'local',
     localWorkspacePath: firstWorkspace?.path ?? '',
     localBrowserPath: '',
@@ -699,8 +735,13 @@ function normalizePane(
         .map((entry) => normalizeRemoteDirectoryEntry(entry))
         .filter((entry): entry is RemoteDirectoryEntry => Boolean(entry))
     : []
+  const rawStatusText = typeof rawPane.statusText === 'string' ? rawPane.statusText : ''
   const statusText =
-    rawStatus === 'running' ? '\u524d\u56de\u306e\u5b9f\u884c\u306f\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f' : typeof rawPane.statusText === 'string' ? rawPane.statusText : statusLabel(restoredStatus)
+    rawStatus === 'running'
+      ? '\u524d\u56de\u306e\u5b9f\u884c\u306f\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f'
+      : rawStatusText.includes('外部ターミナル')
+        ? statusLabel(restoredStatus)
+        : rawStatusText || statusLabel(restoredStatus)
 
   return {
     id: rawPane.id ?? createId('pane'),
@@ -711,6 +752,14 @@ function normalizePane(
     autonomyMode: rawPane.autonomyMode === 'max' ? 'max' : 'balanced',
     status: restoredStatus,
     statusText,
+    shellCommand: typeof rawPane.shellCommand === 'string' ? rawPane.shellCommand : '',
+    shellOutput: typeof rawPane.shellOutput === 'string' ? clipText(rawPane.shellOutput, MAX_SHELL_OUTPUT) : '',
+    localShellPath: typeof rawPane.localShellPath === 'string' && rawPane.localShellPath.trim() ? rawPane.localShellPath : localWorkspacePath,
+    remoteShellPath: typeof rawPane.remoteShellPath === 'string' ? rawPane.remoteShellPath : '',
+    shellRunning: false,
+    shellLastExitCode: typeof rawPane.shellLastExitCode === 'number' ? rawPane.shellLastExitCode : null,
+    shellLastError: typeof rawPane.shellLastError === 'string' ? rawPane.shellLastError : null,
+    shellLastRunAt: typeof rawPane.shellLastRunAt === 'number' ? rawPane.shellLastRunAt : null,
     workspaceMode,
     localWorkspacePath,
     localBrowserPath: typeof rawPane.localBrowserPath === 'string' ? rawPane.localBrowserPath : '',
@@ -790,6 +839,8 @@ function App() {
   const controllersRef = useRef<Record<string, AbortController>>({})
   const stopRequestedRef = useRef<Set<string>>(new Set())
   const streamErroredRef = useRef<Set<string>>(new Set())
+  const shellControllersRef = useRef<Record<string, AbortController>>({})
+  const shellStopRequestedRef = useRef<Set<string>>(new Set())
 
   panesRef.current = panes
   localWorkspacesRef.current = localWorkspaces
@@ -803,6 +854,9 @@ function App() {
   useEffect(() => {
     return () => {
       for (const controller of Object.values(controllersRef.current)) {
+        controller.abort()
+      }
+      for (const controller of Object.values(shellControllersRef.current)) {
         controller.abort()
       }
     }
@@ -1498,6 +1552,7 @@ function App() {
         localWorkspacePath: nextWorkspacePath,
         localBrowserPath: nextWorkspacePath,
         localBrowserEntries: payload.entries,
+        localShellPath: nextWorkspacePath,
         localBrowserLoading: false,
         lastError: null
       }))
@@ -1632,7 +1687,8 @@ function App() {
               ...item,
               localWorkspacePath: fallbackPath,
               localBrowserPath: '',
-              localBrowserEntries: []
+              localBrowserEntries: [],
+              localShellPath: fallbackPath
             }
           : item
       )
@@ -1681,16 +1737,171 @@ function App() {
       await openTargetInCommandPrompt(target)
       updatePane(paneId, {
         status: 'idle',
-        statusText: '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u8d77\u52d5\u3057\u307e\u3057\u305f',
+        statusText: '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3057\u307e\u3057\u305f',
         lastError: null
       })
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: 'CMD \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        statusText: '\u30bf\u30fc\u30df\u30ca\u30eb\u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
+  }
+
+  const handleRunShell = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane) {
+      return
+    }
+
+    const command = pane.shellCommand.trim()
+    if (!command) {
+      updatePane(paneId, {
+        shellLastError: '\u30b3\u30de\u30f3\u30c9\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044'
+      })
+      return
+    }
+
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    if (!target) {
+      updatePane(paneId, {
+        shellLastError: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u307e\u305f\u306f SSH \u63a5\u7d9a\u5148\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044'
+      })
+      return
+    }
+
+    if (!bootstrap?.features.shell) {
+      updatePane(paneId, {
+        shellLastError: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
+      })
+      return
+    }
+
+    if (shellControllersRef.current[paneId]) {
+      return
+    }
+
+    const cwd = pane.workspaceMode === 'local'
+      ? (pane.localShellPath.trim() || pane.localWorkspacePath.trim())
+      : (pane.remoteShellPath.trim() || pane.remoteWorkspacePath.trim())
+
+    const startedAt = Date.now()
+    const controller = new AbortController()
+    shellControllersRef.current[paneId] = controller
+    shellStopRequestedRef.current.delete(paneId)
+
+    updatePane(paneId, {
+      shellRunning: true,
+      shellCommand: '',
+      shellLastError: null,
+      shellLastExitCode: null,
+      shellLastRunAt: startedAt,
+      shellOutput: appendShellOutputLine(pane.shellOutput, `${buildShellPromptLabel(pane, cwd)} ${command}`)
+    })
+
+    try {
+      await runShellStream(
+        {
+          paneId,
+          target,
+          command,
+          cwd: cwd || null
+        },
+        (event: ShellRunEvent) => {
+          const eventTime = Date.now()
+          mutatePane(paneId, (current) => {
+            if (event.type === 'stdout') {
+              return {
+                ...current,
+                shellOutput: appendShellOutputLine(current.shellOutput, event.text),
+                shellLastRunAt: eventTime
+              }
+            }
+
+            if (event.type === 'stderr') {
+              return {
+                ...current,
+                shellOutput: appendShellOutputLine(current.shellOutput, event.text),
+                shellLastRunAt: eventTime
+              }
+            }
+
+            if (event.type === 'cwd') {
+              return current.workspaceMode === 'local'
+                ? {
+                    ...current,
+                    localShellPath: event.cwd,
+                    shellLastRunAt: eventTime
+                  }
+                : {
+                    ...current,
+                    remoteShellPath: event.cwd,
+                    shellLastRunAt: eventTime
+                  }
+            }
+
+            if (event.type === 'exit') {
+              return current.workspaceMode === 'local'
+                ? {
+                    ...current,
+                    shellRunning: false,
+                    localShellPath: event.cwd,
+                    shellLastExitCode: event.exitCode,
+                    shellLastError: null,
+                    shellLastRunAt: eventTime
+                  }
+                : {
+                    ...current,
+                    shellRunning: false,
+                    remoteShellPath: event.cwd,
+                    shellLastExitCode: event.exitCode,
+                    shellLastError: null,
+                    shellLastRunAt: eventTime
+                  }
+            }
+
+            return current
+          })
+        },
+        controller.signal
+      )
+    } catch (error) {
+      if (!shellStopRequestedRef.current.has(paneId)) {
+        updatePane(paneId, {
+          shellRunning: false,
+          shellLastError: error instanceof Error ? error.message : String(error),
+          shellLastRunAt: Date.now()
+        })
+      }
+    } finally {
+      delete shellControllersRef.current[paneId]
+      shellStopRequestedRef.current.delete(paneId)
+      mutatePane(paneId, (current) => ({
+        ...current,
+        shellRunning: false
+      }))
+    }
+  }
+
+  const handleStopShell = async (paneId: string) => {
+    shellStopRequestedRef.current.add(paneId)
+    shellControllersRef.current[paneId]?.abort()
+    delete shellControllersRef.current[paneId]
+
+    try {
+      await stopShellRun(paneId)
+    } catch {
+      // ignore best-effort stop
+    }
+
+    mutatePane(paneId, (pane) => ({
+      ...pane,
+      shellRunning: false,
+      shellLastError: null,
+      shellOutput: appendShellOutputLine(pane.shellOutput, '[stopped]'),
+      shellLastRunAt: Date.now()
+    }))
   }
 
   const handleOpenPathInVsCode = async (paneId: string, path: string, resourceType: 'folder' | 'file') => {
@@ -1788,6 +1999,7 @@ function App() {
             sshDiagnostics: inspectionPayload.diagnostics,
             sshLocalPath: item.sshLocalPath || localWorkspacesRef.current[0]?.path || '',
             sshRemotePath: item.sshRemotePath || item.remoteWorkspacePath || browsePayload.path,
+            remoteShellPath: item.remoteShellPath || item.remoteWorkspacePath || browsePayload.path,
             remoteWorkspaces: workspacePayload.workspaces,
             remoteAvailableProviders: inspectionPayload.availableProviders,
             remoteHomeDirectory: inspectionPayload.homeDirectory,
@@ -2103,21 +2315,13 @@ function App() {
       <div className="background-layer" />
 
       <header className="topbar">
-        <div>
-          <p className="eyebrow">MULTI CLI DEVELOPMENT TOOL</p>
-          <h1>Turtle AI Kantan Operator (T.A.K.O)</h1>
-          <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck. Remote-ready over SSH.</p>
-        </div>
-
-        <div className="topbar-actions">
-          <button type="button" className="secondary-button" onClick={() => void refreshBootstrap()}>
-            <RefreshCcw size={16} />
-            {'\u518d\u8aad\u8fbc'}
-          </button>
-          <button type="button" className="primary-button" onClick={handleAddPane}>
-            <Plus size={16} />
-            {'\u30da\u30a4\u30f3\u8ffd\u52a0'}
-          </button>
+        <div className="topbar-brand">
+          <img src={TITLE_IMAGE_URL} alt="T.A.K.O" className="topbar-title-mark" />
+          <div className="topbar-copy-block">
+            <p className="eyebrow">MULTI CLI DEVELOPMENT TOOL</p>
+            <h1>Turtle AI Kantan Operator (T.A.K.O)</h1>
+            <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck. Remote-ready over SSH.</p>
+          </div>
         </div>
       </header>
 
@@ -2210,6 +2414,10 @@ function App() {
         <main className="workspace-stage full-stage">
           <div className="stage-toolbar">
             <div className="toolbar-group">
+              <button type="button" className="primary-button" onClick={handleAddPane}>
+                <Plus size={16} />
+                {'\u30da\u30a4\u30f3\u8ffd\u52a0'}
+              </button>
               <button
                 type="button"
                 className={layout === 'quad' ? 'switch-button active' : 'switch-button'}
@@ -2269,7 +2477,6 @@ function App() {
                 sshHosts={bootstrap?.sshHosts ?? []}
                 sharedContext={sharedContext}
                 now={now}
-                hostPlatform={bootstrap?.hostPlatform ?? 'unknown'}
                 isFocused={pane.id === focusedPaneId}
                 onFocus={(paneId) => handleSelectPane(paneId)}
                 onUpdate={updatePane}
@@ -2293,6 +2500,8 @@ function App() {
                 onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
                 onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}
                 onOpenCommandPrompt={(paneId) => void handleOpenCommandPrompt(paneId)}
+                onRunShell={(paneId) => void handleRunShell(paneId)}
+                onStopShell={(paneId) => void handleStopShell(paneId)}
                 onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
                 onAddLocalWorkspace={(paneId) => void handleAddLocalWorkspace(paneId)}
                 onSelectLocalWorkspace={(paneId, workspacePath) => void handleSelectLocalWorkspace(paneId, workspacePath)}

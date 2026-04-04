@@ -103,6 +103,7 @@ export interface BootstrapPayload {
     ssh: boolean
     remoteDiscovery: boolean
     remoteBrowser: boolean
+    shell?: boolean
   }
   spec: SpecSection[]
 }
@@ -164,6 +165,14 @@ export interface SharedContextItem {
 }
 
 export interface PaneState {
+  shellCommand: string
+  shellOutput: string
+  localShellPath: string
+  remoteShellPath: string
+  shellRunning: boolean
+  shellLastExitCode: number | null
+  shellLastError: string | null
+  shellLastRunAt: number | null
   id: string
   title: string
   provider: ProviderId
@@ -236,6 +245,36 @@ export interface RunPaneResponse {
   statusHint: 'completed' | 'attention' | 'error'
   sessionId: string | null
 }
+
+export interface ShellRunRequest {
+  paneId: string
+  target: WorkspaceTarget
+  command: string
+  cwd: string | null
+}
+
+export type ShellRunEvent =
+  | {
+      type: 'stdout'
+      text: string
+    }
+  | {
+      type: 'stderr'
+      text: string
+    }
+  | {
+      type: 'cwd'
+      cwd: string
+    }
+  | {
+      type: 'exit'
+      exitCode: number
+      cwd: string
+    }
+  | {
+      type: 'error'
+      message: string
+    }
 
 export type RunStreamEvent =
   | {

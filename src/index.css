@@ -79,8 +79,27 @@ button {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 12px;
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.topbar-copy-block {
+  min-width: 0;
+}
+
+.topbar-title-mark {
+  display: block;
+  width: clamp(82px, 10vw, 122px);
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.28));
 }
 
 .eyebrow {
@@ -131,6 +150,10 @@ button {
   flex-wrap: wrap;
 }
 
+.toolbar-group {
+  flex-wrap: wrap;
+}
+
 .primary-button,
 .secondary-button,
 .danger-button,
@@ -144,6 +167,8 @@ button {
   border-radius: 999px;
   border: 1px solid transparent;
   flex-shrink: 0;
+  min-height: 42px;
+  justify-content: center;
   transition:
     transform 160ms ease,
     border-color 160ms ease,
@@ -681,12 +706,13 @@ button {
 }
 
 .tiny-badge {
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 5px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  color: #a5b4bd;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
 .tiny-badge.accent {
@@ -1200,8 +1226,8 @@ textarea {
 }
 
 .status-strip.compact .tiny-badge {
-  padding: 5px 9px;
-  font-size: 0.74rem;
+  padding: 4px 8px;
+  font-size: 0.73rem;
 }
 
 .primary-panel,
@@ -1567,40 +1593,114 @@ textarea {
   padding: 8px 10px;
 }
 
-.pane-menu-surface > .menu-action:nth-of-type(1),
-.pane-menu-surface > .menu-action:nth-of-type(3) {
-  font-size: 0;
+.shell-panel {
+  gap: 12px;
 }
 
-.pane-menu-surface > .menu-action:nth-of-type(1)::after {
-  content: '全体共有';
+.shell-console {
+  min-height: 220px;
+  max-height: 320px;
+  overflow: auto;
+  background: #0b1014;
+  font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
+  line-height: 1.55;
+  scroll-behavior: smooth;
+}
+
+.shell-console pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
+  font-size: 0.92rem;
+}
+
+.shell-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.shell-command-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(132, 146, 166, 0.18);
+  background: #0b1014;
+  font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
+}
+
+.shell-prompt {
+  flex: 0 0 auto;
+  padding-top: 10px;
+  color: #c7f6ec;
   font-size: 0.9rem;
+  white-space: nowrap;
 }
 
-.pane-menu-surface > .menu-action:nth-of-type(3)::after {
-  content: 'ペインを複製';
-  font-size: 0.9rem;
+.shell-input-row textarea {
+  width: 100%;
+  min-height: 42px;
+  max-height: 126px;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #eef4f6;
+  font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
+  font-size: 0.94rem;
+  line-height: 1.55;
+  overflow-y: hidden;
 }
 
-.menu-section-label {
-  font-size: 0;
+.shell-input-row textarea::placeholder {
+  color: #74818b;
 }
 
-.menu-section-label::after {
-  content: '個別共有';
-  font-size: 0.78rem;
+.shell-input-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.pane-menu-surface .menu-toggle span {
-  font-size: 0;
+.shell-action-button {
+  min-width: 110px;
+  min-height: 42px;
+  border-radius: 14px;
 }
 
-.pane-menu-surface .menu-toggle span::after {
-  content: '完了時に全体共有';
-  font-size: 0.9rem;
+.shell-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.shell-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
+}
+
+.shell-status.error {
+  color: #f59c9c;
+}
+
+.shell-status.running {
+  color: var(--accent);
 }
 
 .stacked-panels {
+
   display: grid;
   gap: 10px;
 }
@@ -1874,8 +1974,13 @@ textarea {
   .pane-launch-button,
   .pane-vscode-button,
   .pane-session-button,
-  .stable-run-button {
+  .stable-run-button,
+  .shell-action-button {
     width: 100%;
+  }
+
+  .shell-input-row {
+    grid-template-columns: 1fr;
   }
 
   .ssh-transfer-grid {

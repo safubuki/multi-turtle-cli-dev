@@ -172,3 +172,45 @@ export interface ActiveCliRun {
   promise: Promise<CliExecResult>
   stop: () => void
 }
+
+export interface ShellRunRequestBody {
+  paneId: string
+  target: WorkspaceTarget
+  command: string
+  cwd: string | null
+}
+
+export type ShellRunEvent =
+  | {
+      type: 'stdout'
+      text: string
+    }
+  | {
+      type: 'stderr'
+      text: string
+    }
+  | {
+      type: 'cwd'
+      cwd: string
+    }
+  | {
+      type: 'exit'
+      exitCode: number
+      cwd: string
+    }
+  | {
+      type: 'error'
+      message: string
+    }
+
+export interface ShellExecResult {
+  exitCode: number
+  cwd: string
+  stdout: string
+  stderr: string
+}
+
+export interface ActiveShellRun {
+  promise: Promise<ShellExecResult>
+  stop: () => void
+}

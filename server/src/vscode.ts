@@ -293,21 +293,14 @@ export async function openInCommandPrompt(target: WorkspaceTarget): Promise<void
 }
 
 async function openInWindowsCommandPrompt(target: WorkspaceTarget): Promise<void> {
-  const commandText = buildWindowsTerminalCommand(target)
-  const cwd = getLocalTerminalCwd(target)
-  const cmdExecutable = getCmdExecutable()
-  const startCommand = `start "" ${buildCmdCommandText(cmdExecutable, ['/k', commandText])}`
+  const powerShellExecutable = getPowerShellExecutable()
+  const { args, cwd } = buildWindowsPowerShellCommand(target)
   let lastError: unknown = null
 
   const launchers: Array<() => Promise<void>> = [
-    () => tryLaunchViaPowerShellStartProcess(cmdExecutable, ['/k', commandText], cwd),
+    () => tryLaunchViaPowerShellStartProcess(powerShellExecutable, args, cwd),
     () =>
-      tryLaunch(cmdExecutable, ['/d', '/s', '/c', startCommand], {
-        cwd,
-        windowsHide: false
-      }),
-    () =>
-      tryLaunch(cmdExecutable, ['/k', commandText], {
+      tryLaunch(powerShellExecutable, args, {
         cwd,
         windowsHide: false
       })
@@ -323,17 +316,20 @@ async function openInWindowsCommandPrompt(target: WorkspaceTarget): Promise<void
   }
 
   if (isMissingBinaryError(lastError)) {
-    throw new Error('\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3002')
+    throw new Error('\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3002')
   }
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error')
-  throw new Error(`\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
+  throw new Error(`\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
 }
 
-function buildWindowsTerminalCommand(target: WorkspaceTarget): string {
+function buildWindowsPowerShellCommand(target: WorkspaceTarget): { args: string[]; cwd?: string } {
   if (target.kind === 'local') {
-    const basePath = target.resourceType === 'file' ? path.dirname(target.path) : target.path
-    return `cd /d ${quoteForCmd(path.resolve(basePath))}`
+    const basePath = path.resolve(target.resourceType === 'file' ? path.dirname(target.path) : target.path)
+    return {
+      cwd: basePath,
+      args: ['-NoLogo', '-NoExit', '-Command', `Set-Location -LiteralPath ${quoteForPowerShellLiteral(basePath)}`]
+    }
   }
 
   const remotePath = target.resourceType === 'file' ? path.posix.dirname(target.path) : target.path
@@ -348,7 +344,9 @@ function buildWindowsTerminalCommand(target: WorkspaceTarget): string {
     ['-t', 'bash', '-lc', remoteCommand]
   )
 
-  return `ssh ${sshArgs.map(quoteForCmd).join(' ')}`
+  return {
+    args: ['-NoLogo', '-NoExit', '-Command', `$sshArgs = ${buildPowerShellArrayLiteral(sshArgs)}; & ssh @sshArgs`]
+  }
 }
 
 function buildPosixTerminalCommand(target: WorkspaceTarget): string {

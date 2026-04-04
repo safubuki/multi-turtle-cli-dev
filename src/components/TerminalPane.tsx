@@ -21,7 +21,7 @@ import {
   Wifi,
   X
 } from 'lucide-react'
-import type { HostPlatform, LocalWorkspace, PaneState, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
+import type { LocalWorkspace, PaneState, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
 
 interface TransferOptions {
   localPath?: string
@@ -37,7 +37,6 @@ interface TerminalPaneProps {
   sshHosts: SshHost[]
   sharedContext: SharedContextItem[]
   now: number
-  hostPlatform: HostPlatform
   isFocused: boolean
   onFocus: (paneId: string) => void
   onUpdate: (paneId: string, updates: Partial<PaneState>) => void
@@ -58,6 +57,8 @@ interface TerminalPaneProps {
   onCreateRemoteDirectory: (paneId: string) => void
   onOpenWorkspace: (paneId: string) => void
   onOpenCommandPrompt: (paneId: string) => void
+  onRunShell: (paneId: string) => void
+  onStopShell: (paneId: string) => void
   onOpenPath: (paneId: string, path: string, resourceType: 'folder' | 'file') => void
   onAddLocalWorkspace: (paneId: string) => void
   onSelectLocalWorkspace: (paneId: string, workspacePath: string) => void
@@ -89,19 +90,19 @@ const UI = {
   autoShare: '\u5b8c\u4e86\u6642\u306b\u5168\u4f53\u5171\u6709',
   deletePane: '\u30da\u30a4\u30f3\u3092\u524a\u9664',
   openVsCode: 'VSCode\u3067\u958b\u304f',
-  output: '\u51fa\u529b',
+  output: 'AI\u7d50\u679c\u51fa\u529b',
   outputEmpty: '\u307e\u3060\u51fa\u529b\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   outputPlaceholder: '\u3053\u3053\u306b\u5b9f\u884c\u7d50\u679c\u3068\u6700\u65b0\u306e\u5fdc\u7b54\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   outputExpand: '\u51fa\u529b\u3092\u62e1\u5927',
-  instruction: '\u6307\u793a',
+  instruction: 'AI\u6307\u793a\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09',
   workspaceUnset: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u672a\u8a2d\u5b9a',
   promptPlaceholder: '\u3084\u308a\u305f\u3044\u3053\u3068\u3092\u5165\u529b\u3057\u307e\u3059\u3002Ctrl+Enter \u3067\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002',
   stalledHint: '\u51fa\u529b\u304c\u6b62\u307e\u3063\u3066\u3044\u307e\u3059\u3002\u78ba\u8a8d\u304b\u518d\u5b9f\u884c\u3092\u691c\u8a0e\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
   runningHint: 'CLI \u3092\u5b9f\u884c\u4e2d\u3067\u3059\u3002',
   stop: '\u505c\u6b62',
   run: '\u5b9f\u884c',
-  settings: '\u8a2d\u5b9a',
-  workspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
+  settings: 'CLI/AI\u30e2\u30c7\u30eb\u9078\u629e',
+  workspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u8a2d\u5b9a',
   cli: 'CLI',
   model: '\u30e2\u30c7\u30eb',
   reasoning: '\u63a8\u8ad6\u30ec\u30d9\u30eb',
@@ -145,7 +146,15 @@ const UI = {
   session: '\u30bb\u30c3\u30b7\u30e7\u30f3',
   sessions: '\u30bb\u30c3\u30b7\u30e7\u30f3',
   stream: '\u30b9\u30c8\u30ea\u30fc\u30e0',
-  conversation: '\u4f1a\u8a71\u5c65\u6b74'
+  conversation: '\u4f1a\u8a71\u5c65\u6b74',
+  embeddedTerminal: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb',
+  terminalPlaceholder: '\u3053\u3053\u3067 cd / ping / git / npm / ssh \u7d4c\u7531\u306e\u30ea\u30e2\u30fc\u30c8\u5b9f\u884c\u3092\u6271\u3048\u307e\u3059\u3002',
+  terminalPromptPlaceholder: '',
+  terminalRun: '\u30b3\u30de\u30f3\u30c9\u5b9f\u884c',
+  terminalClear: '\u30af\u30ea\u30a2',
+  terminalStop: '\u505c\u6b62',
+  terminalExternal: '\u5916\u90e8\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8a66\u3059',
+  terminalPath: '\u73fe\u5728\u30d1\u30b9'
 } as const
 
 const LOCAL_DRAG_MIME = 'application/x-multi-turtle-local-path'
@@ -235,7 +244,6 @@ export function TerminalPane({
   sshHosts,
   sharedContext,
   now,
-  hostPlatform,
   isFocused,
   onFocus,
   onUpdate,
@@ -256,6 +264,8 @@ export function TerminalPane({
   onCreateRemoteDirectory,
   onOpenWorkspace,
   onOpenCommandPrompt,
+  onRunShell,
+  onStopShell,
   onOpenPath,
   onAddLocalWorkspace,
   onSelectLocalWorkspace,
@@ -273,6 +283,8 @@ export function TerminalPane({
   const [remoteDropTarget, setRemoteDropTarget] = useState<string | null>(null)
   const menuRef = useRef<HTMLDetailsElement | null>(null)
   const promptRef = useRef<HTMLTextAreaElement | null>(null)
+  const shellInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const shellConsoleRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!isMenuOpen) {
@@ -306,6 +318,28 @@ export function TerminalPane({
     element.style.overflowY = element.scrollHeight > 220 ? 'auto' : 'hidden'
   }, [pane.prompt])
 
+
+  useEffect(() => {
+    const element = shellInputRef.current
+    if (!element) {
+      return
+    }
+
+    element.style.height = '0px'
+    const nextHeight = Math.min(Math.max(element.scrollHeight, 42), 126)
+    element.style.height = `${nextHeight}px`
+    element.style.overflowY = element.scrollHeight > 126 ? 'auto' : 'hidden'
+  }, [pane.shellCommand])
+
+  useEffect(() => {
+    const element = shellConsoleRef.current
+    if (!element) {
+      return
+    }
+
+    element.scrollTop = element.scrollHeight
+  }, [pane.shellOutput])
+
   const catalog = catalogs[pane.provider]
   const currentModel = catalog?.models.find((model) => model.id === pane.model) ?? catalog?.models[0]
   const availableRemoteProviders = pane.remoteAvailableProviders.length > 0 ? pane.remoteAvailableProviders : (['codex', 'copilot', 'gemini'] as ProviderId[])
@@ -314,7 +348,12 @@ export function TerminalPane({
   const isStalled = pane.status === 'running' && pane.lastActivityAt !== null && now - pane.lastActivityAt > 45_000
   const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
-  const openTerminalLabel = hostPlatform === 'windows' ? '\u30b3\u30de\u30f3\u30c9\u30d7\u30ed\u30f3\u30d7\u30c8' : '\u30bf\u30fc\u30df\u30ca\u30eb'
+  const hasOutput = outputText.trim().length > 0
+  const currentShellPath = pane.workspaceMode === 'local' ? (pane.localShellPath || pane.localWorkspacePath) : (pane.remoteShellPath || pane.remoteWorkspacePath)
+  const shellPromptLabel = pane.workspaceMode === 'local'
+    ? `${currentShellPath || '~'}>`
+    : `${pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim() || 'ssh'}:${currentShellPath || '~'}$`
+  const canRunShell = pane.shellCommand.trim().length > 0 && (pane.workspaceMode === 'local' ? currentShellPath.trim().length > 0 : Boolean(pane.sshHost.trim() && currentShellPath.trim()))
   const localParentPath = useMemo(() => getLocalParentPath(pane.localBrowserPath || pane.localWorkspacePath, pane.localWorkspacePath), [pane.localBrowserPath, pane.localWorkspacePath])
   const sshDisplayName = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim()
   const workspaceLabel = pane.workspaceMode === 'local' ? selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || UI.unselected) : pane.remoteWorkspacePath ? getShortPathLabel(pane.remoteWorkspacePath) : sshDisplayName || UI.sshUnset
@@ -416,6 +455,7 @@ export function TerminalPane({
                   <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onCopyLatest(pane.id))}><Copy size={15} />{UI.copyResponse}</button>
                   <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onDuplicate(pane.id))}><Copy size={15} />{UI.duplicatePane}</button>
                   <button type="button" className="menu-action" disabled={pane.status === 'running'} onClick={() => closeMenuAndRun(() => onResetSession(pane.id))}><RefreshCcw size={15} />{UI.resetConversation}</button>
+                  <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onOpenCommandPrompt(pane.id))}><FolderOpen size={15} />{UI.terminalExternal}</button>
                   <label className="menu-toggle">
                     <input type="checkbox" checked={pane.autoShare} onChange={(event) => onUpdate(pane.id, { autoShare: event.target.checked })} />
                     <span>{UI.autoShare}</span>
@@ -428,7 +468,6 @@ export function TerminalPane({
             <div className="pane-action-row launch-row">
               <button type="button" className="secondary-button pane-session-button" disabled={pane.status === 'running'} onClick={() => onStartNewSession(pane.id)}><RefreshCcw size={16} />{UI.newSession}</button>
               <button type="button" className="secondary-button pane-vscode-button" disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath} onClick={() => onOpenWorkspace(pane.id)}><FolderOpen size={16} />{UI.openVsCode}</button>
-              <button type="button" className="secondary-button pane-launch-button" disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath} onClick={() => onOpenCommandPrompt(pane.id)}>{openTerminalLabel}</button>
             </div>
           </div>
         </header>
@@ -444,12 +483,12 @@ export function TerminalPane({
           <div className="panel-header slim">
             <div>
               <h3>{UI.output}</h3>
-              <p>{pane.lastActivityAt ? `\u6700\u7d42\u66f4\u65b0 ${formatClock(pane.lastActivityAt)}` : UI.outputEmpty}</p>
+              {hasOutput && pane.lastActivityAt ? <p>{`\u6700\u7d42\u66f4\u65b0 ${formatClock(pane.lastActivityAt)}`}</p> : null}
             </div>
             <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(true)} title={UI.outputExpand}><Maximize2 size={16} /></button>
           </div>
           <div className="output-surface console-output" aria-label="output-console">
-            {outputText ? <pre>{outputText}</pre> : <p className="panel-placeholder">{UI.outputPlaceholder}</p>}
+            {hasOutput ? <pre>{outputText}</pre> : <p className="panel-placeholder">{UI.outputPlaceholder}</p>}
           </div>
         </section>
 
@@ -534,6 +573,50 @@ export function TerminalPane({
             </div>
           </details>
 
+          <details className="pane-accordion shell-accordion">
+            <summary className="accordion-summary">
+              <span className="accordion-label"><Square size={15} />{UI.embeddedTerminal}</span>
+              <span className="accordion-value">{currentShellPath || (pane.workspaceMode === 'local' ? UI.workspaceUnset : UI.sshUnset)}</span>
+            </summary>
+            <div className="accordion-body shell-panel">
+              <div className="output-surface console-output shell-console" aria-label="embedded-terminal-output" ref={shellConsoleRef}>
+                {pane.shellOutput ? <pre>{pane.shellOutput}</pre> : null}
+              </div>
+              <div className="shell-input-row">
+                <div className="shell-command-line">
+                  <span className="shell-prompt">{shellPromptLabel}</span>
+                  <textarea
+                    ref={shellInputRef}
+                    value={pane.shellCommand}
+                    onChange={(event) => onUpdate(pane.id, { shellCommand: event.target.value })}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey && canRunShell && !pane.shellRunning) {
+                        event.preventDefault()
+                        onRunShell(pane.id)
+                      }
+                    }}
+                  />
+                </div>
+                <div className="shell-input-actions">
+                  {pane.shellRunning ? (
+                    <button type="button" className="danger-button shell-action-button" onClick={() => onStopShell(pane.id)}><Square size={16} />{UI.terminalStop}</button>
+                  ) : (
+                    <button type="button" className="secondary-button shell-action-button" disabled={!canRunShell} onClick={() => onRunShell(pane.id)}><Play size={16} />{UI.terminalRun}</button>
+                  )}
+                  <button type="button" className="secondary-button shell-action-button" disabled={!pane.shellOutput} onClick={() => onUpdate(pane.id, { shellOutput: '', shellLastError: null, shellLastExitCode: null })}><Trash2 size={16} />{UI.terminalClear}</button>
+                </div>
+              </div>
+              <div className="shell-status-row">
+                <span className="workspace-caption">{UI.terminalPath}: {currentShellPath || '-'}</span>
+                {pane.shellRunning ? (
+                  <span className="shell-status running"><LoaderCircle size={14} className="spin" />{UI.runningHint}</span>
+                ) : pane.shellLastError ? (
+                  <span className="shell-status error"><AlertTriangle size={14} />{pane.shellLastError}</span>
+                ) : null}
+              </div>
+            </div>
+          </details>
+
           <details className="pane-accordion workspace-accordion">
             <summary className="accordion-summary">
               <span className="accordion-label"><FolderOpen size={15} />{UI.workspace}</span>
@@ -598,7 +681,7 @@ export function TerminalPane({
                     </label>
                     <label>
                       <span>{UI.remoteWorkspace}</span>
-                      <input list={`remote-workspaces-${pane.id}`} value={pane.remoteWorkspacePath} onChange={(event) => onUpdate(pane.id, { remoteWorkspacePath: event.target.value, sshRemotePath: event.target.value })} placeholder="~/projects/app" />
+                      <input list={`remote-workspaces-${pane.id}`} value={pane.remoteWorkspacePath} onChange={(event) => onUpdate(pane.id, { remoteWorkspacePath: event.target.value, sshRemotePath: event.target.value, remoteShellPath: event.target.value })} placeholder="~/projects/app" />
                       <datalist id={`remote-workspaces-${pane.id}`}>{pane.remoteWorkspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</datalist>
                     </label>
                   </div>
@@ -680,7 +763,7 @@ export function TerminalPane({
                               <div><strong>{entry.label}</strong><span>{entry.path}</span></div>
                             </button>
                             <div className="browser-entry-actions">
-                              {entry.isDirectory && <button type="button" className={entry.isWorkspace ? 'ghost-button workspace' : 'ghost-button'} onClick={() => onUpdate(pane.id, { remoteWorkspacePath: entry.path, sshRemotePath: entry.path })}>{UI.useWorkspace}</button>}
+                              {entry.isDirectory && <button type="button" className={entry.isWorkspace ? 'ghost-button workspace' : 'ghost-button'} onClick={() => onUpdate(pane.id, { remoteWorkspacePath: entry.path, sshRemotePath: entry.path, remoteShellPath: entry.path })}>{UI.useWorkspace}</button>}
                               <button type="button" className="ghost-button" onClick={() => onTransferSshPath(pane.id, 'download', { remotePath: entry.path, remoteLabel: entry.label, isDirectory: entry.isDirectory })}>{UI.receive}</button>
                             </div>
                           </div>
@@ -771,7 +854,7 @@ export function TerminalPane({
               <div><h3>{UI.output}</h3><p>{pane.title}</p></div>
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(false)} title="close"><X size={16} /></button>
             </div>
-            <div className="output-modal-body">{outputText ? <pre>{outputText}</pre> : <p className="panel-placeholder">{UI.outputEmpty}</p>}</div>
+            <div className="output-modal-body">{hasOutput ? <pre>{outputText}</pre> : null}</div>
             <div className="output-modal-footer"><button type="button" className="secondary-button" disabled={!outputText} onClick={() => onCopyOutput(pane.id)}><Copy size={16} />{UI.copyOutput}</button></div>
           </div>
         </div>

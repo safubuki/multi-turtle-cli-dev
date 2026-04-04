@@ -8,6 +8,8 @@
   RunPaneRequest,
   RunPaneResponse,
   RunStreamEvent,
+  ShellRunEvent,
+  ShellRunRequest,
   SshConnectionOptions,
   SshInspectionResponse,
   SshKeyGenerateResponse,
@@ -19,9 +21,20 @@
 
 async function extractErrorMessage(response: Response): Promise<string> {
   const text = await response.text()
+  const contentType = response.headers.get('content-type') ?? ''
 
   if (!text) {
     return `Request failed: ${response.status}`
+  }
+
+  if (contentType.includes('text/html')) {
+    if (response.url.includes('/api/shell/stream') || text.includes('Cannot POST /api/shell/stream')) {
+      return '??????? API ?????????TAKO ????????????????'
+    }
+    if (response.url.includes('/api/run/stream') || text.includes('Cannot POST /api/run/stream')) {
+      return 'CLI ?? API ?????????TAKO ????????????????'
+    }
+    return 'TAKO ????????????????????????????'
   }
 
   try {
@@ -125,6 +138,77 @@ export async function runPaneStream(
 
 export function stopPaneRun(paneId: string): Promise<StopRunResponse> {
   return requestJson<StopRunResponse>('/api/run/stop', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ paneId })
+  })
+}
+
+export async function runShellStream(
+  payload: ShellRunRequest,
+  onEvent: (event: ShellRunEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const response = await fetch('/api/shell/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload),
+    signal
+  })
+
+  if (!response.ok) {
+    throw new Error(await extractErrorMessage(response))
+  }
+
+  if (!response.body) {
+    throw new Error('Streaming response body is not available.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const processLine = (line: string) => {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      return
+    }
+
+    const event = JSON.parse(trimmed) as ShellRunEvent
+    onEvent(event)
+
+    if (event.type === 'error') {
+      throw new Error(event.message)
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done })
+
+    const lines = buffer.split(/\r?\n/)
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      processLine(line)
+    }
+
+    if (done) {
+      break
+    }
+  }
+
+  if (buffer.trim()) {
+    processLine(buffer)
+  }
+}
+
+export function stopShellRun(paneId: string): Promise<StopRunResponse> {
+  return requestJson<StopRunResponse>('/api/shell/stop', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'

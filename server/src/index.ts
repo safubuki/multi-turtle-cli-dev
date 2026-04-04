@@ -2,6 +2,7 @@ import cors from 'cors'
 import nodePath from 'path'
 import express from 'express'
 import { startCliRun } from './cliRunner.js'
+import { startShellRun } from './shellRunner.js'
 import { pickFolderDialog, pickSaveFileDialog } from './nativeDialog.js'
 import { getProviderCatalogs } from './providerCatalog.js'
 import {
@@ -16,13 +17,14 @@ import {
   scpTransfer
 } from './ssh.js'
 import { specSections } from './spec.js'
-import type { ActiveCliRun, AutonomyMode, RunRequestBody, RunStreamEvent, SshConnectionOptions } from './types.js'
+import type { ActiveCliRun, ActiveShellRun, AutonomyMode, RunRequestBody, RunStreamEvent, ShellRunEvent, ShellRunRequestBody, SshConnectionOptions } from './types.js'
 import { openInCommandPrompt, openInVsCode } from './vscode.js'
 import { browseLocalDirectory, discoverLocalWorkspaces, listLocalBrowseRoots } from './workspaces.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3001)
 const activeRuns = new Map<string, ActiveCliRun>()
+const activeShellRuns = new Map<string, ActiveShellRun>()
 
 app.use(cors())
 app.use(express.json({ limit: '10mb' }))
@@ -107,6 +109,24 @@ function clearActiveRun(paneId: string, run: ActiveCliRun): void {
   }
 }
 
+function clearActiveShellRun(paneId: string, run: ActiveShellRun): void {
+  if (activeShellRuns.get(paneId) === run) {
+    activeShellRuns.delete(paneId)
+  }
+}
+
+function isValidShellRunRequest(body: Partial<ShellRunRequestBody> | null | undefined): body is ShellRunRequestBody {
+  return Boolean(body?.paneId && body.target && body.command?.trim())
+}
+
+function writeShellStreamEvent(res: express.Response, event: ShellRunEvent): void {
+  if (res.writableEnded || res.destroyed) {
+    return
+  }
+
+  res.write(`${JSON.stringify(event)}\n`)
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok'
@@ -132,7 +152,8 @@ app.get('/api/bootstrap', async (_req, res) => {
         vscode: true,
         ssh: true,
         remoteDiscovery: true,
-        remoteBrowser: true
+        remoteBrowser: true,
+        shell: true
       },
       spec: specSections
     })
@@ -461,6 +482,99 @@ app.post('/api/ssh/scp', async (req, res) => {
       details: String(error)
     })
   }
+})
+
+app.post('/api/shell/stream', async (req, res) => {
+  const rawBody = req.body as Partial<ShellRunRequestBody>
+  if (!isValidShellRunRequest(rawBody)) {
+    res.status(400).json({
+      success: false,
+      error: 'invalid shell run request'
+    })
+    return
+  }
+
+  const body: ShellRunRequestBody = {
+    paneId: rawBody.paneId!,
+    target: rawBody.target!,
+    command: rawBody.command!,
+    cwd: typeof rawBody.cwd === 'string' ? rawBody.cwd : null
+  }
+
+  if (activeShellRuns.has(body.paneId)) {
+    res.status(409).json({
+      success: false,
+      error: 'shell is already running'
+    })
+    return
+  }
+
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders?.()
+
+  let run: ActiveShellRun | null = null
+
+  req.on('close', () => {
+    if (!res.writableEnded && run) {
+      run.stop()
+      clearActiveShellRun(body.paneId, run)
+    }
+  })
+
+  try {
+    run = await startShellRun({
+      ...body,
+      onEvent: (event) => writeShellStreamEvent(res, event)
+    })
+
+    activeShellRuns.set(body.paneId, run)
+
+    const result = await run.promise
+    clearActiveShellRun(body.paneId, run)
+    writeShellStreamEvent(res, {
+      type: 'exit',
+      exitCode: result.exitCode,
+      cwd: result.cwd
+    })
+    res.end()
+  } catch (error) {
+    if (run) {
+      clearActiveShellRun(body.paneId, run)
+    }
+
+    writeShellStreamEvent(res, {
+      type: 'error',
+      message: String(error)
+    })
+
+    if (!res.writableEnded) {
+      res.end()
+    }
+  }
+})
+
+app.post('/api/shell/stop', (req, res) => {
+  const { paneId } = req.body as { paneId?: string }
+  if (!paneId) {
+    res.status(400).json({
+      success: false,
+      error: 'paneId required'
+    })
+    return
+  }
+
+  const run = activeShellRuns.get(paneId)
+  if (run) {
+    run.stop()
+    activeShellRuns.delete(paneId)
+  }
+
+  res.json({
+    success: true,
+    stopped: Boolean(run)
+  })
 })
 
 app.post('/api/run', async (req, res) => {
