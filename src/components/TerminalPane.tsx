@@ -92,6 +92,7 @@ const UI = {
   autoShare: '\u5b8c\u4e86\u6642\u306b\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709',
   autoShareShort: '\u5b8c\u4e86\u6642',
   updateCli: 'CLI\u3092\u66f4\u65b0',
+  updateCliField: 'CLI\u66f4\u65b0',
   deletePane: '\u30da\u30a4\u30f3\u3092\u524a\u9664',
   openVsCode: 'VSCode\u3067\u958b\u304f',
   output: 'AI\u7d50\u679c\u51fa\u529b',
@@ -110,12 +111,13 @@ const UI = {
   cli: 'CLI',
   model: '\u30e2\u30c7\u30eb',
   reasoning: '\u63a8\u8ad6\u30ec\u30d9\u30eb',
-  executionStyle: '\u627f\u8a8d\u30ec\u30d9\u30eb',
+  reasoningUnavailable: '\u3053\u306e\u30e2\u30c7\u30eb\u3067\u306f\u9078\u3079\u307e\u305b\u3093',
+  executionStyle: '\u81ea\u52d5\u627f\u8a8d\u30ec\u30d9\u30eb',
   readonlyCodex: 'Codex \u306f --full-auto \u56fa\u5b9a\u3067\u3059\u3002Fast\u30e2\u30fc\u30c9\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u5148\u982d\u306b /fast \u3092\u4ed8\u3051\u3066\u5b9f\u884c\u3057\u307e\u3059\u3002',
-  styleHint: 'Gemini \u306f --approval-mode auto_edit / yolo\u3001Copilot \u306f --allow-all-tools / --allow-all \u306b\u5bfe\u5fdc\u3057\u307e\u3059\u3002',
+  styleHint: '\u6a19\u6e96\u306f\u901a\u5e38\u306e\u7de8\u96c6\u3068\u30c4\u30fc\u30eb\u5b9f\u884c\u3092\u81ea\u52d5\u3067\u9032\u3081\u3001\u5236\u9650\u306a\u3057\u306f\u305d\u308c\u3088\u308a\u5e83\u3044\u64cd\u4f5c\u307e\u3067\u8a31\u53ef\u3057\u307e\u3059\u3002Gemini \u306f auto_edit / yolo\u3001Copilot \u306f allow-all-tools / allow-all \u306b\u5bfe\u5fdc\u3057\u307e\u3059\u3002',
   unchanged: '\u5909\u66f4\u4e0d\u53ef',
-  normal: '\u7de8\u96c6\u307e\u3067\u81ea\u52d5\u627f\u8a8d',
-  active: '\u5236\u9650\u306a\u304f\u81ea\u52d5\u627f\u8a8d',
+  normal: '\u6a19\u6e96\u306e\u81ea\u52d5\u627f\u8a8d',
+  active: '\u5236\u9650\u306a\u3057\u306e\u81ea\u52d5\u627f\u8a8d',
   currentWorkspace: '\u73fe\u5728\u306e\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   chooseWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
   removeFromList: '\u4e00\u89a7\u304b\u3089\u5916\u3059',
@@ -155,7 +157,7 @@ const UI = {
   fastMode: 'Fast\u30e2\u30fc\u30c9',
   fastOff: '\u901a\u5e38',
   fastOn: '\u6709\u52b9 (/fast)',
-  shareHint: '\u5171\u6709\u306f\u6b21\u56de\u306e\u5b9f\u884c1\u56de\u3060\u3051\u306b\u53cd\u6620\u3057\u307e\u3059\u3002\u5168\u4f53\u5171\u6709\u306f\u5168\u30da\u30a4\u30f3\u3078\u3001\u500b\u5225\u5171\u6709\u306f\u9078\u3093\u3060\u30da\u30a4\u30f3\u3078\u81ea\u52d5\u3067\u6e21\u3057\u307e\u3059\u3002\u4f7f\u308f\u308c\u305f\u5171\u6709\u306f\u81ea\u52d5\u3067\u6d88\u8cbb\u3055\u308c\u307e\u3059\u3002',
+  shareHint: '\u4e00\u56de\u5171\u6709\u306e\u30dc\u30bf\u30f3\u306f\u6b21\u56de\u306e\u5b9f\u884c1\u56de\u3060\u3051\u306b\u53cd\u6620\u3057\u307e\u3059\u3002\u300c\u5b8c\u4e86\u6642\u300d\u3092 ON \u306b\u3059\u308b\u3068\u3001\u5b8c\u4e86\u306e\u305f\u3073\u306b\u6700\u65b0\u7d50\u679c\u3092\u5171\u6709\u3057\u7d9a\u3051\u307e\u3059\u3002\u4e00\u56de\u5171\u6709\u306f\u4f7f\u308f\u308c\u308b\u3068\u81ea\u52d5\u3067\u6d88\u8cbb\u3055\u308c\u3001\u4f7f\u3046\u524d\u306b\u3082\u3046\u4e00\u5ea6\u62bc\u3059\u3068\u53d6\u308a\u6d88\u305b\u307e\u3059\u3002',
   shellExpand: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u62e1\u5927',
   terminalPlaceholder: '\u3053\u3053\u3067 cd / ping / git / npm / ssh \u7d4c\u7531\u306e\u30ea\u30e2\u30fc\u30c8\u5b9f\u884c\u3092\u6271\u3048\u307e\u3059\u3002',
   terminalPromptPlaceholder: '',
@@ -246,6 +248,14 @@ function getLocalParentPath(currentPath: string, workspaceRoot: string): string 
 
 function readDraggedLocalPath(event: ReactDragEvent<HTMLElement>): string {
   return event.dataTransfer.getData(LOCAL_DRAG_MIME).trim()
+}
+
+function isLocalDevEnvironment(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  return /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)
 }
 
 export function TerminalPane({
@@ -350,6 +360,8 @@ export function TerminalPane({
 
   const catalog = catalogs[pane.provider]
   const currentModel = catalog?.models.find((model) => model.id === pane.model) ?? catalog?.models[0]
+  const reasoningOptions = currentModel?.supportedReasoningEfforts ?? []
+  const canSelectReasoning = reasoningOptions.length > 0
   const availableRemoteProviders = pane.remoteAvailableProviders.length > 0 ? pane.remoteAvailableProviders : (['codex', 'copilot', 'gemini'] as ProviderId[])
   const selectedLocalWorkspace = localWorkspaces.find((workspace) => workspace.path === pane.localWorkspacePath)
   const canRemoveLocalWorkspace = selectedLocalWorkspace?.source === 'manual'
@@ -363,6 +375,7 @@ export function TerminalPane({
     : `${pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim() || 'ssh'}:${currentShellPath || '~'}$`
   const canRunShell = pane.shellCommand.trim().length > 0 && (pane.workspaceMode === 'local' ? currentShellPath.trim().length > 0 : Boolean(pane.sshHost.trim() && currentShellPath.trim()))
   const localParentPath = useMemo(() => getLocalParentPath(pane.localBrowserPath || pane.localWorkspacePath, pane.localWorkspacePath), [pane.localBrowserPath, pane.localWorkspacePath])
+  const isAtLocalWorkspaceTop = normalizeWindowsPath(pane.localBrowserPath || pane.localWorkspacePath) === normalizeWindowsPath(pane.localWorkspacePath)
   const sshDisplayName = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim()
   const workspaceLabel = pane.workspaceMode === 'local' ? selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || UI.unselected) : pane.remoteWorkspacePath ? getShortPathLabel(pane.remoteWorkspacePath) : sshDisplayName || UI.sshUnset
   const currentSessionAvailable = hasCurrentSessionContent(pane)
@@ -380,11 +393,40 @@ export function TerminalPane({
   const remoteBaseDropPath = pane.remoteBrowserPath || pane.remoteWorkspacePath
   const currentRemoteLabel = getShortPathLabel(remoteBaseDropPath || pane.remoteHomeDirectory || '')
   const outgoingShareContexts = sharedContext.filter((item) => item.sourcePaneId === pane.id && item.targetPaneIds.length > 0)
-  const activeGlobalShare = outgoingShareContexts.find((item) => item.scope === 'global') ?? null
-  const activeDirectTargetIds = new Set(
-    outgoingShareContexts.flatMap((item) => item.targetPaneIds)
-  )
-  const hasOutgoingShare = outgoingShareContexts.length > 0
+  const materializedGlobalShare = outgoingShareContexts.find((item) => item.scope === 'global') ?? null
+  const isGlobalShareActive = Boolean(materializedGlobalShare) || pane.pendingShareGlobal
+  const activeShareTargetIds = new Set(outgoingShareContexts.flatMap((item) => item.targetPaneIds))
+  if (pane.pendingShareGlobal) {
+    for (const target of shareTargets) {
+      activeShareTargetIds.add(target.id)
+    }
+  }
+  for (const targetPaneId of pane.pendingShareTargetIds) {
+    activeShareTargetIds.add(targetPaneId)
+  }
+  const hasOutgoingShare = outgoingShareContexts.length > 0 || pane.pendingShareGlobal || pane.pendingShareTargetIds.length > 0
+  const providerUpdateLabel = providerUpdating
+    ? `${catalog?.label ?? pane.provider} \u3092\u66f4\u65b0\u4e2d...`
+    : `${catalog?.label ?? pane.provider} \u3092\u66f4\u65b0`
+
+  useEffect(() => {
+    if (!isLocalDevEnvironment() || !isMenuOpen) {
+      return
+    }
+
+    console.log('[share-menu-state]', {
+      paneId: pane.id,
+      activeGlobalShare: isGlobalShareActive,
+      activeTargetPaneIds: Array.from(activeShareTargetIds),
+      pendingShareGlobal: pane.pendingShareGlobal,
+      pendingShareTargetIds: pane.pendingShareTargetIds,
+      outgoingShareContexts: outgoingShareContexts.map((item) => ({
+        id: item.id,
+        scope: item.scope,
+        targetPaneIds: item.targetPaneIds
+      }))
+    })
+  }, [activeShareTargetIds, isGlobalShareActive, isMenuOpen, outgoingShareContexts, pane.id, pane.pendingShareGlobal, pane.pendingShareTargetIds])
 
   const updateShellCommand = (value: string) => {
     onUpdate(pane.id, { shellCommand: value, shellHistoryIndex: null })
@@ -441,11 +483,6 @@ export function TerminalPane({
       event.preventDefault()
       onRunShell(pane.id)
     }
-  }
-
-  const closeMenuAndRun = (callback: () => void) => {
-    setIsMenuOpen(false)
-    callback()
   }
 
   const startLocalDrag = (event: ReactDragEvent<HTMLElement>, path: string) => {
@@ -509,7 +546,7 @@ export function TerminalPane({
                 </summary>
                 <div className="pane-menu-surface share-menu-surface">
                   <div className="share-target-row">
-                    <button type="button" className={activeGlobalShare ? 'menu-action is-sharing' : 'menu-action'} onClick={() => closeMenuAndRun(() => onShare(pane.id))}><Share2 size={15} />{UI.shareGlobal}</button>
+                    <button type="button" aria-pressed={isGlobalShareActive} className={isGlobalShareActive ? 'menu-action share-action-button is-sharing is-active' : 'menu-action share-action-button'} onClick={() => onShare(pane.id)}><Share2 size={15} />{UI.shareGlobal}</button>
                     <label className={pane.autoShare ? 'menu-toggle share-checkbox is-active' : 'menu-toggle share-checkbox'}>
                       <input type="checkbox" checked={pane.autoShare} onChange={(event) => onUpdate(pane.id, { autoShare: event.target.checked })} />
                       <span>{UI.autoShareShort}</span>
@@ -520,11 +557,11 @@ export function TerminalPane({
                       <span className="menu-section-label">{UI.shareDirect}</span>
                       <div className="menu-share-targets">
                         {shareTargets.map((target) => {
-                          const isTargetActive = activeDirectTargetIds.has(target.id)
+                          const isTargetActive = activeShareTargetIds.has(target.id)
                           const isAutoShareEnabled = pane.autoShareTargetIds.includes(target.id)
                           return (
                             <div key={target.id} className="share-target-row">
-                              <button type="button" className={isTargetActive ? 'menu-action compact-menu-action is-sharing' : 'menu-action compact-menu-action'} onClick={() => closeMenuAndRun(() => onShareToPane(pane.id, target.id))}>
+                              <button type="button" aria-pressed={isTargetActive} className={isTargetActive ? 'menu-action compact-menu-action share-action-button is-sharing is-active' : 'menu-action compact-menu-action share-action-button'} onClick={() => onShareToPane(pane.id, target.id)}>
                                 <Share2 size={14} />
                                 {target.title}
                               </button>
@@ -640,8 +677,8 @@ export function TerminalPane({
                 </label>
                 <label>
                   <span>{UI.reasoning}</span>
-                  <select value={pane.reasoningEffort} disabled={!currentModel || currentModel.supportedReasoningEfforts.length === 0} onChange={(event) => onUpdate(pane.id, { reasoningEffort: event.target.value as PaneState['reasoningEffort'] })}>
-                    {currentModel?.supportedReasoningEfforts.length ? currentModel.supportedReasoningEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>) : <option value={pane.reasoningEffort}>{UI.unchanged}</option>}
+                  <select value={pane.reasoningEffort} disabled={!canSelectReasoning} onChange={(event) => onUpdate(pane.id, { reasoningEffort: event.target.value as PaneState['reasoningEffort'] })}>
+                    {canSelectReasoning ? reasoningOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>) : <option value={pane.reasoningEffort}>{UI.reasoningUnavailable}</option>}
                   </select>
                 </label>
                 <label>
@@ -664,13 +701,14 @@ export function TerminalPane({
                     )}
                   </select>
                 </label>
+                <div className="settings-action-field full-span">
+                  <span>{UI.updateCliField}</span>
+                  <button type="button" className="secondary-button provider-update-button" disabled={providerUpdating} onClick={() => onUpdateProviderCli(pane.id)}>
+                    {providerUpdateLabel}
+                  </button>
+                </div>
               </div>
               <p className="field-note">{pane.provider === 'codex' ? UI.readonlyCodex : UI.styleHint}</p>
-              <div className="accordion-footer">
-                <button type="button" className="secondary-button provider-update-button" disabled={providerUpdating} onClick={() => onUpdateProviderCli(pane.id)}>
-                  {providerUpdating ? `${catalog?.label ?? pane.provider} ...` : `${catalog?.label ?? pane.provider} ${UI.updateCli}`}
-                </button>
-              </div>
             </div>
           </details>
           <details className="pane-accordion workspace-accordion" open={pane.workspaceOpen} onToggle={(event) => onUpdate(pane.id, { workspaceOpen: (event.currentTarget as HTMLDetailsElement).open })}>
@@ -689,15 +727,19 @@ export function TerminalPane({
 
               {pane.workspaceMode === 'local' ? (
                 <div className="workspace-stack">
+                  <div className="workspace-primary-action">
+                    <button type="button" className="primary-button workspace-choose-button" onClick={() => onAddLocalWorkspace(pane.id)}><FolderPlus size={16} />{UI.chooseWorkspace}</button>
+                  </div>
                   <div className="workspace-current">
                     <span className="workspace-caption">{UI.currentWorkspace}</span>
                     <strong>{selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || UI.unselected)}</strong>
                     <span>{pane.localWorkspacePath || UI.browseEmpty}</span>
                   </div>
-                  <div className="inline-actions wrap-actions compact-utility-row">
-                    <button type="button" className="secondary-button" onClick={() => onAddLocalWorkspace(pane.id)}><FolderPlus size={16} />{UI.chooseWorkspace}</button>
-                    {canRemoveLocalWorkspace && <button type="button" className="secondary-button" onClick={() => onRemoveLocalWorkspace(pane.id)}><Trash2 size={16} />{UI.removeFromList}</button>}
-                  </div>
+                  {canRemoveLocalWorkspace && (
+                    <div className="inline-actions wrap-actions compact-utility-row workspace-secondary-actions">
+                      <button type="button" className="secondary-button" onClick={() => onRemoveLocalWorkspace(pane.id)}><Trash2 size={16} />{UI.removeFromList}</button>
+                    </div>
+                  )}
                   {localWorkspaces.length > 1 && (
                     <label>
                       <span>{UI.savedWorkspaces}</span>
@@ -710,7 +752,7 @@ export function TerminalPane({
                     <div className="section-headline compact-headline browser-headline">
                       <div><strong>{UI.folderContents}</strong><span className="browser-current-path">{getShortPathLabel(pane.localBrowserPath || pane.localWorkspacePath || '')}</span></div>
                       <div className="browser-toolbar-actions">
-                        <button type="button" className="ghost-button compact-ghost" disabled={(pane.localBrowserPath || pane.localWorkspacePath) === pane.localWorkspacePath} onClick={() => onBrowseLocal(pane.id, pane.localWorkspacePath)}><Home size={14} />{UI.workspaceTop}</button>
+                        {!isAtLocalWorkspaceTop && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, pane.localWorkspacePath)}><Home size={14} />{UI.workspaceTop}</button>}
                         {localParentPath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, localParentPath)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>}
                       </div>
                     </div>

@@ -14,6 +14,25 @@ type CopilotSdkModelPayload = {
   defaultReasoningEffort?: ReasoningEffort | null
 }
 
+type ReasoningCapabilityOverride = {
+  pattern: RegExp
+  supportedReasoningEfforts: ReasoningEffort[]
+  defaultReasoningEffort: ReasoningEffort | null
+}
+
+const COPILOT_REASONING_OVERRIDES: ReasoningCapabilityOverride[] = [
+  {
+    pattern: /^gpt-4\.1([-.].+)?$/i,
+    supportedReasoningEfforts: [],
+    defaultReasoningEffort: null
+  },
+  {
+    pattern: /^gpt-4o([-.].+)?$/i,
+    supportedReasoningEfforts: [],
+    defaultReasoningEffort: null
+  }
+]
+
 const CACHE_TTL_MS = 5 * 60 * 1000
 const PROVIDER_PACKAGES: Record<ProviderId, string> = {
   codex: '@openai/codex',
@@ -198,16 +217,46 @@ function toReasoningEffortList(values: Array<ReasoningEffort | undefined> | unde
   return (values ?? []).filter((value): value is ReasoningEffort => Boolean(value))
 }
 
+function applyReasoningCapabilityOverrides(
+  provider: ProviderId,
+  modelId: string,
+  supportedReasoningEfforts: ReasoningEffort[],
+  defaultReasoningEffort: ReasoningEffort | null
+): { supportedReasoningEfforts: ReasoningEffort[]; defaultReasoningEffort: ReasoningEffort | null } {
+  if (provider !== 'copilot') {
+    return { supportedReasoningEfforts, defaultReasoningEffort }
+  }
+
+  const override = COPILOT_REASONING_OVERRIDES.find((item) => item.pattern.test(modelId))
+  if (!override) {
+    return { supportedReasoningEfforts, defaultReasoningEffort }
+  }
+
+  return {
+    supportedReasoningEfforts: override.supportedReasoningEfforts,
+    defaultReasoningEffort: override.defaultReasoningEffort
+  }
+}
+
 function normalizeCopilotModelPayload(model: CopilotSdkModelPayload): ProviderModelInfo | null {
   if (!model?.id || !model?.name) {
     return null
   }
 
+  const supportedReasoningEfforts = toReasoningEffortList(model.supportedReasoningEfforts)
+  const defaultReasoningEffort = model.defaultReasoningEffort ?? null
+  const nextCapabilities = applyReasoningCapabilityOverrides(
+    'copilot',
+    model.id,
+    supportedReasoningEfforts,
+    defaultReasoningEffort
+  )
+
   return {
     id: model.id,
     name: model.name,
-    supportedReasoningEfforts: toReasoningEffortList(model.supportedReasoningEfforts),
-    defaultReasoningEffort: model.defaultReasoningEffort ?? null
+    supportedReasoningEfforts: nextCapabilities.supportedReasoningEfforts,
+    defaultReasoningEffort: nextCapabilities.defaultReasoningEffort
   }
 }
 

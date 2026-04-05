@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm:dev:client\" \"npm:dev:server\"",
-    "dev:client": "vite",
+    "dev:client": "node scripts/dev-client.mjs",
+    "dev:client:raw": "vite",
     "dev:server": "npm.cmd --prefix server run dev",
     "build": "tsc -b && vite build",
     "preview": "vite preview"

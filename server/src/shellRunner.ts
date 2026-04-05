@@ -6,7 +6,7 @@ import { shellEscapePosix } from './util.js'
 
 const CWD_MARKER = '__TAKO_SHELL_CWD__:'
 
-type ShellEncoding = 'utf8' | 'shift_jis'
+type ShellEncoding = 'auto' | 'utf8' | 'shift_jis'
 
 function getCmdExecutable(): string {
   return process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe'
@@ -34,7 +34,43 @@ function resolveRemoteWorkingDirectory(target: Extract<WorkspaceTarget, { kind: 
   return (cwd?.trim() || basePath || '~').trim()
 }
 
+function countReplacementCharacters(value: string): number {
+  return (value.match(/\uFFFD/g) ?? []).length
+}
+
+function chooseDecodedText(utf8Text: string, shiftJisText: string): string {
+  const utf8ReplacementCount = countReplacementCharacters(utf8Text)
+  const shiftJisReplacementCount = countReplacementCharacters(shiftJisText)
+
+  if (utf8ReplacementCount === 0 && shiftJisReplacementCount > 0) {
+    return utf8Text
+  }
+
+  if (shiftJisReplacementCount === 0 && utf8ReplacementCount > 0) {
+    return shiftJisText
+  }
+
+  if (utf8ReplacementCount !== shiftJisReplacementCount) {
+    return utf8ReplacementCount < shiftJisReplacementCount ? utf8Text : shiftJisText
+  }
+
+  return utf8Text
+}
+
 function createBufferDecoder(encoding: ShellEncoding) {
+  if (encoding === 'auto') {
+    const utf8Decoder = new TextDecoder('utf-8')
+    const shiftJisDecoder = new TextDecoder('shift_jis')
+
+    return {
+      write: (chunk: Buffer) => chooseDecodedText(
+        utf8Decoder.decode(chunk, { stream: true }),
+        shiftJisDecoder.decode(chunk, { stream: true })
+      ),
+      end: () => chooseDecodedText(utf8Decoder.decode(), shiftJisDecoder.decode())
+    }
+  }
+
   const decoder = new TextDecoder(encoding === 'shift_jis' ? 'shift_jis' : 'utf-8')
   return {
     write: (chunk: Buffer) => decoder.decode(chunk, { stream: true }),
@@ -58,7 +94,7 @@ function buildLocalWindowsSpec(target: Extract<WorkspaceTarget, { kind: 'local' 
     command: getCmdExecutable(),
     args: ['/d', '/s', '/c', script],
     workingDirectory,
-    encoding: 'utf8' as const
+    encoding: 'auto' as const
   }
 }
 

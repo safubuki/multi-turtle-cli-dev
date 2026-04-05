@@ -235,6 +235,8 @@ export interface PaneState {
   sessionId: string | null
   autoShare: boolean
   autoShareTargetIds: string[]
+  pendingShareGlobal: boolean
+  pendingShareTargetIds: string[]
   lastRunAt: number | null
   runningSince: number | null
   lastActivityAt: number | null

@@ -225,6 +225,18 @@ button {
   background: rgba(139, 29, 29, 0.18);
 }
 
+.global-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(84, 210, 194, 0.16);
+  background: rgba(84, 210, 194, 0.08);
+  color: var(--text);
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -752,6 +764,10 @@ button {
   gap: 10px;
 }
 
+.pane-meta-grid .full-span {
+  grid-column: 1 / -1;
+}
+
 .field-note {
   display: none;
 }
@@ -764,6 +780,18 @@ label {
 }
 
 label > span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.settings-action-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-action-field > span {
   color: var(--muted);
   font-size: 0.88rem;
 }
@@ -789,6 +817,17 @@ textarea {
   display: inline-flex;
   gap: 8px;
   width: fit-content;
+}
+
+.workspace-primary-action {
+  display: flex;
+  width: fit-content;
+}
+
+.workspace-choose-button {
+  min-width: 304px;
+  min-height: 46px;
+  padding: 0 18px;
 }
 
 .workspace-path {
@@ -1432,6 +1471,10 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.workspace-secondary-actions {
+  min-height: 0;
+}
+
 .wrap-actions {
   flex-wrap: wrap;
 }
@@ -1590,9 +1633,25 @@ textarea {
   padding: 10px 11px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.06);
+  appearance: none;
+  -webkit-appearance: none;
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   text-align: left;
+}
+
+.share-action-button {
+  justify-content: flex-start;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.share-action-button:hover {
+  transform: translateY(-1px);
 }
 
 .menu-toggle input {
@@ -1663,9 +1722,12 @@ textarea {
 
 .shell-prompt {
   flex: 0 0 auto;
-  padding-top: 10px;
+  margin: 0;
+  padding-top: 0;
   color: #c7f6ec;
-  font-size: 0.9rem;
+  font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
+  font-size: 0.94rem;
+  line-height: 1.55;
   white-space: nowrap;
 }
 
@@ -2228,6 +2290,10 @@ textarea {
   min-width: 148px;
 }
 
+.workspace-primary-action .workspace-choose-button {
+  width: 100%;
+}
+
 .browser-toolbar-actions {
   gap: 10px;
 }
@@ -2276,6 +2342,14 @@ textarea {
 
 @media (max-width: 1180px) {
   .workspace-switch .switch-button {
+    min-width: 100%;
+  }
+
+  .workspace-primary-action {
+    width: 100%;
+  }
+
+  .workspace-choose-button {
     min-width: 100%;
   }
 }
@@ -2391,9 +2465,9 @@ textarea {
 
 .shell-console-entry {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 24px;
+  align-items: baseline;
+  gap: 0;
+  min-height: 0;
 }
 
 .shell-inline-input {
@@ -2401,6 +2475,9 @@ textarea {
   min-width: 0;
   border: 0;
   outline: 0;
+  margin: 0;
+  padding: 0;
+  appearance: none;
   background: transparent;
   color: #eef4f6;
   font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
@@ -2504,6 +2581,8 @@ textarea {
 
 .share-checkbox.is-active,
 .menu-action.is-sharing,
+.menu-action[aria-pressed='true'],
+.share-action-button.is-active,
 .icon-button.share-active {
   border-color: rgba(84, 210, 194, 0.44);
   background: rgba(84, 210, 194, 0.12);
@@ -2511,12 +2590,8 @@ textarea {
   box-shadow: 0 0 0 1px rgba(84, 210, 194, 0.22), 0 0 18px rgba(84, 210, 194, 0.18);
 }
 
-.accordion-footer {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
-}
-
 .provider-update-button {
-  min-width: 180px;
+  width: 100%;
+  min-height: 44px;
+  justify-content: center;
 }

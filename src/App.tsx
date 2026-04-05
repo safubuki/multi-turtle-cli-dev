@@ -81,6 +81,8 @@ const MAX_LIVE_OUTPUT = 64_000
 const MAX_SHELL_OUTPUT = 48_000
 const MAX_SHARED_CONTEXT = 16
 const STALL_MS = 45_000
+const BOOTSTRAP_RETRY_DELAY_MS = 500
+const BOOTSTRAP_MAX_ATTEMPTS = 12
 const TITLE_IMAGE_URL = new URL('../assets/title.png', import.meta.url).href
 
 function createId(prefix: string): string {
@@ -93,6 +95,42 @@ function clipText(text: string, maxLength: number): string {
   }
 
   return `${text.slice(0, maxLength).trimEnd()}\n\n[truncated]`
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function isLocalDevEnvironment(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  return /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)
+}
+
+function isRetryableBootstrapError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /Request failed: 502|Request failed: 503|Request failed: 504|ECONNREFUSED|fetch failed|Failed to fetch/i.test(message)
+}
+
+async function fetchBootstrapWithRetry(): Promise<BootstrapPayload> {
+  let lastError: unknown = null
+
+  for (let attempt = 1; attempt <= BOOTSTRAP_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await fetchBootstrap()
+    } catch (error) {
+      lastError = error
+      if (!isRetryableBootstrapError(error) || attempt === BOOTSTRAP_MAX_ATTEMPTS) {
+        throw error
+      }
+
+      await delay(BOOTSTRAP_RETRY_DELAY_MS)
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
 function sanitizeTerminalText(text: string): string {
@@ -492,6 +530,8 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     sessionId: null,
     autoShare: false,
     autoShareTargetIds: [],
+    pendingShareGlobal: false,
+    pendingShareTargetIds: [],
     lastRunAt: null,
     runningSince: null,
     lastActivityAt: null,
@@ -869,6 +909,10 @@ function normalizePane(
     autoShareTargetIds: Array.isArray(rawPane.autoShareTargetIds)
       ? rawPane.autoShareTargetIds.filter((item): item is string => typeof item === 'string')
       : [],
+    pendingShareGlobal: Boolean(rawPane.pendingShareGlobal),
+    pendingShareTargetIds: Array.isArray(rawPane.pendingShareTargetIds)
+      ? rawPane.pendingShareTargetIds.filter((item): item is string => typeof item === 'string')
+      : [],
     lastRunAt: typeof rawPane.lastRunAt === 'number' ? rawPane.lastRunAt : null,
     runningSince: null,
     lastActivityAt: typeof rawPane.lastActivityAt === 'number' ? rawPane.lastActivityAt : null,
@@ -959,7 +1003,7 @@ function App() {
     setGlobalError(null)
 
     try {
-      const payload = await fetchBootstrap()
+      const payload = await fetchBootstrapWithRetry()
       const nextLocalWorkspaces = mergeLocalWorkspaces(
         payload.localWorkspaces,
         getManualWorkspaces(localWorkspacesRef.current),
@@ -990,6 +1034,7 @@ function App() {
   }, [])
 
   const catalogs = bootstrap?.providers ?? EMPTY_CATALOGS
+  const isBootstrapping = loading && !bootstrap
   const selectedPane = panes.find((pane) => pane.id === focusedPaneId) ?? panes[0] ?? null
   const visiblePanes = layout === 'focus' ? (selectedPane ? [selectedPane] : []) : panes
   const workspacePickerParentPath = workspacePicker ? getAbsoluteLocalParentPath(workspacePicker.path) : null
@@ -1210,28 +1255,39 @@ function App() {
       return false
     }
 
-    if (selection.mode === 'none') {
+    const targetPanes = panesRef.current.filter((item) => item.id !== paneId)
+    const allowedTargetIds = new Set(targetPanes.map((item) => item.id))
+    const normalizedTargetIds = selection.mode === 'global'
+      ? targetPanes.map((item) => item.id)
+      : (selection.targetPaneIds ?? []).filter((item): item is string => typeof item === 'string' && allowedTargetIds.has(item))
+
+    if (selection.mode === 'none' || normalizedTargetIds.length === 0) {
       replaceSourceSharedContext(paneId, [])
+      updatePane(paneId, {
+        pendingShareGlobal: false,
+        pendingShareTargetIds: []
+      })
       return true
     }
 
     const payload = getShareablePayload(pane)
     const response = responseOverride ?? payload.text
     if (!response) {
-      return false
-    }
-
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
-    const targetPanes = panesRef.current.filter((item) => item.id !== paneId)
-    const allowedTargetIds = new Set(targetPanes.map((item) => item.id))
-    const selectedTargetPanes = selection.mode === 'global'
-      ? targetPanes
-      : targetPanes.filter((item) => selection.targetPaneIds?.includes(item.id) && allowedTargetIds.has(item.id))
-
-    if (selectedTargetPanes.length === 0) {
       replaceSourceSharedContext(paneId, [])
+      updatePane(paneId, {
+        pendingShareGlobal: selection.mode === 'global',
+        pendingShareTargetIds: selection.mode === 'direct' ? normalizedTargetIds : []
+      })
       return true
     }
+
+    updatePane(paneId, {
+      pendingShareGlobal: false,
+      pendingShareTargetIds: []
+    })
+
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    const selectedTargetPanes = targetPanes.filter((item) => normalizedTargetIds.includes(item.id))
 
     const nextSourceContexts = selection.mode === 'global'
       ? [
@@ -1271,21 +1327,32 @@ function App() {
     const allTargetIds = panesRef.current.filter((item) => item.id !== paneId).map((item) => item.id)
     const existingContexts = sharedContextRef.current.filter((item) => item.sourcePaneId === paneId)
     const globalContext = existingContexts.find((item) => item.scope === 'global') ?? null
+    const isGlobalShareArmed = pane.pendingShareGlobal
     const directTargetIds = existingContexts
       .filter((item) => item.scope === 'direct')
       .flatMap((item) => item.targetPaneIds)
+    const effectiveDirectTargetIds = Array.from(new Set([...directTargetIds, ...pane.pendingShareTargetIds]))
+    const hasShareablePayload = Boolean((responseOverride ?? getShareablePayload(pane).text)?.trim())
 
     if ((options?.scope ?? 'global') === 'global') {
       const enabled = setPendingShareSelection(
         paneId,
         responseOverride,
-        globalContext ? { mode: 'none' } : { mode: 'global' }
+        globalContext || isGlobalShareArmed ? { mode: 'none' } : { mode: 'global' }
       )
       if (!enabled) {
+        appendPaneSystemMessage(paneId, '\u5171\u6709\u3067\u304d\u308b\u6700\u65b0\u7d50\u679c\u304c\u307e\u3060\u3042\u308a\u307e\u305b\u3093')
         return
       }
 
-      appendPaneSystemMessage(paneId, globalContext ? '\u5168\u4f53\u5171\u6709\u3092\u89e3\u9664\u3057\u307e\u3057\u305f' : '\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709\u306b\u8ffd\u52a0\u3057\u307e\u3057\u305f')
+      appendPaneSystemMessage(
+        paneId,
+        globalContext || isGlobalShareArmed
+          ? '\u5168\u4f53\u5171\u6709\u3092\u89e3\u9664\u3057\u307e\u3057\u305f'
+          : hasShareablePayload
+            ? '\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709\u306b\u8ffd\u52a0\u3057\u307e\u3057\u305f'
+            : '\u6b21\u56de\u306e\u5fdc\u7b54\u3092\u5168\u4f53\u5171\u6709\u3059\u308b\u3088\u3046\u306b\u8a2d\u5b9a\u3057\u307e\u3057\u305f'
+      )
       return
     }
 
@@ -1299,7 +1366,7 @@ function App() {
       return
     }
 
-    if (globalContext) {
+    if (globalContext || isGlobalShareArmed) {
       const remainingTargetIds = allTargetIds.filter((id) => id !== targetPaneId)
       setPendingShareSelection(
         paneId,
@@ -1310,9 +1377,9 @@ function App() {
       return
     }
 
-    const nextTargetIds = directTargetIds.includes(targetPaneId)
-      ? directTargetIds.filter((id) => id !== targetPaneId)
-      : [...directTargetIds, targetPaneId]
+    const nextTargetIds = effectiveDirectTargetIds.includes(targetPaneId)
+      ? effectiveDirectTargetIds.filter((id) => id !== targetPaneId)
+      : [...effectiveDirectTargetIds, targetPaneId]
 
     const enabled = setPendingShareSelection(
       paneId,
@@ -1320,14 +1387,28 @@ function App() {
       nextTargetIds.length > 0 ? { mode: 'direct', targetPaneIds: nextTargetIds } : { mode: 'none' }
     )
     if (!enabled) {
+      appendPaneSystemMessage(paneId, '\u5171\u6709\u3067\u304d\u308b\u6700\u65b0\u7d50\u679c\u304c\u307e\u3060\u3042\u308a\u307e\u305b\u3093')
       return
+    }
+
+    if (isLocalDevEnvironment()) {
+      console.log('[share-toggle-click]', {
+        sourcePaneId: paneId,
+        targetPaneId,
+        nextTargetIds,
+        directTargetIds: effectiveDirectTargetIds,
+        hasShareablePayload,
+        enabled
+      })
     }
 
     appendPaneSystemMessage(
       paneId,
-      directTargetIds.includes(targetPaneId)
+      effectiveDirectTargetIds.includes(targetPaneId)
         ? `${targetPane.title} \u3078\u306e\u500b\u5225\u5171\u6709\u3092\u89e3\u9664\u3057\u307e\u3057\u305f`
-        : `${targetPane.title} \u3078\u500b\u5225\u5171\u6709\u3057\u307e\u3057\u305f`
+        : hasShareablePayload
+          ? `${targetPane.title} \u3078\u500b\u5225\u5171\u6709\u3057\u307e\u3057\u305f`
+          : `${targetPane.title} \u3078\u306e1\u56de\u5171\u6709\u3092\u4e88\u7d04\u3057\u307e\u3057\u305f`
     )
   }
 
@@ -1389,6 +1470,8 @@ function App() {
 
       let shouldShareGlobal = false
       let autoShareTargetIds: string[] = []
+      let pendingShareGlobal = false
+      let pendingShareTargetIds: string[] = []
       mutatePane(paneId, (pane) => {
         const finalPreview = finalText.slice(0, 120)
         const liveOutputHasFinal = Boolean(finalPreview) && pane.liveOutput.includes(finalPreview)
@@ -1400,6 +1483,8 @@ function App() {
 
         shouldShareGlobal = pane.autoShare
         autoShareTargetIds = pane.autoShareTargetIds.filter((item) => item !== pane.id)
+        pendingShareGlobal = pane.pendingShareGlobal
+        pendingShareTargetIds = pane.pendingShareTargetIds.filter((item) => item !== pane.id)
         return {
           ...pane,
           logs: appendLogEntry(pane.logs, assistantEntry),
@@ -1416,7 +1501,11 @@ function App() {
         }
       })
 
-      if (shouldShareGlobal) {
+      if (pendingShareGlobal) {
+        setPendingShareSelection(paneId, assistantEntry.text, { mode: 'global' })
+      } else if (pendingShareTargetIds.length > 0) {
+        setPendingShareSelection(paneId, assistantEntry.text, { mode: 'direct', targetPaneIds: pendingShareTargetIds })
+      } else if (shouldShareGlobal) {
         setPendingShareSelection(paneId, assistantEntry.text, { mode: 'global' })
       } else if (autoShareTargetIds.length > 0) {
         setPendingShareSelection(paneId, assistantEntry.text, { mode: 'direct', targetPaneIds: autoShareTargetIds })
@@ -2233,7 +2322,7 @@ function App() {
       shellLastError: null,
       shellLastExitCode: null,
       shellLastRunAt: startedAt,
-      shellOutput: appendShellOutputLine(pane.shellOutput, `${buildShellPromptLabel(pane, cwd)} ${command}`)
+      shellOutput: appendShellOutputLine(pane.shellOutput, `${buildShellPromptLabel(pane, cwd)}${command}`)
     })
 
     try {
@@ -2732,20 +2821,6 @@ function App() {
     selectedPane?.localBrowserLoading
   ])
 
-  if (loading && !bootstrap) {
-    return (
-      <div className="loading-screen">
-        <div className="loading-panel">
-          <Activity size={22} />
-          <p>{'CLI \u30c7\u30c3\u30ad\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</p>
-          <p className="eyebrow">MULTI CLI DEVELOPMENT TOOL</p>
-          <h1>Turtle AI Kantan Operator (T.A.K.O)</h1>
-          <p className="topbar-copy">Raw CLI, multiple lanes, one calm deck. Remote-ready over SSH.</p>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="app-shell">
       <div className="background-layer" />
@@ -2760,6 +2835,13 @@ function App() {
           </div>
         </div>
       </header>
+
+      {isBootstrapping && (
+        <div className="global-loading">
+          <Activity size={18} className="spin" />
+          <span>{'CLI \u30c7\u30c3\u30ad\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</span>
+        </div>
+      )}
 
       {globalError && (
         <div className="global-error">
