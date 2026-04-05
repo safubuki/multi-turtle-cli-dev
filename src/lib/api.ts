@@ -16,7 +16,9 @@
   SshKeyInstallResponse,
   SshTransferResponse,
   StopRunResponse,
-  WorkspaceTarget
+  WorkspaceTarget,
+  ProviderId,
+  ProviderUpdateResponse
 } from '../types'
 
 async function extractErrorMessage(response: Response): Promise<string> {
@@ -234,6 +236,16 @@ export function openTargetInCommandPrompt(target: WorkspaceTarget): Promise<{ su
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ target })
+  })
+}
+
+export function updateCliProvider(provider: ProviderId): Promise<ProviderUpdateResponse> {
+  return requestJson<ProviderUpdateResponse>('/api/provider/update', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ provider })
   })
 }
 

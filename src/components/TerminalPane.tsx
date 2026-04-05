@@ -57,6 +57,8 @@ interface TerminalPaneProps {
   onCreateRemoteDirectory: (paneId: string) => void
   onOpenWorkspace: (paneId: string) => void
   onOpenCommandPrompt: (paneId: string) => void
+  onUpdateProviderCli: (paneId: string) => void
+  providerUpdating: boolean
   onRunShell: (paneId: string) => void
   onStopShell: (paneId: string) => void
   onOpenPath: (paneId: string, path: string, resourceType: 'folder' | 'file') => void
@@ -88,6 +90,8 @@ const UI = {
   duplicatePane: '\u30da\u30a4\u30f3\u3092\u8907\u88fd',
   resetConversation: '\u4f1a\u8a71\u3092\u521d\u671f\u5316',
   autoShare: '\u5b8c\u4e86\u6642\u306b\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709',
+  autoShareShort: '\u5b8c\u4e86\u6642',
+  updateCli: 'CLI\u3092\u66f4\u65b0',
   deletePane: '\u30da\u30a4\u30f3\u3092\u524a\u9664',
   openVsCode: 'VSCode\u3067\u958b\u304f',
   output: 'AI\u7d50\u679c\u51fa\u529b',
@@ -151,7 +155,7 @@ const UI = {
   fastMode: 'Fast\u30e2\u30fc\u30c9',
   fastOff: '\u901a\u5e38',
   fastOn: '\u6709\u52b9 (/fast)',
-  shareHint: '\u5171\u6709\u306f\u6b21\u56de\u306e\u5b9f\u884c1\u56de\u3060\u3051\u306b\u53cd\u6620\u3057\u307e\u3059\u3002\u5168\u4f53\u5171\u6709\u306f\u5404\u30da\u30a4\u30f3\u3067\u9078\u629e\u3057\u3066\u4f7f\u3044\u3001\u500b\u5225\u5171\u6709\u306f\u76f8\u624b\u30da\u30a4\u30f3\u306b\u3059\u3050\u8ffd\u52a0\u3057\u307e\u3059\u3002',
+  shareHint: '\u5171\u6709\u306f\u6b21\u56de\u306e\u5b9f\u884c1\u56de\u3060\u3051\u306b\u53cd\u6620\u3057\u307e\u3059\u3002\u5168\u4f53\u5171\u6709\u306f\u5168\u30da\u30a4\u30f3\u3078\u3001\u500b\u5225\u5171\u6709\u306f\u9078\u3093\u3060\u30da\u30a4\u30f3\u3078\u81ea\u52d5\u3067\u6e21\u3057\u307e\u3059\u3002\u4f7f\u308f\u308c\u305f\u5171\u6709\u306f\u81ea\u52d5\u3067\u6d88\u8cbb\u3055\u308c\u307e\u3059\u3002',
   shellExpand: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u62e1\u5927',
   terminalPlaceholder: '\u3053\u3053\u3067 cd / ping / git / npm / ssh \u7d4c\u7531\u306e\u30ea\u30e2\u30fc\u30c8\u5b9f\u884c\u3092\u6271\u3048\u307e\u3059\u3002',
   terminalPromptPlaceholder: '',
@@ -268,6 +272,8 @@ export function TerminalPane({
   onBrowseRemote,
   onCreateRemoteDirectory,
   onOpenWorkspace,
+  onUpdateProviderCli,
+  providerUpdating,
   onRunShell,
   onOpenPath,
   onAddLocalWorkspace,
@@ -370,9 +376,72 @@ export function TerminalPane({
     ...pane.sessionHistory.map((session) => ({ key: session.key, label: session.label }))
   ]
   const hasSessionRecords = sessionOptions.length > 0
-  const visibleSharedContext = sharedContext.filter((item) => item.scope === 'global' || item.targetPaneIds.includes(pane.id))
+  const visibleSharedContext = sharedContext.filter((item) => item.sourcePaneId === pane.id || item.targetPaneIds.includes(pane.id))
   const remoteBaseDropPath = pane.remoteBrowserPath || pane.remoteWorkspacePath
   const currentRemoteLabel = getShortPathLabel(remoteBaseDropPath || pane.remoteHomeDirectory || '')
+  const outgoingShareContexts = sharedContext.filter((item) => item.sourcePaneId === pane.id && item.targetPaneIds.length > 0)
+  const activeGlobalShare = outgoingShareContexts.find((item) => item.scope === 'global') ?? null
+  const activeDirectTargetIds = new Set(
+    outgoingShareContexts.flatMap((item) => item.targetPaneIds)
+  )
+  const hasOutgoingShare = outgoingShareContexts.length > 0
+
+  const updateShellCommand = (value: string) => {
+    onUpdate(pane.id, { shellCommand: value, shellHistoryIndex: null })
+  }
+
+  const toggleAutoShareTarget = (targetPaneId: string, enabled: boolean) => {
+    const nextTargetIds = enabled
+      ? [...pane.autoShareTargetIds.filter((item) => item !== targetPaneId), targetPaneId]
+      : pane.autoShareTargetIds.filter((item) => item !== targetPaneId)
+    onUpdate(pane.id, { autoShareTargetIds: nextTargetIds })
+  }
+
+  const handleShellKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (pane.shellHistory.length === 0) {
+        return
+      }
+
+      const nextIndex = pane.shellHistoryIndex === null
+        ? pane.shellHistory.length - 1
+        : Math.max(0, pane.shellHistoryIndex - 1)
+      onUpdate(pane.id, {
+        shellHistoryIndex: nextIndex,
+        shellCommand: pane.shellHistory[nextIndex] ?? ''
+      })
+      return
+    }
+
+    if (event.key === 'ArrowDown') {
+      if (pane.shellHistory.length === 0) {
+        return
+      }
+
+      event.preventDefault()
+      if (pane.shellHistoryIndex === null) {
+        return
+      }
+
+      const nextIndex = pane.shellHistoryIndex + 1
+      if (nextIndex >= pane.shellHistory.length) {
+        onUpdate(pane.id, { shellHistoryIndex: null, shellCommand: '' })
+        return
+      }
+
+      onUpdate(pane.id, {
+        shellHistoryIndex: nextIndex,
+        shellCommand: pane.shellHistory[nextIndex] ?? ''
+      })
+      return
+    }
+
+    if (event.key === 'Enter' && canRunShell && !pane.shellRunning) {
+      event.preventDefault()
+      onRunShell(pane.id)
+    }
+  }
 
   const closeMenuAndRun = (callback: () => void) => {
     setIsMenuOpen(false)
@@ -434,30 +503,42 @@ export function TerminalPane({
           <div className="pane-header-actions pane-action-stack">
             <div className="pane-action-row icon-row">
               <button type="button" className="icon-button" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} title={UI.backToTop}><ArrowUp size={16} /></button>
-              <details className="pane-menu" ref={menuRef} open={isMenuOpen} onToggle={(event) => setIsMenuOpen((event.currentTarget as HTMLDetailsElement).open)}>
-                <summary className="icon-button" aria-label={UI.paneMenu}>
+                            <details className="pane-menu" ref={menuRef} open={isMenuOpen} onToggle={(event) => setIsMenuOpen((event.currentTarget as HTMLDetailsElement).open)}>
+                <summary className={hasOutgoingShare ? 'icon-button share-active' : 'icon-button'} aria-label={UI.paneMenu}>
                   <Share2 size={16} />
                 </summary>
                 <div className="pane-menu-surface share-menu-surface">
-                  <button type="button" className="menu-action" onClick={() => closeMenuAndRun(() => onShare(pane.id))}><Share2 size={15} />{UI.shareGlobal}</button>
+                  <div className="share-target-row">
+                    <button type="button" className={activeGlobalShare ? 'menu-action is-sharing' : 'menu-action'} onClick={() => closeMenuAndRun(() => onShare(pane.id))}><Share2 size={15} />{UI.shareGlobal}</button>
+                    <label className={pane.autoShare ? 'menu-toggle share-checkbox is-active' : 'menu-toggle share-checkbox'}>
+                      <input type="checkbox" checked={pane.autoShare} onChange={(event) => onUpdate(pane.id, { autoShare: event.target.checked })} />
+                      <span>{UI.autoShareShort}</span>
+                    </label>
+                  </div>
                   {shareTargets.length > 0 && (
                     <div className="menu-share-group">
                       <span className="menu-section-label">{UI.shareDirect}</span>
                       <div className="menu-share-targets">
-                        {shareTargets.map((target) => (
-                          <button key={target.id} type="button" className="menu-action compact-menu-action" onClick={() => closeMenuAndRun(() => onShareToPane(pane.id, target.id))}>
-                            <Share2 size={14} />
-                            {target.title}
-                          </button>
-                        ))}
+                        {shareTargets.map((target) => {
+                          const isTargetActive = activeDirectTargetIds.has(target.id)
+                          const isAutoShareEnabled = pane.autoShareTargetIds.includes(target.id)
+                          return (
+                            <div key={target.id} className="share-target-row">
+                              <button type="button" className={isTargetActive ? 'menu-action compact-menu-action is-sharing' : 'menu-action compact-menu-action'} onClick={() => closeMenuAndRun(() => onShareToPane(pane.id, target.id))}>
+                                <Share2 size={14} />
+                                {target.title}
+                              </button>
+                              <label className={isAutoShareEnabled ? 'menu-toggle share-checkbox compact-share-checkbox is-active' : 'menu-toggle share-checkbox compact-share-checkbox'}>
+                                <input type="checkbox" checked={isAutoShareEnabled} onChange={(event) => toggleAutoShareTarget(target.id, event.target.checked)} />
+                                <span>{UI.autoShareShort}</span>
+                              </label>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   )}
                   <p className="menu-help">{UI.shareHint}</p>
-                  <label className="menu-toggle">
-                    <input type="checkbox" checked={pane.autoShare} onChange={(event) => onUpdate(pane.id, { autoShare: event.target.checked })} />
-                    <span>{UI.autoShare}</span>
-                  </label>
                 </div>
               </details>
               <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
@@ -585,6 +666,11 @@ export function TerminalPane({
                 </label>
               </div>
               <p className="field-note">{pane.provider === 'codex' ? UI.readonlyCodex : UI.styleHint}</p>
+              <div className="accordion-footer">
+                <button type="button" className="secondary-button provider-update-button" disabled={providerUpdating} onClick={() => onUpdateProviderCli(pane.id)}>
+                  {providerUpdating ? `${catalog?.label ?? pane.provider} ...` : `${catalog?.label ?? pane.provider} ${UI.updateCli}`}
+                </button>
+              </div>
             </div>
           </details>
           <details className="pane-accordion workspace-accordion" open={pane.workspaceOpen} onToggle={(event) => onUpdate(pane.id, { workspaceOpen: (event.currentTarget as HTMLDetailsElement).open })}>
@@ -778,13 +864,8 @@ export function TerminalPane({
                     ref={shellInputRef}
                     className="shell-inline-input"
                     value={pane.shellCommand}
-                    onChange={(event) => onUpdate(pane.id, { shellCommand: event.target.value })}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && canRunShell && !pane.shellRunning) {
-                        event.preventDefault()
-                        onRunShell(pane.id)
-                      }
-                    }}
+                    onChange={(event) => updateShellCommand(event.target.value)}
+                    onKeyDown={handleShellKeyDown}
                     disabled={pane.shellRunning}
                     spellCheck={false}
                     autoCapitalize="off"
@@ -897,13 +978,8 @@ export function TerminalPane({
                     ref={shellModalInputRef}
                     className="shell-inline-input"
                     value={pane.shellCommand}
-                    onChange={(event) => onUpdate(pane.id, { shellCommand: event.target.value })}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && canRunShell && !pane.shellRunning) {
-                        event.preventDefault()
-                        onRunShell(pane.id)
-                      }
-                    }}
+                    onChange={(event) => updateShellCommand(event.target.value)}
+                    onKeyDown={handleShellKeyDown}
                     disabled={pane.shellRunning}
                     spellCheck={false}
                     autoCapitalize="off"

@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Bot,
@@ -30,7 +30,8 @@ import {
   runShellStream,
   stopPaneRun,
   stopShellRun,
-  transferSshPath
+  transferSshPath,
+  updateCliProvider
 } from './lib/api'
 import type {
   BootstrapPayload,
@@ -445,6 +446,8 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     statusText: statusLabel('idle'),
     shellCommand: '',
     shellOutput: '',
+    shellHistory: [],
+    shellHistoryIndex: null,
     localShellPath: firstWorkspace?.path ?? '',
     remoteShellPath: '',
     shellRunning: false,
@@ -488,6 +491,7 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     attachedContextIds: [],
     sessionId: null,
     autoShare: false,
+    autoShareTargetIds: [],
     lastRunAt: null,
     runningSince: null,
     lastActivityAt: null,
@@ -782,7 +786,7 @@ function normalizePane(
   const statusText =
     rawStatus === 'running'
       ? '\u524d\u56de\u306e\u5b9f\u884c\u306f\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f'
-      : rawStatusText.includes('�O���^�[�~�i��')
+      : rawStatusText.includes('\u5916\u90e8\u30bf\u30fc\u30df\u30ca\u30eb')
         ? statusLabel(restoredStatus)
         : rawStatusText || statusLabel(restoredStatus)
 
@@ -801,6 +805,10 @@ function normalizePane(
     statusText,
     shellCommand: typeof rawPane.shellCommand === 'string' ? rawPane.shellCommand : '',
     shellOutput: typeof rawPane.shellOutput === 'string' ? clipText(rawPane.shellOutput, MAX_SHELL_OUTPUT) : '',
+    shellHistory: Array.isArray(rawPane.shellHistory)
+      ? rawPane.shellHistory.filter((item): item is string => typeof item === 'string').slice(-50)
+      : [],
+    shellHistoryIndex: typeof rawPane.shellHistoryIndex === 'number' ? rawPane.shellHistoryIndex : null,
     localShellPath: typeof rawPane.localShellPath === 'string' && rawPane.localShellPath.trim() ? rawPane.localShellPath : localWorkspacePath,
     remoteShellPath: typeof rawPane.remoteShellPath === 'string' ? rawPane.remoteShellPath : '',
     shellRunning: false,
@@ -858,6 +866,9 @@ function normalizePane(
       : [],
     sessionId: typeof rawPane.sessionId === 'string' ? rawPane.sessionId : null,
     autoShare: Boolean(rawPane.autoShare),
+    autoShareTargetIds: Array.isArray(rawPane.autoShareTargetIds)
+      ? rawPane.autoShareTargetIds.filter((item): item is string => typeof item === 'string')
+      : [],
     lastRunAt: typeof rawPane.lastRunAt === 'number' ? rawPane.lastRunAt : null,
     runningSince: null,
     lastActivityAt: typeof rawPane.lastActivityAt === 'number' ? rawPane.lastActivityAt : null,
@@ -880,6 +891,11 @@ function App() {
   const [globalError, setGlobalError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
   const [workspacePicker, setWorkspacePicker] = useState<WorkspacePickerState | null>(null)
+  const [updatingProviders, setUpdatingProviders] = useState<Record<ProviderId, boolean>>({
+    codex: false,
+    copilot: false,
+    gemini: false
+  })
 
   const panesRef = useRef<PaneState[]>([])
   const localWorkspacesRef = useRef<LocalWorkspace[]>([])
@@ -1098,21 +1114,145 @@ function App() {
   }
 
   const handleToggleContext = (paneId: string, contextId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    const contextItem = sharedContextRef.current.find((item) => item.id === contextId)
+    if (!pane || !contextItem) {
+      return
+    }
+
+    const isAttached = pane.attachedContextIds.includes(contextId)
+    const isPendingForPane = contextItem.targetPaneIds.includes(paneId) && !contextItem.consumedByPaneIds.includes(paneId)
+
+    if (isAttached && isPendingForPane) {
+      const nextSharedContext = sharedContextRef.current
+        .flatMap((item) => {
+          if (item.id !== contextId) {
+            return [item]
+          }
+
+          const filteredTargetPaneIds = item.targetPaneIds.filter((id) => id !== paneId)
+          const filteredTargetPaneTitles = item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
+          if (item.scope === 'direct' || filteredTargetPaneIds.length === 0) {
+            return []
+          }
+
+          return [{
+            ...item,
+            targetPaneIds: filteredTargetPaneIds,
+            targetPaneTitles: filteredTargetPaneTitles
+          }]
+        })
+        .slice(0, MAX_SHARED_CONTEXT)
+
+      setSharedContext(nextSharedContext)
+      setPanes((current) =>
+        current.map((currentPane) =>
+          currentPane.id === paneId
+            ? {
+                ...currentPane,
+                attachedContextIds: currentPane.attachedContextIds.filter((item) => item !== contextId)
+              }
+            : currentPane
+        )
+      )
+      return
+    }
+
     setPanes((current) =>
-      current.map((pane) => {
-        if (pane.id !== paneId) {
-          return pane
+      current.map((currentPane) => {
+        if (currentPane.id !== paneId) {
+          return currentPane
         }
 
-        const attached = pane.attachedContextIds.includes(contextId)
+        const attached = currentPane.attachedContextIds.includes(contextId)
         return {
-          ...pane,
+          ...currentPane,
           attachedContextIds: attached
-            ? pane.attachedContextIds.filter((item) => item !== contextId)
-            : [...pane.attachedContextIds, contextId]
+            ? currentPane.attachedContextIds.filter((item) => item !== contextId)
+            : [...currentPane.attachedContextIds, contextId]
         }
       })
     )
+  }
+
+  const replaceSourceSharedContext = (sourcePaneId: string, nextSourceContexts: SharedContextItem[]) => {
+    const previousSourceContextIds = sharedContextRef.current
+      .filter((item) => item.sourcePaneId === sourcePaneId)
+      .map((item) => item.id)
+
+    const nextSharedContext = [...nextSourceContexts, ...sharedContextRef.current.filter((item) => item.sourcePaneId !== sourcePaneId)]
+      .slice(0, MAX_SHARED_CONTEXT)
+    const storedSourceContexts = nextSharedContext.filter((item) => item.sourcePaneId === sourcePaneId)
+
+    setSharedContext(nextSharedContext)
+    setPanes((current) =>
+      current.map((pane) => {
+        const baseAttached = pane.attachedContextIds.filter((item) => !previousSourceContextIds.includes(item))
+        const nextAttached = storedSourceContexts
+          .filter((item) => item.targetPaneIds.includes(pane.id) && !item.consumedByPaneIds.includes(pane.id))
+          .map((item) => item.id)
+
+        return {
+          ...pane,
+          attachedContextIds: [...baseAttached, ...nextAttached.filter((item) => !baseAttached.includes(item))]
+        }
+      })
+    )
+  }
+
+  const setPendingShareSelection = (
+    paneId: string,
+    responseOverride: string | undefined,
+    selection: { mode: 'none' | 'global' | 'direct'; targetPaneIds?: string[] }
+  ): boolean => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane) {
+      return false
+    }
+
+    if (selection.mode === 'none') {
+      replaceSourceSharedContext(paneId, [])
+      return true
+    }
+
+    const payload = getShareablePayload(pane)
+    const response = responseOverride ?? payload.text
+    if (!response) {
+      return false
+    }
+
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    const targetPanes = panesRef.current.filter((item) => item.id !== paneId)
+    const allowedTargetIds = new Set(targetPanes.map((item) => item.id))
+    const selectedTargetPanes = selection.mode === 'global'
+      ? targetPanes
+      : targetPanes.filter((item) => selection.targetPaneIds?.includes(item.id) && allowedTargetIds.has(item.id))
+
+    if (selectedTargetPanes.length === 0) {
+      replaceSourceSharedContext(paneId, [])
+      return true
+    }
+
+    const nextSourceContexts = selection.mode === 'global'
+      ? [
+          createSharedContextItem(pane, target, response, {
+            scope: 'global',
+            targetPaneIds: selectedTargetPanes.map((item) => item.id),
+            targetPaneTitles: selectedTargetPanes.map((item) => item.title),
+            contentLabel: payload.contentLabel
+          })
+        ]
+      : selectedTargetPanes.map((targetPane) =>
+          createSharedContextItem(pane, target, response, {
+            scope: 'direct',
+            targetPaneIds: [targetPane.id],
+            targetPaneTitles: [targetPane.title],
+            contentLabel: payload.contentLabel
+          })
+        )
+
+    replaceSourceSharedContext(paneId, nextSourceContexts)
+    return true
   }
 
   const shareFromPane = (
@@ -1128,41 +1268,67 @@ function App() {
       return
     }
 
-    const payload = getShareablePayload(pane)
-    const response = responseOverride ?? payload.text
-    if (!response) {
-      return
-    }
+    const allTargetIds = panesRef.current.filter((item) => item.id !== paneId).map((item) => item.id)
+    const existingContexts = sharedContextRef.current.filter((item) => item.sourcePaneId === paneId)
+    const globalContext = existingContexts.find((item) => item.scope === 'global') ?? null
+    const directTargetIds = existingContexts
+      .filter((item) => item.scope === 'direct')
+      .flatMap((item) => item.targetPaneIds)
 
-    const scope = options?.scope === 'direct' ? 'direct' : 'global'
-    const targetPane = options?.targetPaneId ? panesRef.current.find((item) => item.id === options.targetPaneId) ?? null : null
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
-    const contextItem = createSharedContextItem(pane, target, response, {
-      scope,
-      targetPaneIds: targetPane ? [targetPane.id] : [],
-      targetPaneTitles: targetPane ? [targetPane.title] : [],
-      contentLabel: payload.contentLabel
-    })
-    setSharedContext((current) => [contextItem, ...current].slice(0, MAX_SHARED_CONTEXT))
-
-    if (targetPane) {
-      setPanes((current) =>
-        current.map((currentPane) =>
-          currentPane.id === targetPane.id
-            ? {
-                ...currentPane,
-                attachedContextIds: currentPane.attachedContextIds.includes(contextItem.id)
-                  ? currentPane.attachedContextIds
-                  : [...currentPane.attachedContextIds, contextItem.id]
-              }
-            : currentPane
-        )
+    if ((options?.scope ?? 'global') === 'global') {
+      const enabled = setPendingShareSelection(
+        paneId,
+        responseOverride,
+        globalContext ? { mode: 'none' } : { mode: 'global' }
       )
-      appendPaneSystemMessage(paneId, `${targetPane.title} \u306b\u500b\u5225\u5171\u6709\u3057\u307e\u3057\u305f`)
-      appendPaneSystemMessage(targetPane.id, `${pane.title} \u304b\u3089\u5171\u6709\u3092\u53d7\u3051\u53d6\u308a\u307e\u3057\u305f`)
+      if (!enabled) {
+        return
+      }
+
+      appendPaneSystemMessage(paneId, globalContext ? '\u5168\u4f53\u5171\u6709\u3092\u89e3\u9664\u3057\u307e\u3057\u305f' : '\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709\u306b\u8ffd\u52a0\u3057\u307e\u3057\u305f')
       return
     }
-    appendPaneSystemMessage(paneId, '\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709\u3078\u8ffd\u52a0\u3057\u307e\u3057\u305f')
+
+    const targetPaneId = options?.targetPaneId?.trim()
+    if (!targetPaneId) {
+      return
+    }
+
+    const targetPane = panesRef.current.find((item) => item.id === targetPaneId)
+    if (!targetPane) {
+      return
+    }
+
+    if (globalContext) {
+      const remainingTargetIds = allTargetIds.filter((id) => id !== targetPaneId)
+      setPendingShareSelection(
+        paneId,
+        responseOverride,
+        remainingTargetIds.length > 0 ? { mode: 'direct', targetPaneIds: remainingTargetIds } : { mode: 'none' }
+      )
+      appendPaneSystemMessage(paneId, `${targetPane.title} \u3092\u5171\u6709\u5148\u304b\u3089\u5916\u3057\u307e\u3057\u305f`)
+      return
+    }
+
+    const nextTargetIds = directTargetIds.includes(targetPaneId)
+      ? directTargetIds.filter((id) => id !== targetPaneId)
+      : [...directTargetIds, targetPaneId]
+
+    const enabled = setPendingShareSelection(
+      paneId,
+      responseOverride,
+      nextTargetIds.length > 0 ? { mode: 'direct', targetPaneIds: nextTargetIds } : { mode: 'none' }
+    )
+    if (!enabled) {
+      return
+    }
+
+    appendPaneSystemMessage(
+      paneId,
+      directTargetIds.includes(targetPaneId)
+        ? `${targetPane.title} \u3078\u306e\u500b\u5225\u5171\u6709\u3092\u89e3\u9664\u3057\u307e\u3057\u305f`
+        : `${targetPane.title} \u3078\u500b\u5225\u5171\u6709\u3057\u307e\u3057\u305f`
+    )
   }
 
   const handleDeleteSharedContext = (contextId: string) => {
@@ -1221,7 +1387,8 @@ function App() {
         createdAt: eventAt
       }
 
-      let shouldShare = false
+      let shouldShareGlobal = false
+      let autoShareTargetIds: string[] = []
       mutatePane(paneId, (pane) => {
         const finalPreview = finalText.slice(0, 120)
         const liveOutputHasFinal = Boolean(finalPreview) && pane.liveOutput.includes(finalPreview)
@@ -1231,7 +1398,8 @@ function App() {
             : appendLiveOutputLine(pane.liveOutput, finalText)
           : pane.liveOutput
 
-        shouldShare = pane.autoShare
+        shouldShareGlobal = pane.autoShare
+        autoShareTargetIds = pane.autoShareTargetIds.filter((item) => item !== pane.id)
         return {
           ...pane,
           logs: appendLogEntry(pane.logs, assistantEntry),
@@ -1248,8 +1416,10 @@ function App() {
         }
       })
 
-      if (shouldShare) {
-        shareFromPane(paneId, assistantEntry.text)
+      if (shouldShareGlobal) {
+        setPendingShareSelection(paneId, assistantEntry.text, { mode: 'global' })
+      } else if (autoShareTargetIds.length > 0) {
+        setPendingShareSelection(paneId, assistantEntry.text, { mode: 'direct', targetPaneIds: autoShareTargetIds })
       }
       return
     }
@@ -1338,16 +1508,22 @@ function App() {
               return [item]
             }
 
-            if (item.scope === 'direct' && item.targetPaneIds.includes(paneId)) {
+            const nextConsumedByPaneIds = item.consumedByPaneIds.includes(paneId)
+              ? item.consumedByPaneIds
+              : [...item.consumedByPaneIds, paneId]
+            const nextTargetPaneIds = item.targetPaneIds.filter((id) => id !== paneId)
+            const nextTargetPaneTitles = item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
+
+            if (item.scope === 'direct' || nextTargetPaneIds.length === 0) {
               return []
             }
 
             return [
               {
                 ...item,
-                consumedByPaneIds: item.consumedByPaneIds.includes(paneId)
-                  ? item.consumedByPaneIds
-                  : [...item.consumedByPaneIds, paneId]
+                targetPaneIds: nextTargetPaneIds,
+                targetPaneTitles: nextTargetPaneTitles,
+                consumedByPaneIds: nextConsumedByPaneIds
               }
             ]
           })
@@ -1359,7 +1535,7 @@ function App() {
       ...currentPane,
       logs: appendLogEntry(currentPane.logs, userEntry),
       status: 'running',
-      statusText: 'CLI ����s���ł�',
+      statusText: '\u5b9f\u884c\u4e2d',
       lastRunAt: startedAt,
       runningSince: startedAt,
       lastActivityAt: startedAt,
@@ -1367,7 +1543,7 @@ function App() {
       selectedSessionKey: null,
       liveOutput: '',
       attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
-      streamEntries: appendStreamEntry([], 'system', `�J�n: ${currentPane.provider} / ${target.label}`, startedAt)
+      streamEntries: appendStreamEntry([], 'system', `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
 
     try {
@@ -1559,8 +1735,8 @@ function App() {
 
     const message =
       targetIds.length === 1
-        ? '�I�𒆂̃y�C����폜���Ă�ǂ��ł����H'
-        : `�I�𒆂� ${targetIds.length} ���̃y�C����폜���Ă�ǂ��ł����H`
+        ? '\u9078\u629e\u4e2d\u306e\u30da\u30a4\u30f3\u3092\u524a\u9664\u3057\u3066\u3082\u826f\u3044\u3067\u3059\u304b\uff1f'
+        : `\u9078\u629e\u4e2d\u306e ${targetIds.length} \u500b\u306e\u30da\u30a4\u30f3\u3092\u524a\u9664\u3057\u3066\u3082\u826f\u3044\u3067\u3059\u304b\uff1f`
 
     if (!window.confirm(message)) {
       return
@@ -1666,7 +1842,7 @@ function App() {
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
-        statusText: '�R�s�[�Ɏ��s���܂���',
+        statusText: '\u30b3\u30d4\u30fc\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1674,12 +1850,12 @@ function App() {
 
   const handleCopyLatest = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    await copyPaneText(paneId, pane ? getLatestAssistantText(pane) : null, '�ŐV������N���b�v�{�[�h�փR�s�[���܂���')
+    await copyPaneText(paneId, pane ? getLatestAssistantText(pane) : null, '\u6700\u65b0\u5fdc\u7b54\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f')
   }
 
   const handleCopyOutput = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    await copyPaneText(paneId, pane ? getPaneOutputText(pane) : null, '�\�����̏o�͂�N���b�v�{�[�h�փR�s�[���܂���')
+    await copyPaneText(paneId, pane ? getPaneOutputText(pane) : null, '\u51fa\u529b\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f')
   }
 
   const handleBrowseLocal = async (paneId: string, targetPath: string) => {
@@ -1711,7 +1887,7 @@ function App() {
       updatePane(paneId, {
         localBrowserLoading: false,
         status: 'error',
-        statusText: '�t�H���_��e�̓ǂݍ��݂Ɏ��s���܂���',
+        statusText: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u306e\u5185\u5bb9\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
     }
@@ -1937,6 +2113,49 @@ function App() {
     }
   }
 
+  const handleUpdateProviderCli = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane || updatingProviders[pane.provider]) {
+      return
+    }
+
+    const provider = pane.provider
+    const providerLabel = bootstrap?.providers[provider].label ?? provider
+    setUpdatingProviders((current) => ({ ...current, [provider]: true }))
+    updatePane(paneId, {
+      status: 'running',
+      statusText: providerLabel + ' \u66f4\u65b0\u4e2d'
+    })
+
+    try {
+      const result = await updateCliProvider(provider)
+      await refreshBootstrap()
+      const finishedAt = Date.now()
+      mutatePane(paneId, (currentPane) => ({
+        ...currentPane,
+        status: 'completed',
+        statusText: providerLabel + ' \u3092\u66f4\u65b0\u3057\u307e\u3057\u305f',
+        lastError: null,
+        lastActivityAt: finishedAt,
+        lastFinishedAt: finishedAt,
+        streamEntries: appendStreamEntry(
+          currentPane.streamEntries,
+          'system',
+          result.stdout || result.stderr || provider + ' update complete',
+          finishedAt
+        )
+      }))
+    } catch (error) {
+      updatePane(paneId, {
+        status: 'error',
+        statusText: providerLabel + ' \u306e\u66f4\u65b0\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        lastError: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setUpdatingProviders((current) => ({ ...current, [provider]: false }))
+    }
+  }
+
   const handleRunShell = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
     if (!pane) {
@@ -1947,6 +2166,7 @@ function App() {
     if (!command) {
       updatePane(paneId, {
         shellCommand: '',
+        shellHistoryIndex: null,
         shellLastError: null
       })
       return
@@ -1955,6 +2175,7 @@ function App() {
     if (/^(clear|cls)$/i.test(command)) {
       updatePane(paneId, {
         shellCommand: '',
+        shellHistoryIndex: null,
         shellOutput: '',
         shellLastExitCode: null,
         shellLastError: null,
@@ -1968,8 +2189,9 @@ function App() {
       mutatePane(paneId, (current) => ({
         ...current,
         shellCommand: '',
-        shellLastError: '���[�N�X�y�[�X�܂��� SSH �ڑ����ݒ肵�Ă�������',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] ���[�N�X�y�[�X�܂��� SSH �ڑ����ݒ肵�Ă�������'),
+        shellHistoryIndex: null,
+        shellLastError: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u307e\u305f\u306f SSH \u63a5\u7d9a\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044',
+        shellOutput: appendShellOutputLine(current.shellOutput, '[error] \u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u307e\u305f\u306f SSH \u63a5\u7d9a\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044'),
         shellLastRunAt: Date.now()
       }))
       return
@@ -1979,8 +2201,9 @@ function App() {
       mutatePane(paneId, (current) => ({
         ...current,
         shellCommand: '',
-        shellLastError: '�ȈՓ���^�[�~�i�� API ��������܂���BTAKO �̃T�[�o�[��ċN�����Ă��������B',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] �ȈՓ���^�[�~�i�� API ��������܂���BTAKO �̃T�[�o�[��ċN�����Ă��������B'),
+        shellHistoryIndex: null,
+        shellLastError: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
+        shellOutput: appendShellOutputLine(current.shellOutput, '[error] \u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'),
         shellLastRunAt: Date.now()
       }))
       return
@@ -1993,6 +2216,9 @@ function App() {
     const cwd = pane.workspaceMode === 'local'
       ? (pane.localShellPath.trim() || pane.localWorkspacePath.trim())
       : (pane.remoteShellPath.trim() || pane.remoteWorkspacePath.trim())
+    const nextShellHistory = pane.shellHistory[pane.shellHistory.length - 1] === command
+      ? pane.shellHistory
+      : [...pane.shellHistory, command].slice(-50)
 
     const startedAt = Date.now()
     const controller = new AbortController()
@@ -2002,6 +2228,8 @@ function App() {
     updatePane(paneId, {
       shellRunning: true,
       shellCommand: '',
+      shellHistory: nextShellHistory,
+      shellHistoryIndex: null,
       shellLastError: null,
       shellLastExitCode: null,
       shellLastRunAt: startedAt,
@@ -2727,6 +2955,8 @@ function App() {
                 onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
                 onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}
                 onOpenCommandPrompt={(paneId) => void handleOpenCommandPrompt(paneId)}
+                onUpdateProviderCli={(paneId) => void handleUpdateProviderCli(paneId)}
+                providerUpdating={updatingProviders[pane.provider]}
                 onRunShell={(paneId) => void handleRunShell(paneId)}
                 onStopShell={(paneId) => void handleStopShell(paneId)}
                 onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
@@ -2811,6 +3041,8 @@ function App() {
 }
 
 export default App
+
+
 
 
 

@@ -217,3 +217,16 @@ export interface ActiveShellRun {
   stop: () => void
 }
 
+
+export interface ProviderUpdateResult {
+  provider: ProviderId
+  stdout: string
+  stderr: string
+}
+
+export interface ProviderUpdateResponse {
+  success: boolean
+  provider: ProviderId
+  stdout: string
+  stderr: string
+}

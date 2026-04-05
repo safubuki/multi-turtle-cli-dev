@@ -339,11 +339,31 @@ function getCandidateNpmRoots(): string[] {
   ])
 }
 
+function getCmdExecutable(): string {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+  return path.join(systemRoot, 'System32', 'cmd.exe')
+}
+
+function getPowerShellExecutable(): string {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+  return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
 function getCliCommandPath(provider: ProviderId): string {
+  if (process.platform !== 'win32') {
+    return provider
+  }
+
   const npmRoot = getCandidateNpmRoots()[0] ?? path.join(process.env.APPDATA ?? '', 'npm')
-  const commandName =
-    provider === 'codex' ? 'codex.cmd' : provider === 'gemini' ? 'gemini.cmd' : 'copilot.cmd'
-  return process.platform === 'win32' ? path.join(npmRoot, commandName) : provider
+  const baseName = provider === 'codex' ? 'codex' : provider === 'gemini' ? 'gemini' : 'copilot'
+  const candidates = [
+    path.join(npmRoot, `${baseName}.cmd`),
+    path.join(npmRoot, `${baseName}.ps1`),
+    path.join(npmRoot, `${baseName}.bat`),
+    path.join(npmRoot, `${baseName}.exe`)
+  ]
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? baseName
 }
 
 function getCliScriptPath(provider: ProviderId): string | null {
@@ -379,8 +399,16 @@ function resolveCommand(provider: ProviderId): { command: string; prefixArgs: st
     }
   }
 
+  const commandPath = getCliCommandPath(provider)
+  if (process.platform === 'win32' && /\.ps1$/i.test(commandPath)) {
+    return {
+      command: getPowerShellExecutable(),
+      prefixArgs: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', commandPath]
+    }
+  }
+
   return {
-    command: getCliCommandPath(provider),
+    command: commandPath,
     prefixArgs: []
   }
 }
@@ -389,6 +417,36 @@ function buildProviderPrompt(options: RunOptions): string {
   return options.provider === 'codex' && options.codexFastMode === 'fast'
     ? ['/fast', '', options.prompt].join('\n')
     : options.prompt
+}
+
+function quoteForCmd(value: string): string {
+  if (!value) {
+    return '""'
+  }
+
+  if (!/[\s"]/u.test(value)) {
+    return value
+  }
+
+  return `"${value.replace(/"/g, '""')}"`
+}
+
+function buildWindowsCommandLine(command: string, args: string[]): string {
+  return [quoteForCmd(command), ...args.map((value) => quoteForCmd(value))].join(' ')
+}
+
+function spawnCliChild(command: string, args: string[], cwd: string): ChildProcessWithoutNullStreams {
+  const baseOptions = {
+    cwd,
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe']
+  }
+
+  if (process.platform === 'win32') {
+    return spawn(getCmdExecutable(), ['/d', '/s', '/c', buildWindowsCommandLine(command, args)], baseOptions)
+  }
+
+  return spawn(command, args, baseOptions)
 }
 
 async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec> {
@@ -717,11 +775,11 @@ export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
       ? await buildLocalLaunchSpec(options)
       : await buildRemoteLaunchSpec(options)
 
-  const child = spawn(launchSpec.command, launchSpec.args, {
-    cwd: options.target.kind === 'local' ? options.target.path : APP_ROOT,
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe']
-  })
+  const child = spawnCliChild(
+    launchSpec.command,
+    launchSpec.args,
+    options.target.kind === 'local' ? options.target.path : APP_ROOT
+  )
 
   child.stdin.on('error', () => {
     // Some CLIs close stdin as soon as they have consumed the prompt.
@@ -730,5 +788,7 @@ export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
 
   return createActiveRun(child, options, launchSpec)
 }
+
+
 
 

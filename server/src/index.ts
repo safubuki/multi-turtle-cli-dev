@@ -4,7 +4,7 @@ import express from 'express'
 import { startCliRun } from './cliRunner.js'
 import { startShellRun } from './shellRunner.js'
 import { pickFolderDialog, pickSaveFileDialog } from './nativeDialog.js'
-import { getProviderCatalogs } from './providerCatalog.js'
+import { getProviderCatalogs, updateProviderCli } from './providerCatalog.js'
 import {
   browseRemoteDirectory,
   createRemoteDirectory,
@@ -285,6 +285,34 @@ app.post('/api/system/open-cmd', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'command prompt open failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/provider/update', async (req, res) => {
+  try {
+    const { provider } = req.body as { provider?: RunRequestBody['provider'] }
+    if (provider !== 'codex' && provider !== 'gemini' && provider !== 'copilot') {
+      res.status(400).json({
+        success: false,
+        error: 'provider required'
+      })
+      return
+    }
+
+    const result = await updateProviderCli(provider)
+    await getProviderCatalogs(true)
+    res.json({
+      success: true,
+      provider: result.provider,
+      stdout: result.stdout,
+      stderr: result.stderr
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'provider update failed',
       details: String(error)
     })
   }

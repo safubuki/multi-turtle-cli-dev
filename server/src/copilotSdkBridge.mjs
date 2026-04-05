@@ -12,6 +12,15 @@ function readStdin() {
   })
 }
 
+function normalizeModels(models) {
+  return models.map((model) => ({
+    id: model.id,
+    name: model.name,
+    supportedReasoningEfforts: model.supportedReasoningEfforts ?? [],
+    defaultReasoningEffort: model.defaultReasoningEffort ?? null
+  }))
+}
+
 async function main() {
   const raw = await readStdin()
   const request = JSON.parse(raw)
@@ -27,6 +36,12 @@ async function main() {
 
   try {
     await client.start()
+
+    if (request.mode === 'listModels') {
+      const models = await client.listModels()
+      process.stdout.write(JSON.stringify({ models: normalizeModels(models) }))
+      return
+    }
 
     const session = await client.createSession({
       onPermissionRequest: sdk.approveAll,

@@ -1,24 +1,26 @@
-import path from 'path'
+﻿import path from 'path'
 import { spawn, type ChildProcess } from 'child_process'
-import iconv from 'iconv-lite'
 import { buildSshCommandArgs } from './ssh.js'
 import type { ActiveShellRun, ShellExecResult, ShellRunEvent, ShellRunRequestBody, WorkspaceTarget } from './types.js'
 import { shellEscapePosix } from './util.js'
 
 const CWD_MARKER = '__TAKO_SHELL_CWD__:'
 
-type ShellEncoding = 'utf8' | 'cp932'
-
-interface BufferedDecoder {
-  write: (chunk: Buffer) => string
-  end: () => string
-}
+type ShellEncoding = 'utf8' | 'shift_jis'
 
 function getCmdExecutable(): string {
   return process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe'
 }
 
 function quoteForCmd(value: string): string {
+  if (!value) {
+    return '""'
+  }
+
+  if (!/[\s"]/u.test(value)) {
+    return value
+  }
+
   return `"${value.replace(/"/g, '""')}"`
 }
 
@@ -32,18 +34,10 @@ function resolveRemoteWorkingDirectory(target: Extract<WorkspaceTarget, { kind: 
   return (cwd?.trim() || basePath || '~').trim()
 }
 
-function createBufferDecoder(encoding: ShellEncoding): BufferedDecoder {
-  if (encoding === 'cp932') {
-    const decoder = iconv.getDecoder('cp932')
-    return {
-      write: (chunk) => decoder.write(chunk),
-      end: () => decoder.end() ?? ''
-    }
-  }
-
-  const decoder = new TextDecoder('utf-8')
+function createBufferDecoder(encoding: ShellEncoding) {
+  const decoder = new TextDecoder(encoding === 'shift_jis' ? 'shift_jis' : 'utf-8')
   return {
-    write: (chunk) => decoder.decode(chunk, { stream: true }),
+    write: (chunk: Buffer) => decoder.decode(chunk, { stream: true }),
     end: () => decoder.decode()
   }
 }
@@ -51,18 +45,20 @@ function createBufferDecoder(encoding: ShellEncoding): BufferedDecoder {
 function buildLocalWindowsSpec(target: Extract<WorkspaceTarget, { kind: 'local' }>, command: string, cwd?: string | null) {
   const workingDirectory = resolveLocalWorkingDirectory(target, cwd)
   const script = [
+    '@echo off',
+    'chcp 65001>nul',
     `cd /d ${quoteForCmd(workingDirectory)}`,
     command,
-    'set "__TAKO_EXIT__=!ERRORLEVEL!"',
+    'set "TAKO_EXIT=%ERRORLEVEL%"',
     `echo ${CWD_MARKER}%CD%`,
-    'exit /b !__TAKO_EXIT__!'
+    'exit /b %TAKO_EXIT%'
   ].join(' & ')
 
   return {
     command: getCmdExecutable(),
-    args: ['/d', '/v:on', '/s', '/c', script],
+    args: ['/d', '/s', '/c', script],
     workingDirectory,
-    encoding: 'cp932' as const
+    encoding: 'utf8' as const
   }
 }
 
@@ -125,8 +121,9 @@ function emitLines(
   const carry = final ? '' : lines.pop() ?? ''
 
   for (const line of lines) {
-    if (line.startsWith(CWD_MARKER)) {
-      const nextCwd = line.slice(CWD_MARKER.length).trim()
+    const sanitizedLine = line.replace(/^\uFEFF/, '')
+    if (sanitizedLine.startsWith(CWD_MARKER)) {
+      const nextCwd = sanitizedLine.slice(CWD_MARKER.length).trim()
       if (nextCwd) {
         state.cwd = nextCwd
         onEvent?.({ type: 'cwd', cwd: nextCwd })
@@ -134,10 +131,10 @@ function emitLines(
       continue
     }
 
-    onEvent?.({ type, text: line })
+    onEvent?.({ type, text: sanitizedLine })
   }
 
-  return carry
+  return carry.replace(/^\uFEFF/, '')
 }
 
 function killChild(child: ChildProcess): void {
@@ -219,7 +216,7 @@ export async function startShellRun(options: ShellRunRequestBody & { onEvent?: (
       const cleanedStdout = stdoutText
         .replace(/\r/g, '')
         .split('\n')
-        .filter((line) => !line.startsWith(CWD_MARKER))
+        .filter((line) => !line.replace(/^\uFEFF/, '').startsWith(CWD_MARKER))
         .join('\n')
         .trimEnd()
       const cleanedStderr = stderrText.replace(/\r/g, '').trimEnd()

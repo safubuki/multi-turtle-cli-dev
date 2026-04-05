@@ -180,6 +180,8 @@ export interface PaneState {
   shellOpen: boolean
   shellCommand: string
   shellOutput: string
+  shellHistory: string[]
+  shellHistoryIndex: number | null
   localShellPath: string
   remoteShellPath: string
   shellRunning: boolean
@@ -232,6 +234,7 @@ export interface PaneState {
   attachedContextIds: string[]
   sessionId: string | null
   autoShare: boolean
+  autoShareTargetIds: string[]
   lastRunAt: number | null
   runningSince: number | null
   lastActivityAt: number | null
@@ -393,3 +396,10 @@ export interface SshTransferResponse {
   remotePath: string
 }
 
+
+export interface ProviderUpdateResponse {
+  success: boolean
+  provider: ProviderId
+  stdout: string
+  stderr: string
+}

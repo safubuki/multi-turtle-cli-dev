@@ -2483,3 +2483,40 @@ textarea {
   min-height: 62vh;
   max-height: 70vh;
 }
+
+.share-target-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.share-checkbox {
+  width: auto;
+  min-width: 84px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.compact-share-checkbox {
+  min-width: 72px;
+}
+
+.share-checkbox.is-active,
+.menu-action.is-sharing,
+.icon-button.share-active {
+  border-color: rgba(84, 210, 194, 0.44);
+  background: rgba(84, 210, 194, 0.12);
+  color: #cbfff8;
+  box-shadow: 0 0 0 1px rgba(84, 210, 194, 0.22), 0 0 18px rgba(84, 210, 194, 0.18);
+}
+
+.accordion-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.provider-update-button {
+  min-width: 180px;
+}
