@@ -254,6 +254,8 @@ function statusLabel(status: PaneStatus): string {
   switch (status) {
     case 'running':
       return '\u5b9f\u884c\u4e2d'
+    case 'updating':
+      return 'AI\u66f4\u65b0\u4e2d'
     case 'completed':
       return '\u5b8c\u4e86'
     case 'attention':
@@ -784,7 +786,7 @@ function normalizeSessionRecord(rawRecord: Partial<PaneSessionRecord> | null | u
     createdAt: typeof rawRecord.createdAt === 'number' ? rawRecord.createdAt : Date.now(),
     updatedAt: typeof rawRecord.updatedAt === 'number' ? rawRecord.updatedAt : null,
     status:
-      rawRecord.status === 'completed' || rawRecord.status === 'attention' || rawRecord.status === 'error' || rawRecord.status === 'running'
+      rawRecord.status === 'completed' || rawRecord.status === 'attention' || rawRecord.status === 'error' || rawRecord.status === 'running' || rawRecord.status === 'updating'
         ? rawRecord.status
         : 'idle',
     logs: Array.isArray(rawRecord.logs) ? rawRecord.logs.slice(-MAX_LOGS) : [],
@@ -814,7 +816,7 @@ function normalizePane(
   const restoredStatus: PaneStatus =
     rawStatus === 'running'
       ? 'attention'
-      : rawStatus === 'completed' || rawStatus === 'attention' || rawStatus === 'error'
+      : rawStatus === 'completed' || rawStatus === 'attention' || rawStatus === 'error' || rawStatus === 'updating'
         ? rawStatus
         : 'idle'
   const remoteBrowserEntries = Array.isArray(rawPane.remoteBrowserEntries)
@@ -1049,7 +1051,7 @@ function App() {
     }
 
     for (const pane of panes) {
-      if (pane.status === 'running') {
+      if (pane.status === 'running' || pane.status === 'updating') {
         result.running += 1
       } else if (pane.status === 'completed') {
         result.completed += 1
@@ -2210,10 +2212,14 @@ function App() {
 
     const provider = pane.provider
     const providerLabel = bootstrap?.providers[provider].label ?? provider
+    const startedAt = Date.now()
     setUpdatingProviders((current) => ({ ...current, [provider]: true }))
     updatePane(paneId, {
-      status: 'running',
-      statusText: providerLabel + ' \u66f4\u65b0\u4e2d'
+      status: 'updating',
+      statusText: providerLabel + ' \u3092\u66f4\u65b0\u4e2d',
+      runningSince: startedAt,
+      lastActivityAt: startedAt,
+      lastError: null
     })
 
     try {
@@ -2225,6 +2231,7 @@ function App() {
         status: 'completed',
         statusText: providerLabel + ' \u3092\u66f4\u65b0\u3057\u307e\u3057\u305f',
         lastError: null,
+        runningSince: null,
         lastActivityAt: finishedAt,
         lastFinishedAt: finishedAt,
         streamEntries: appendStreamEntry(
@@ -2238,6 +2245,7 @@ function App() {
       updatePane(paneId, {
         status: 'error',
         statusText: providerLabel + ' \u306e\u66f4\u65b0\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        runningSince: null,
         lastError: error instanceof Error ? error.message : String(error)
       })
     } finally {
@@ -2838,7 +2846,7 @@ function App() {
 
       {isBootstrapping && (
         <div className="global-loading">
-          <Activity size={18} className="spin" />
+          <span className="loading-spinner" aria-hidden="true" />
           <span>{'CLI \u30c7\u30c3\u30ad\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</span>
         </div>
       )}

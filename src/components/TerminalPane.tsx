@@ -2,7 +2,6 @@
 import {
   AlertTriangle,
   ArrowUp,
-  Bot,
   ChevronDown,
   ChevronLeft,
   Copy,  FileText,
@@ -10,6 +9,7 @@ import {
   FolderOpen,
   FolderPlus,
   Home,
+  History,
   LoaderCircle,
   Maximize2,
   Play,
@@ -104,6 +104,7 @@ const UI = {
   promptPlaceholder: '\u3084\u308a\u305f\u3044\u3053\u3068\u3092\u5165\u529b\u3057\u307e\u3059\u3002Ctrl+Enter \u3067\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002',
   stalledHint: '\u51fa\u529b\u304c\u6b62\u307e\u3063\u3066\u3044\u307e\u3059\u3002\u78ba\u8a8d\u304b\u518d\u5b9f\u884c\u3092\u691c\u8a0e\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
   runningHint: 'CLI \u3092\u5b9f\u884c\u4e2d\u3067\u3059\u3002',
+  updatingHint: 'AI \u3092\u66f4\u65b0\u4e2d\u3067\u3059\u3002',
   stop: '\u505c\u6b62',
   run: '\u5b9f\u884c',
   settings: 'CLI/AI\u30e2\u30c7\u30eb\u9078\u629e/\u8a2d\u5b9a',
@@ -111,11 +112,11 @@ const UI = {
   cli: 'CLI',
   model: '\u30e2\u30c7\u30eb',
   reasoning: '\u63a8\u8ad6\u30ec\u30d9\u30eb',
-  reasoningUnavailable: '\u3053\u306e\u30e2\u30c7\u30eb\u3067\u306f\u9078\u3079\u307e\u305b\u3093',
+  reasoningUnavailable: '\u9078\u629e\u3067\u304d\u307e\u305b\u3093',
   executionStyle: '\u81ea\u52d5\u627f\u8a8d\u30ec\u30d9\u30eb',
   readonlyCodex: 'Codex \u306f --full-auto \u56fa\u5b9a\u3067\u3059\u3002Fast\u30e2\u30fc\u30c9\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u5148\u982d\u306b /fast \u3092\u4ed8\u3051\u3066\u5b9f\u884c\u3057\u307e\u3059\u3002',
   styleHint: '\u6a19\u6e96\u306f\u901a\u5e38\u306e\u7de8\u96c6\u3068\u30c4\u30fc\u30eb\u5b9f\u884c\u3092\u81ea\u52d5\u3067\u9032\u3081\u3001\u5236\u9650\u306a\u3057\u306f\u305d\u308c\u3088\u308a\u5e83\u3044\u64cd\u4f5c\u307e\u3067\u8a31\u53ef\u3057\u307e\u3059\u3002Gemini \u306f auto_edit / yolo\u3001Copilot \u306f allow-all-tools / allow-all \u306b\u5bfe\u5fdc\u3057\u307e\u3059\u3002',
-  unchanged: '\u5909\u66f4\u4e0d\u53ef',
+  unchanged: '\u9078\u629e\u3067\u304d\u307e\u305b\u3093',
   normal: '\u6a19\u6e96\u306e\u81ea\u52d5\u627f\u8a8d',
   active: '\u5236\u9650\u306a\u3057\u306e\u81ea\u52d5\u627f\u8a8d',
   currentWorkspace: '\u73fe\u5728\u306e\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
@@ -149,6 +150,7 @@ const UI = {
   noSharedContext: '\u5171\u6709\u6e08\u307f\u306e\u6587\u8108\u306f\u307e\u3060\u3042\u308a\u307e\u305b\u3093\u3002',
   selectedCount: '\u4ef6\u9078\u629e',
   runLogs: '\u5b9f\u884c\u30ed\u30b0',
+  runLogsEmpty: '\u307e\u3060\u5b9f\u884c\u30ed\u30b0\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   session: '\u30bb\u30c3\u30b7\u30e7\u30f3',
   sessions: '\u30bb\u30c3\u30b7\u30e7\u30f3',
   stream: '\u30b9\u30c8\u30ea\u30fc\u30e0',
@@ -167,7 +169,8 @@ const UI = {
   terminalExternal: '\u5916\u90e8\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8a66\u3059',
   terminalPath: '\u73fe\u5728\u30d1\u30b9',
   workspaceTop: '\u30c8\u30c3\u30d7\u3078',
-  backToTop: '\u30c8\u30c3\u30d7\u306b\u623b\u308b'
+  backToTop: '\u30c8\u30c3\u30d7\u306b\u623b\u308b',
+  close: '\u9589\u3058\u308b'
 } as const
 
 const LOCAL_DRAG_MIME = 'application/x-multi-turtle-local-path'
@@ -298,6 +301,7 @@ export function TerminalPane({
   onToggleContext
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
+  const [isRunLogsExpanded, setIsRunLogsExpanded] = useState(false)
   const [isShellExpanded, setIsShellExpanded] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [remoteDropTarget, setRemoteDropTarget] = useState<string | null>(null)
@@ -365,6 +369,9 @@ export function TerminalPane({
   const availableRemoteProviders = pane.remoteAvailableProviders.length > 0 ? pane.remoteAvailableProviders : (['codex', 'copilot', 'gemini'] as ProviderId[])
   const selectedLocalWorkspace = localWorkspaces.find((workspace) => workspace.path === pane.localWorkspacePath)
   const canRemoveLocalWorkspace = selectedLocalWorkspace?.source === 'manual'
+  const isProviderUpdating = pane.status === 'updating'
+  const isRunInProgress = pane.status === 'running'
+  const isBusy = isRunInProgress || isProviderUpdating
   const isStalled = pane.status === 'running' && pane.lastActivityAt !== null && now - pane.lastActivityAt > 45_000
   const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
@@ -546,8 +553,8 @@ export function TerminalPane({
                 </summary>
                 <div className="pane-menu-surface share-menu-surface">
                   <div className="share-target-row">
-                    <button type="button" aria-pressed={isGlobalShareActive} className={isGlobalShareActive ? 'menu-action share-action-button is-sharing is-active' : 'menu-action share-action-button'} onClick={() => onShare(pane.id)}><Share2 size={15} />{UI.shareGlobal}</button>
-                    <label className={pane.autoShare ? 'menu-toggle share-checkbox is-active' : 'menu-toggle share-checkbox'}>
+                    <button type="button" aria-pressed={isGlobalShareActive} className={isGlobalShareActive ? 'menu-action compact-menu-action share-action-button is-sharing is-active' : 'menu-action compact-menu-action share-action-button'} onClick={() => onShare(pane.id)}><Share2 size={15} />{UI.shareGlobal}</button>
+                    <label className={pane.autoShare ? 'menu-toggle share-checkbox compact-share-checkbox is-active' : 'menu-toggle share-checkbox compact-share-checkbox'}>
                       <input type="checkbox" checked={pane.autoShare} onChange={(event) => onUpdate(pane.id, { autoShare: event.target.checked })} />
                       <span>{UI.autoShareShort}</span>
                     </label>
@@ -578,12 +585,13 @@ export function TerminalPane({
                   <p className="menu-help">{UI.shareHint}</p>
                 </div>
               </details>
+              <button type="button" className="icon-button" disabled={!hasSessionRecords} onClick={() => setIsRunLogsExpanded(true)} title={UI.runLogs}><History size={16} /></button>
               <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
             </div>
 
             <div className="pane-action-row launch-row">
-              <button type="button" className="secondary-button pane-session-button" disabled={pane.status === 'running'} onClick={() => onStartNewSession(pane.id)}><RefreshCcw size={16} />{UI.newSession}</button>
-              <button type="button" className="secondary-button pane-vscode-button" disabled={pane.status === 'running'} onClick={() => onDuplicate(pane.id)}><Copy size={16} />{UI.duplicatePane}</button>
+              <button type="button" className="secondary-button pane-session-button" disabled={isBusy} onClick={() => onStartNewSession(pane.id)}><RefreshCcw size={16} />{UI.newSession}</button>
+              <button type="button" className="secondary-button pane-vscode-button" disabled={isBusy} onClick={() => onDuplicate(pane.id)}><Copy size={16} />{UI.duplicatePane}</button>
               <button type="button" className="secondary-button pane-vscode-button" disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath} onClick={() => onOpenWorkspace(pane.id)}><FolderOpen size={16} />{UI.openVsCode}</button>
             </div>
           </div>
@@ -593,7 +601,7 @@ export function TerminalPane({
           <span className="tiny-badge">{catalog?.label ?? pane.provider}</span>
           <span className="tiny-badge">{pane.workspaceMode === 'local' ? UI.localPc : UI.remotePc}</span>
           <span className="tiny-badge">{workspaceLabel}</span>
-          <span className={isStalled ? 'tiny-badge warning' : 'tiny-badge'}>{pane.status === 'running' ? `\u5b9f\u884c ${formatElapsed(pane.runningSince, now)}` : `\u6700\u7d42 ${formatClock(pane.lastRunAt)}`}</span>
+          <span className={isStalled ? 'tiny-badge warning' : 'tiny-badge'}>{isRunInProgress ? `\u5b9f\u884c ${formatElapsed(pane.runningSince, now)}` : isProviderUpdating ? `\u66f4\u65b0 ${formatElapsed(pane.runningSince, now)}` : `\u6700\u7d42 ${formatClock(pane.lastRunAt)}`}</span>
         </div>
 
         <section className="primary-panel output-panel">
@@ -621,7 +629,7 @@ export function TerminalPane({
             value={pane.prompt}
             onChange={(event) => onUpdate(pane.id, { prompt: event.target.value })}
             onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canRun && pane.status !== 'running') {
+              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canRun && !isBusy) {
                 event.preventDefault()
                 onRun(pane.id)
               }
@@ -630,8 +638,10 @@ export function TerminalPane({
           />
           <div className="composer-footer">
             <div className="composer-hint">
-              {pane.status === 'running' ? (
+              {isRunInProgress ? (
                 <><LoaderCircle size={16} className="spin" /><span>{isStalled ? UI.stalledHint : UI.runningHint}</span></>
+              ) : isProviderUpdating ? (
+                <><LoaderCircle size={16} className="spin" /><span>{UI.updatingHint}</span></>
               ) : pane.lastError ? (
                 <><AlertTriangle size={16} /><span>{pane.lastError}</span></>
               ) : (
@@ -639,10 +649,10 @@ export function TerminalPane({
               )}
             </div>
             <div className="composer-actions">
-              {pane.status === 'running' ? (
+              {isRunInProgress ? (
                 <button type="button" className="danger-button stable-run-button" onClick={() => onStop(pane.id)}><Square size={16} />{UI.stop}</button>
               ) : (
-                <button type="button" className="primary-button stable-run-button" disabled={!canRun} onClick={() => onRun(pane.id)}><Play size={16} />{UI.run}</button>
+                <button type="button" className="primary-button stable-run-button" disabled={!canRun || isProviderUpdating} onClick={() => onRun(pane.id)}><Play size={16} />{UI.run}</button>
               )}
             </div>
           </div>
@@ -844,8 +854,8 @@ export function TerminalPane({
                     </div>
                   </details>
 
-                  <div className="inline-actions wrap-actions compact-utility-row">
-                    <button type="button" className="secondary-button" onClick={() => onLoadRemote(pane.id)}><Wifi size={16} />{UI.refreshConnection}</button>
+                  <div className="workspace-primary-action remote-connect-action">
+                    <button type="button" className="primary-button workspace-choose-button remote-connect-button" onClick={() => onLoadRemote(pane.id)}><Wifi size={16} />{UI.refreshConnection}</button>
                   </div>
 
                   <div className={`browser-panel workspace-browser-shell remote-browser-shell ${remoteDropTarget === remoteBaseDropPath ? 'is-drop-active' : ''}`} onDragOver={(event) => { if (remoteBaseDropPath) { allowRemoteDrop(event, remoteBaseDropPath) } }} onDragLeave={clearRemoteDrop} onDrop={(event) => { if (remoteBaseDropPath) { handleRemoteDrop(event, remoteBaseDropPath) } }}>
@@ -943,51 +953,6 @@ export function TerminalPane({
             </details>
           )}
 
-          {hasSessionRecords && (
-            <details className="pane-accordion">
-              <summary className="accordion-summary">
-                <span className="accordion-label"><Bot size={15} />{UI.runLogs}</span>
-                <span className="accordion-value">{`${sessionOptions.length} ${UI.sessions}`}</span>
-              </summary>
-              <div className="accordion-body stacked-panels">
-                {sessionOptions.length > 1 && (
-                  <label className="session-selector">
-                    <span>{UI.session}</span>
-                    <select value={selectedArchivedSession?.key ?? '__current__'} onChange={(event) => onSelectSession(pane.id, event.target.value === '__current__' ? null : event.target.value)}>
-                      {sessionOptions.map((session) => <option key={session.key} value={session.key}>{session.label}</option>)}
-                    </select>
-                  </label>
-                )}
-                <div className="session-log-meta"><strong>{visibleSession.label}</strong><span>{formatClock(visibleSession.updatedAt)}</span></div>
-                {visibleSession.streamEntries.length > 0 && (
-                  <div className="activity-panel compact-panel">
-                    <div className="section-headline compact-headline"><strong>{UI.stream}</strong><span>{visibleSession.streamEntries.length}</span></div>
-                    <div className="activity-feed">
-                      {visibleSession.streamEntries.map((entry) => (
-                        <article key={entry.id} className={`activity-entry ${entry.kind}`}>
-                          <header><strong>{entry.kind}</strong><span>{formatClock(entry.createdAt)}</span></header>
-                          <p>{entry.text}</p>
-                        </article>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {visibleSession.logs.length > 0 && (
-                  <div className="history-panel compact-panel">
-                    <div className="section-headline compact-headline"><strong>{UI.conversation}</strong><span>{visibleSession.logs.length}</span></div>
-                    <div className="history-feed">
-                      {visibleSession.logs.map((entry) => (
-                        <article key={entry.id} className={`history-entry ${entry.role}`}>
-                          <header><strong>{entry.role === 'assistant' ? pane.provider : entry.role}</strong><span>{formatClock(entry.createdAt)}</span></header>
-                          <p>{entry.text}</p>
-                        </article>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </details>
-          )}
         </div>
       </section>
 
@@ -1000,6 +965,62 @@ export function TerminalPane({
             </div>
             <div className="output-modal-body">{hasOutput ? <pre>{outputText}</pre> : null}</div>
             <div className="output-modal-footer"><button type="button" className="secondary-button" disabled={!outputText} onClick={() => onCopyOutput(pane.id)}><Copy size={16} />{UI.copyOutput}</button></div>
+          </div>
+        </div>
+      )}
+
+      {isRunLogsExpanded && (
+        <div className="output-modal-backdrop">
+          <div className="output-modal run-logs-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-header slim">
+              <div><h3>{UI.runLogs}</h3><p>{pane.title}</p></div>
+              <button type="button" className="icon-button" onClick={() => setIsRunLogsExpanded(false)} title={UI.close}><X size={16} /></button>
+            </div>
+            <div className="output-modal-body run-logs-modal-body">
+              {hasSessionRecords ? (
+                <>
+                  {sessionOptions.length > 1 && (
+                    <label className="session-selector">
+                      <span>{UI.session}</span>
+                      <select value={selectedArchivedSession?.key ?? '__current__'} onChange={(event) => onSelectSession(pane.id, event.target.value === '__current__' ? null : event.target.value)}>
+                        {sessionOptions.map((session) => <option key={session.key} value={session.key}>{session.label}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <div className="session-log-meta"><strong>{visibleSession.label}</strong><span>{formatClock(visibleSession.updatedAt)}</span></div>
+                  <div className="run-logs-modal-grid">
+                    {visibleSession.streamEntries.length > 0 && (
+                      <div className="activity-panel">
+                        <div className="section-headline compact-headline"><strong>{UI.stream}</strong><span>{visibleSession.streamEntries.length}</span></div>
+                        <div className="activity-feed">
+                          {visibleSession.streamEntries.map((entry) => (
+                            <article key={entry.id} className={`activity-entry ${entry.kind}`}>
+                              <header><strong>{entry.kind}</strong><span>{formatClock(entry.createdAt)}</span></header>
+                              <p>{entry.text}</p>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {visibleSession.logs.length > 0 && (
+                      <div className="history-panel">
+                        <div className="section-headline compact-headline"><strong>{UI.conversation}</strong><span>{visibleSession.logs.length}</span></div>
+                        <div className="history-feed">
+                          {visibleSession.logs.map((entry) => (
+                            <article key={entry.id} className={`history-entry ${entry.role}`}>
+                              <header><strong>{entry.role === 'assistant' ? pane.provider : entry.role}</strong><span>{formatClock(entry.createdAt)}</span></header>
+                              <p>{entry.text}</p>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {visibleSession.streamEntries.length === 0 && visibleSession.logs.length === 0 && <p className="panel-placeholder run-logs-empty">{UI.runLogsEmpty}</p>}
+                  </div>
+                </>
+              ) : <p className="panel-placeholder run-logs-empty">{UI.runLogsEmpty}</p>}
+            </div>
+            <div className="output-modal-footer"><button type="button" className="secondary-button" onClick={() => setIsRunLogsExpanded(false)}><X size={16} />{UI.close}</button></div>
           </div>
         </div>
       )}

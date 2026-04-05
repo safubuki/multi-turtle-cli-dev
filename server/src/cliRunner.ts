@@ -48,6 +48,8 @@ const DEFAULT_STATE = (): ParsedRunState => ({
   stderrText: ''
 })
 
+type CliEncoding = 'auto' | 'utf8' | 'shift_jis'
+
 function createCodexOutputCapturePath(): string {
   const captureDir = path.join(APP_ROOT, '.multi-turtle-runtime')
   fs.mkdirSync(captureDir, { recursive: true })
@@ -81,6 +83,54 @@ function sanitizeSessionId(sessionId: string | null | undefined): string | null 
   }
 
   return normalized
+}
+
+function isCmdScript(command: string): boolean {
+  return /\.(cmd|bat)$/i.test(command)
+}
+
+function countReplacementCharacters(value: string): number {
+  return (value.match(/\uFFFD/g) ?? []).length
+}
+
+function chooseDecodedText(utf8Text: string, shiftJisText: string): string {
+  const utf8ReplacementCount = countReplacementCharacters(utf8Text)
+  const shiftJisReplacementCount = countReplacementCharacters(shiftJisText)
+
+  if (utf8ReplacementCount === 0 && shiftJisReplacementCount > 0) {
+    return utf8Text
+  }
+
+  if (shiftJisReplacementCount === 0 && utf8ReplacementCount > 0) {
+    return shiftJisText
+  }
+
+  if (utf8ReplacementCount !== shiftJisReplacementCount) {
+    return utf8ReplacementCount < shiftJisReplacementCount ? utf8Text : shiftJisText
+  }
+
+  return utf8Text
+}
+
+function createBufferDecoder(encoding: CliEncoding) {
+  if (encoding === 'auto') {
+    const utf8Decoder = new TextDecoder('utf-8')
+    const shiftJisDecoder = new TextDecoder('shift_jis')
+
+    return {
+      write: (chunk: Buffer) => chooseDecodedText(
+        utf8Decoder.decode(chunk, { stream: true }),
+        shiftJisDecoder.decode(chunk, { stream: true })
+      ),
+      end: () => chooseDecodedText(utf8Decoder.decode(), shiftJisDecoder.decode())
+    }
+  }
+
+  const decoder = new TextDecoder(encoding === 'shift_jis' ? 'shift_jis' : 'utf-8')
+  return {
+    write: (chunk: Buffer) => decoder.decode(chunk, { stream: true }),
+    end: () => decoder.decode()
+  }
 }
 
 function safeJsonParse(line: string): Record<string, unknown> | null {
@@ -442,7 +492,7 @@ function spawnCliChild(command: string, args: string[], cwd: string): ChildProce
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe']
   }
 
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' && isCmdScript(command)) {
     return spawn(getCmdExecutable(), ['/d', '/s', '/c', buildWindowsCommandLine(command, args)], baseOptions)
   }
 
@@ -530,7 +580,6 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
     options.model,
     options.autonomyMode === 'max' ? '--allow-all' : '--allow-all-tools',
     '--no-ask-user',
-    '--no-alt-screen',
     '--no-color',
     '--add-dir',
     options.target.path
@@ -613,7 +662,6 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
             options.model,
             options.autonomyMode === 'max' ? '--allow-all' : '--allow-all-tools',
             '--no-ask-user',
-            '--no-alt-screen',
             '--no-color',
             '--add-dir',
             options.target.path,
@@ -654,6 +702,8 @@ function createActiveRun(
   const state = DEFAULT_STATE()
   let stdoutBuffer = ''
   let stopped = false
+  const stdoutDecoder = createBufferDecoder(process.platform === 'win32' ? 'auto' : 'utf8')
+  const stderrDecoder = createBufferDecoder(process.platform === 'win32' ? 'auto' : 'utf8')
 
   const processStdoutLine = (line: string) => {
     const trimmed = line.trim()
@@ -694,7 +744,7 @@ function createActiveRun(
 
   const promise = new Promise<CliExecResult>((resolve, reject) => {
     child.stdout.on('data', (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString()
+      stdoutBuffer += stdoutDecoder.write(chunk)
       const lines = stdoutBuffer.split(/\r?\n/)
       stdoutBuffer = lines.pop() ?? ''
       for (const line of lines) {
@@ -703,7 +753,7 @@ function createActiveRun(
     })
 
     child.stderr.on('data', (chunk: Buffer) => {
-      const text = chunk.toString()
+      const text = stderrDecoder.write(chunk)
       state.stderrText += text
       emitIfText(options.onEvent, 'stderr', text)
     })
@@ -713,7 +763,21 @@ function createActiveRun(
     })
 
     child.on('close', (code) => {
+      const stdoutTail = stdoutDecoder.end()
+      if (stdoutTail) {
+        stdoutBuffer += stdoutTail
+      }
       flushStdoutBuffer(true)
+      if (stdoutBuffer) {
+        processStdoutLine(stdoutBuffer)
+        stdoutBuffer = ''
+      }
+
+      const stderrTail = stderrDecoder.end()
+      if (stderrTail) {
+        state.stderrText += stderrTail
+        emitIfText(options.onEvent, 'stderr', stderrTail)
+      }
 
       let capturedOutput = ''
       if (launchSpec.outputFilePath) {
