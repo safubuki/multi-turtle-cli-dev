@@ -49,8 +49,8 @@ interface TerminalPaneProps {
   onStop: (paneId: string) => void
   onShare: (paneId: string) => void
   onShareToPane: (sourcePaneId: string, targetPaneId: string) => void
-  onCopyLatest: (paneId: string) => void
   onCopyOutput: (paneId: string) => void
+  onCopyProviderCommand: (paneId: string, text: string, successMessage: string) => void
   onDuplicate: (paneId: string) => void
   onStartNewSession: (paneId: string) => void
   onResetSession: (paneId: string) => void
@@ -60,8 +60,6 @@ interface TerminalPaneProps {
   onCreateRemoteDirectory: (paneId: string) => void
   onOpenWorkspace: (paneId: string) => void
   onOpenCommandPrompt: (paneId: string) => void
-  onUpdateProviderCli: (paneId: string) => void
-  providerUpdating: boolean
   onRunShell: (paneId: string) => void
   onStopShell: (paneId: string) => void
   onOpenPath: (paneId: string, path: string, resourceType: 'folder' | 'file') => void
@@ -93,8 +91,23 @@ const UI = {
   resetConversation: '\u4f1a\u8a71\u3092\u521d\u671f\u5316',
   autoShare: '\u5b8c\u4e86\u6642\u306b\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709',
   autoShareShort: '\u5b8c\u4e86\u6642',
-  updateCli: 'CLI\u3092\u66f4\u65b0',
   updateCliField: 'CLI\u66f4\u65b0',
+  updateCliSummaryCurrent: 'CLI \u7248\u306f\u6700\u65b0\u3067\u3059',
+  updateCliSummaryOutdated: 'CLI \u7248\u306b\u5dee\u304c\u3042\u308a\u307e\u3059',
+  updateCliSummaryUnknown: 'CLI \u7248\u60c5\u5831\u3092\u78ba\u8a8d',
+  versionCurrent: '\u73fe\u5728\u306e npm \u7248',
+  versionLatest: 'npm latest',
+  versionCommand: '\u66f4\u65b0\u30b3\u30de\u30f3\u30c9',
+  rollbackCommand: '\u30ed\u30fc\u30eb\u30d0\u30c3\u30af\u30b3\u30de\u30f3\u30c9',
+  copyCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u30b3\u30d4\u30fc',
+  commandSelectable: '\u30b3\u30de\u30f3\u30c9\u306f\u305d\u306e\u307e\u307e\u9078\u629e\u3067\u304d\u307e\u3059\u3002',
+  versionUnknown: '\u4e0d\u660e',
+  versionStatusCurrent: '\u6700\u65b0\u3067\u3059',
+  versionStatusOutdated: '\u66f4\u65b0\u53ef\u80fd',
+  versionStatusUnknown: '\u6700\u65b0\u78ba\u8a8d\u4e0d\u53ef',
+  versionNote: '\u3053\u306e\u30c4\u30fc\u30eb\u306f npm \u30b0\u30ed\u30fc\u30d0\u30eb\u306b\u5165\u3063\u3066\u3044\u308b CLI / SDK \u3092\u53c2\u7167\u3057\u307e\u3059\u3002\u5916\u90e8\u3067\u7248\u304c\u5909\u308f\u3063\u305f\u5834\u5408\u3082\u3001\u3053\u306e\u753b\u9762\u306b\u623b\u308b\u3068\u518d\u8aad\u8fbc\u3057\u307e\u3059\u3002',
+  versionMismatchNote: '\u53e4\u3044\u7248\u3092\u4f7f\u3044\u7d9a\u3051\u308b\u3068\u3001CLI \u672c\u4f53\u3067\u5229\u7528\u3067\u304d\u308b\u6700\u65b0\u30e2\u30c7\u30eb\u304c\u3053\u306e\u4e00\u89a7\u306b\u51fa\u306a\u3044\u306a\u3069\u3001\u30e2\u30c7\u30eb\u4e0d\u4e00\u81f4\u304c\u8d77\u304d\u3048\u307e\u3059\u3002',
+  versionCheckError: 'npm latest \u306e\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
   deletePane: '\u30da\u30a4\u30f3\u3092\u524a\u9664',
   openVsCode: 'VSCode\u3067\u958b\u304f',
   output: 'AI\u7d50\u679c\u51fa\u529b',
@@ -284,6 +297,7 @@ export function TerminalPane({
   onShare,
   onShareToPane,
   onCopyOutput,
+  onCopyProviderCommand,
   onDuplicate,
   onStartNewSession,
   onDelete,
@@ -291,8 +305,6 @@ export function TerminalPane({
   onBrowseRemote,
   onCreateRemoteDirectory,
   onOpenWorkspace,
-  onUpdateProviderCli,
-  providerUpdating,
   onRunShell,
   onOpenPath,
   onAddLocalWorkspace,
@@ -309,6 +321,7 @@ export function TerminalPane({
   const [isRunLogsExpanded, setIsRunLogsExpanded] = useState(false)
   const [isShellExpanded, setIsShellExpanded] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const [isVersionAccordionOpen, setIsVersionAccordionOpen] = useState(false)
   const [remoteDropTarget, setRemoteDropTarget] = useState<string | null>(null)
   const menuRef = useRef<HTMLDetailsElement | null>(null)
   const promptRef = useRef<HTMLTextAreaElement | null>(null)
@@ -462,9 +475,27 @@ export function TerminalPane({
     activeShareTargetIds.add(targetPaneId)
   }
   const hasOutgoingShare = outgoingShareContexts.length > 0 || pane.pendingShareGlobal || pane.pendingShareTargetIds.length > 0
-  const providerUpdateLabel = providerUpdating
-    ? `${catalog?.label ?? pane.provider} \u3092\u66f4\u65b0\u4e2d...`
-    : `${catalog?.label ?? pane.provider} \u3092\u66f4\u65b0`
+  const versionInfo = catalog?.versionInfo
+  const providerRollbackCommand = versionInfo?.installedVersion ? `npm install -g ${versionInfo.packageName}@${versionInfo.installedVersion}` : null
+  const providerVersionStatus = !versionInfo?.latestVersion
+    ? 'unknown'
+    : versionInfo.updateAvailable
+      ? 'outdated'
+      : 'current'
+  const providerVersionSummaryLabel = providerVersionStatus === 'outdated'
+    ? UI.updateCliSummaryOutdated
+    : providerVersionStatus === 'current'
+      ? UI.updateCliSummaryCurrent
+      : UI.updateCliSummaryUnknown
+  const providerVersionSummaryValue = providerVersionStatus === 'outdated'
+    ? `${versionInfo?.installedVersion ?? UI.versionUnknown} -> ${versionInfo?.latestVersion ?? UI.versionUnknown}`
+    : providerVersionStatus === 'current'
+      ? `${versionInfo?.installedVersion ?? UI.versionUnknown}`
+      : `${versionInfo?.installedVersion ?? UI.versionUnknown} / ${UI.versionStatusUnknown}`
+
+  useEffect(() => {
+    setIsVersionAccordionOpen(providerVersionStatus === 'outdated')
+  }, [pane.provider, providerVersionStatus])
 
   useEffect(() => {
     if (!isLocalDevEnvironment() || !isMenuOpen) {
@@ -790,9 +821,50 @@ export function TerminalPane({
                 </label>
                 <div className="settings-action-field full-span">
                   <span>{UI.updateCliField}</span>
-                  <button type="button" className="secondary-button provider-update-button" disabled={providerUpdating} onClick={() => onUpdateProviderCli(pane.id)}>
-                    {providerUpdateLabel}
-                  </button>
+                  <details className={`pane-accordion provider-version-accordion ${providerVersionStatus}`} open={isVersionAccordionOpen} onToggle={(event) => setIsVersionAccordionOpen((event.currentTarget as HTMLDetailsElement).open)}>
+                    <summary className="accordion-summary provider-version-accordion-summary">
+                      <span className="accordion-label"><RefreshCcw size={15} />{providerVersionSummaryLabel}</span>
+                      <span className="accordion-meta">
+                        <span className="accordion-value provider-version-summary-value">{providerVersionSummaryValue}</span>
+                        <span className={`accordion-caret ${isVersionAccordionOpen ? 'is-open' : ''}`}><ChevronDown size={14} /></span>
+                      </span>
+                    </summary>
+                    <div className="accordion-body provider-version-accordion-body">
+                      <div className={`provider-version-card ${providerVersionStatus}`}>
+                        <div className={`provider-version-status ${providerVersionStatus}`}>
+                          {providerVersionStatus === 'outdated' ? UI.versionStatusOutdated : providerVersionStatus === 'current' ? UI.versionStatusCurrent : UI.versionStatusUnknown}
+                        </div>
+                        <div className="provider-version-grid">
+                          <div className="provider-version-row"><span>{UI.versionCurrent}</span><strong>{versionInfo?.installedVersion ?? UI.versionUnknown}</strong></div>
+                          <div className="provider-version-row"><span>{UI.versionLatest}</span><strong>{versionInfo?.latestVersion ?? UI.versionUnknown}</strong></div>
+                        </div>
+                        <div className="provider-version-command-block">
+                          <div className="provider-version-command-head">
+                            <span>{UI.versionCommand}</span>
+                            <button type="button" className="secondary-button provider-command-copy-button" disabled={!versionInfo?.updateCommand} onClick={() => onCopyProviderCommand(pane.id, versionInfo?.updateCommand ?? '', '\u66f4\u65b0\u30b3\u30de\u30f3\u30c9\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f')}>
+                              <Copy size={15} />{UI.copyCommand}
+                            </button>
+                          </div>
+                          <textarea className="provider-version-command-input" readOnly rows={2} value={versionInfo?.updateCommand ?? UI.versionUnknown} />
+                        </div>
+                        {providerRollbackCommand ? (
+                          <div className="provider-version-command-block">
+                            <div className="provider-version-command-head">
+                              <span>{UI.rollbackCommand}</span>
+                              <button type="button" className="secondary-button provider-command-copy-button" onClick={() => onCopyProviderCommand(pane.id, providerRollbackCommand, '\u30ed\u30fc\u30eb\u30d0\u30c3\u30af\u30b3\u30de\u30f3\u30c9\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f')}>
+                                <Copy size={15} />{UI.copyCommand}
+                              </button>
+                            </div>
+                            <textarea className="provider-version-command-input" readOnly rows={2} value={providerRollbackCommand} />
+                          </div>
+                        ) : null}
+                        {versionInfo?.latestCheckError ? <p className="provider-version-warning">{UI.versionCheckError}</p> : null}
+                        {providerVersionStatus === 'outdated' ? <p className="provider-version-warning">{UI.versionMismatchNote}</p> : null}
+                        <p className="provider-version-note">{UI.versionNote}</p>
+                        <p className="provider-version-note">{UI.commandSelectable}</p>
+                      </div>
+                    </div>
+                  </details>
                 </div>
               </div>
               <p className="field-note">{pane.provider === 'codex' ? UI.readonlyCodex : UI.styleHint}</p>
@@ -824,7 +896,7 @@ export function TerminalPane({
                   </div>
                   {canRemoveLocalWorkspace && (
                     <div className="inline-actions wrap-actions compact-utility-row workspace-secondary-actions">
-                      <button type="button" className="secondary-button" onClick={() => onRemoveLocalWorkspace(pane.id)}><Trash2 size={16} />{UI.removeFromList}</button>
+                      <button type="button" className="danger-button" onClick={() => onRemoveLocalWorkspace(pane.id)}><Trash2 size={16} />{UI.removeFromList}</button>
                     </div>
                   )}
                   {localWorkspaces.length > 1 && (

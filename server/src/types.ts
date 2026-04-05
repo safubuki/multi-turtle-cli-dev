@@ -11,6 +11,15 @@ export interface ProviderModelInfo {
   defaultReasoningEffort: ReasoningEffort | null
 }
 
+export interface ProviderVersionInfo {
+  packageName: string
+  installedVersion: string | null
+  latestVersion: string | null
+  updateAvailable: boolean
+  updateCommand: string
+  latestCheckError: string | null
+}
+
 export interface ProviderCatalogResponse {
   provider: ProviderId
   label: string
@@ -18,6 +27,7 @@ export interface ProviderCatalogResponse {
   fetchedAt: string | null
   available: boolean
   models: ProviderModelInfo[]
+  versionInfo: ProviderVersionInfo
   error: string | null
 }
 
@@ -215,18 +225,4 @@ export interface ShellExecResult {
 export interface ActiveShellRun {
   promise: Promise<ShellExecResult>
   stop: () => void
-}
-
-
-export interface ProviderUpdateResult {
-  provider: ProviderId
-  stdout: string
-  stderr: string
-}
-
-export interface ProviderUpdateResponse {
-  success: boolean
-  provider: ProviderId
-  stdout: string
-  stderr: string
 }

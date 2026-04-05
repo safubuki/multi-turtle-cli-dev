@@ -32,7 +32,6 @@ import {
   stopPaneRun,
   stopShellRun,
   transferSshPath,
-  updateCliProvider
 } from './lib/api'
 import type {
   BootstrapPayload,
@@ -988,11 +987,6 @@ function App() {
   const [globalError, setGlobalError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
   const [workspacePicker, setWorkspacePicker] = useState<WorkspacePickerState | null>(null)
-  const [updatingProviders, setUpdatingProviders] = useState<Record<ProviderId, boolean>>({
-    codex: false,
-    copilot: false,
-    gemini: false
-  })
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null)
   const [matrixDropTargetId, setMatrixDropTargetId] = useState<string | null>(null)
 
@@ -1008,6 +1002,8 @@ function App() {
   const paneCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const matrixTileRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const paneCardRectsRef = useRef<Map<string, DOMRect>>(new Map())
+  const refreshBootstrapInFlightRef = useRef(false)
+  const refreshBootstrapRef = useRef<(() => Promise<void>) | null>(null)
 
   panesRef.current = panes
   localWorkspacesRef.current = localWorkspaces
@@ -1058,6 +1054,11 @@ function App() {
   }, [panes])
 
   const refreshBootstrap = async () => {
+    if (refreshBootstrapInFlightRef.current) {
+      return
+    }
+
+    refreshBootstrapInFlightRef.current = true
     setLoading(true)
     setGlobalError(null)
 
@@ -1084,12 +1085,40 @@ function App() {
     } catch (error) {
       setGlobalError(error instanceof Error ? error.message : String(error))
     } finally {
+      refreshBootstrapInFlightRef.current = false
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    refreshBootstrapRef.current = refreshBootstrap
+  }, [refreshBootstrap])
+
+  useEffect(() => {
     void refreshBootstrap()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return
+    }
+
+    const handleWindowFocus = () => {
+      void refreshBootstrapRef.current?.()
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshBootstrapRef.current?.()
+      }
+    }
+
+    window.addEventListener('focus', handleWindowFocus)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [])
 
   const catalogs = bootstrap?.providers ?? EMPTY_CATALOGS
@@ -2036,14 +2065,13 @@ function App() {
     }
   }
 
-  const handleCopyLatest = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    await copyPaneText(paneId, pane ? getLatestAssistantText(pane) : null, '\u6700\u65b0\u5fdc\u7b54\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f')
-  }
-
   const handleCopyOutput = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
     await copyPaneText(paneId, pane ? getPaneOutputText(pane) : null, '\u51fa\u529b\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f')
+  }
+
+  const handleCopyProviderCommand = async (paneId: string, text: string, successMessage: string) => {
+    await copyPaneText(paneId, text, successMessage)
   }
 
   const handleBrowseLocal = async (paneId: string, targetPath: string) => {
@@ -2359,55 +2387,6 @@ function App() {
         statusText: '\u30bf\u30fc\u30df\u30ca\u30eb\u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
-    }
-  }
-
-  const handleUpdateProviderCli = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || updatingProviders[pane.provider]) {
-      return
-    }
-
-    const provider = pane.provider
-    const providerLabel = bootstrap?.providers[provider].label ?? provider
-    const startedAt = Date.now()
-    setUpdatingProviders((current) => ({ ...current, [provider]: true }))
-    updatePane(paneId, {
-      status: 'updating',
-      statusText: providerLabel + ' \u3092\u66f4\u65b0\u4e2d',
-      runningSince: startedAt,
-      lastActivityAt: startedAt,
-      lastError: null
-    })
-
-    try {
-      const result = await updateCliProvider(provider)
-      await refreshBootstrap()
-      const finishedAt = Date.now()
-      mutatePane(paneId, (currentPane) => ({
-        ...currentPane,
-        status: 'completed',
-        statusText: providerLabel + ' \u3092\u66f4\u65b0\u3057\u307e\u3057\u305f',
-        lastError: null,
-        runningSince: null,
-        lastActivityAt: finishedAt,
-        lastFinishedAt: finishedAt,
-        streamEntries: appendStreamEntry(
-          currentPane.streamEntries,
-          'system',
-          result.stdout || result.stderr || provider + ' update complete',
-          finishedAt
-        )
-      }))
-    } catch (error) {
-      updatePane(paneId, {
-        status: 'error',
-        statusText: providerLabel + ' \u306e\u66f4\u65b0\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        runningSince: null,
-        lastError: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setUpdatingProviders((current) => ({ ...current, [provider]: false }))
     }
   }
 
@@ -3270,8 +3249,8 @@ function App() {
                   onShareToPane={(sourcePaneId, targetPaneId) =>
                     shareFromPane(sourcePaneId, undefined, { scope: 'direct', targetPaneId })
                   }
-                  onCopyLatest={(paneId) => void handleCopyLatest(paneId)}
                   onCopyOutput={(paneId) => void handleCopyOutput(paneId)}
+                  onCopyProviderCommand={(paneId, text, successMessage) => void handleCopyProviderCommand(paneId, text, successMessage)}
                   onDuplicate={handleDuplicatePane}
                   onStartNewSession={handleStartNewSession}
                   onResetSession={handleResetSession}
@@ -3282,8 +3261,6 @@ function App() {
                   onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
                   onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}
                   onOpenCommandPrompt={(paneId) => void handleOpenCommandPrompt(paneId)}
-                  onUpdateProviderCli={(paneId) => void handleUpdateProviderCli(paneId)}
-                  providerUpdating={updatingProviders[pane.provider]}
                   onRunShell={(paneId) => void handleRunShell(paneId)}
                   onStopShell={(paneId) => void handleStopShell(paneId)}
                   onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}

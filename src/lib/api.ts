@@ -17,9 +17,7 @@
   SshKeyInstallResponse,
   SshTransferResponse,
   StopRunResponse,
-  WorkspaceTarget,
-  ProviderId,
-  ProviderUpdateResponse
+  WorkspaceTarget
 } from '../types'
 
 const HTML_API_ERROR_MESSAGES = [
@@ -30,10 +28,6 @@ const HTML_API_ERROR_MESSAGES = [
   {
     path: '/api/run/stream',
     message: 'CLI 実行 API が見つかりません。TAKO のサーバーを再起動してください。'
-  },
-  {
-    path: '/api/provider/update',
-    message: 'CLI 更新 API が見つかりません。TAKO のサーバーを再起動してください。'
   },
   {
     path: '/api/system/mkdir-local',
@@ -272,16 +266,6 @@ export function openTargetInCommandPrompt(target: WorkspaceTarget): Promise<{ su
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ target })
-  })
-}
-
-export function updateCliProvider(provider: ProviderId): Promise<ProviderUpdateResponse> {
-  return requestJson<ProviderUpdateResponse>('/api/provider/update', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ provider })
   })
 }
 
