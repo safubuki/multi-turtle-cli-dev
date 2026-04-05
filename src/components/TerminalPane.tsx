@@ -101,6 +101,7 @@ const UI = {
   rollbackCommand: '\u30ed\u30fc\u30eb\u30d0\u30c3\u30af\u30b3\u30de\u30f3\u30c9',
   copyCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u30b3\u30d4\u30fc',
   commandSelectable: '\u30b3\u30de\u30f3\u30c9\u306f\u305d\u306e\u307e\u307e\u9078\u629e\u3067\u304d\u307e\u3059\u3002',
+  versionImpactNote: '\u66f4\u65b0\u3059\u308b\u3068\u3001\u5229\u7528\u3067\u304d\u308b\u30e2\u30c7\u30eb\u4e00\u89a7\u3084 CLI \u306e\u632f\u308b\u821e\u3044\u304c\u5909\u308f\u308b\u3053\u3068\u304c\u3042\u308a\u307e\u3059\u3002\u5fc5\u8981\u306a\u3089\u4e0b\u306e\u30ed\u30fc\u30eb\u30d0\u30c3\u30af\u30b3\u30de\u30f3\u30c9\u3067\u623b\u305b\u307e\u3059\u3002',
   versionUnknown: '\u4e0d\u660e',
   versionStatusCurrent: '\u6700\u65b0\u3067\u3059',
   versionStatusOutdated: '\u66f4\u65b0\u53ef\u80fd',
@@ -143,13 +144,17 @@ const UI = {
   browseEmpty: '\u9078\u629e\u3057\u305f\u30d5\u30a9\u30eb\u30c0\u306e\u5185\u5bb9\u304c\u3053\u3053\u306b\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   currentConnection: '\u73fe\u5728\u306e\u63a5\u7d9a',
   connectionSettings: '\u63a5\u7d9a\u8a2d\u5b9a',
-  connectionSupport: '\u30d7\u30ed\u30ad\u30b7 / \u88dc\u52a9\u8a2d\u5b9a',
   refreshConnection: '\u30ea\u30e2\u30fc\u30c8\u306b\u63a5\u7d9a',
   remoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   publicKey: '\u516c\u958b\u9375',
+  selectedKey: '\u4f7f\u7528\u3059\u308b\u9375',
+  keyName: '\u9375\u540d',
   generateKey: '\u9375\u3092\u751f\u6210',
   installKey: '\u516c\u958b\u9375\u3092\u767b\u9332',
+  sshDirectConnectionNote: '\u81ea\u5b85 Wi-Fi \u3084\u540c\u4e00 LAN \u306e\u76f4\u63a5\u63a5\u7d9a\u3067\u306f\u3001\u901a\u5e38\u306f User / Port / Password \u307e\u305f\u306f Identity File \u306e\u8a2d\u5b9a\u3060\u3051\u3067\u5341\u5206\u3067\u3059\u3002\u8e0f\u307f\u53f0\u3084\u793e\u5185\u30d7\u30ed\u30ad\u30b7\u304c\u5fc5\u8981\u306a\u5834\u5408\u306f SSH config \u5074\u3067\u7ba1\u7406\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
   diagnostics: '\u63a5\u7d9a\u8a3a\u65ad',
+  diagnosticsOk: 'OK',
+  diagnosticsNg: 'NG',
   dragHint: '\u30ed\u30fc\u30ab\u30eb\u4e00\u89a7\u304b\u3089\u30c9\u30e9\u30c3\u30b0\u3059\u308b\u3068\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u3067\u304d\u307e\u3059\u3002',
   remoteList: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7',
   remoteLoading: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
@@ -492,6 +497,10 @@ export function TerminalPane({
     : providerVersionStatus === 'current'
       ? `${versionInfo?.installedVersion ?? UI.versionUnknown}`
       : `${versionInfo?.installedVersion ?? UI.versionUnknown} / ${UI.versionStatusUnknown}`
+  const sshKeyLabel = getShortPathLabel(pane.sshSelectedKeyPath || pane.sshIdentityFile || '')
+  const sshDiagnosticsStatus = pane.sshActionState === 'error' || pane.sshDiagnostics.some((item) => /\u898b\u3064\u304b\u308a\u307e\u305b\u3093|\u5931\u6557|\u5fc5\u8981|\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059|error|failed|timed out/i.test(item))
+    ? 'ng'
+    : 'ok'
 
   useEffect(() => {
     setIsVersionAccordionOpen(providerVersionStatus === 'outdated')
@@ -845,7 +854,7 @@ export function TerminalPane({
                               <Copy size={15} />{UI.copyCommand}
                             </button>
                           </div>
-                          <textarea className="provider-version-command-input" readOnly rows={2} value={versionInfo?.updateCommand ?? UI.versionUnknown} />
+                          <input className="provider-version-command-input" type="text" readOnly spellCheck={false} value={versionInfo?.updateCommand ?? UI.versionUnknown} onFocus={(event) => event.currentTarget.select()} />
                         </div>
                         {providerRollbackCommand ? (
                           <div className="provider-version-command-block">
@@ -855,10 +864,11 @@ export function TerminalPane({
                                 <Copy size={15} />{UI.copyCommand}
                               </button>
                             </div>
-                            <textarea className="provider-version-command-input" readOnly rows={2} value={providerRollbackCommand} />
+                            <input className="provider-version-command-input" type="text" readOnly spellCheck={false} value={providerRollbackCommand} onFocus={(event) => event.currentTarget.select()} />
                           </div>
                         ) : null}
                         {versionInfo?.latestCheckError ? <p className="provider-version-warning">{UI.versionCheckError}</p> : null}
+                        <p className="provider-version-note">{UI.versionImpactNote}</p>
                         {providerVersionStatus === 'outdated' ? <p className="provider-version-warning">{UI.versionMismatchNote}</p> : null}
                         <p className="provider-version-note">{UI.versionNote}</p>
                         <p className="provider-version-note">{UI.commandSelectable}</p>
@@ -960,7 +970,7 @@ export function TerminalPane({
                       <label><span>Identity File</span><input value={pane.sshIdentityFile} onChange={(event) => onUpdate(pane.id, { sshIdentityFile: event.target.value })} placeholder="C:\\Users\\...\\id_ed25519" /></label>
                       {pane.sshLocalKeys.length > 0 && (
                         <label className="full-span">
-                          <span>{UI.publicKey}</span>
+                          <span>{UI.selectedKey}</span>
                           <select value={pane.sshSelectedKeyPath} onChange={(event) => {
                             const selected = pane.sshLocalKeys.find((item) => item.privateKeyPath === event.target.value) ?? null
                             onUpdate(pane.id, { sshSelectedKeyPath: event.target.value, sshIdentityFile: event.target.value, sshPublicKeyText: selected?.publicKey ?? pane.sshPublicKeyText })
@@ -970,6 +980,7 @@ export function TerminalPane({
                         </label>
                       )}
                     </div>
+                    <p className="ssh-help-note">{UI.sshDirectConnectionNote}</p>
 
                     <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions">
                       <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
@@ -984,31 +995,25 @@ export function TerminalPane({
                     )}
 
                     {pane.sshPublicKeyText && (
-                      <div className="browser-panel">
-                        <div className="section-headline compact-headline"><strong>{UI.publicKey}</strong><span>{getShortPathLabel(pane.sshSelectedKeyPath || pane.sshIdentityFile || '')}</span></div>
+                      <div className="browser-panel ssh-info-panel">
+                        <div className="section-headline compact-headline ssh-panel-headline">
+                          <strong>{UI.publicKey}</strong>
+                          {sshKeyLabel ? <span className="ssh-panel-chip neutral">{`${UI.keyName}: ${sshKeyLabel}`}</span> : null}
+                        </div>
                         <div className="output-surface inline-console-output"><pre>{pane.sshPublicKeyText}</pre></div>
                       </div>
                     )}
                   </details>
 
-                  <details className="ssh-mini-accordion">
-                    <summary className="ssh-mini-summary"><span className="ssh-mini-summary-row"><span>{UI.connectionSupport}</span><span className="ssh-mini-caret"><ChevronDown size={14} /></span></span></summary>
-                    <div className="workspace-stack ssh-support-stack">
-                      <div className="pane-meta-grid compact-grid ssh-config-grid compact-ssh-grid">
-                        <label><span>ProxyJump</span><input value={pane.sshProxyJump} onChange={(event) => onUpdate(pane.id, { sshProxyJump: event.target.value })} placeholder="jump-host" /></label>
-                        <label><span>ProxyCommand</span><input value={pane.sshProxyCommand} onChange={(event) => onUpdate(pane.id, { sshProxyCommand: event.target.value })} placeholder="connect-proxy -H proxy.example.com:8080 %h %p" /></label>
-                        <label className="full-span"><span>Extra Args</span><input value={pane.sshExtraArgs} onChange={(event) => onUpdate(pane.id, { sshExtraArgs: event.target.value })} placeholder="-o PreferredAuthentications=password" /></label>
+                  {pane.sshDiagnostics.length > 0 && (
+                    <div className="browser-panel ssh-diagnostics-panel">
+                      <div className="section-headline compact-headline ssh-panel-headline">
+                        <strong>{UI.diagnostics}</strong>
+                        <span className={`ssh-panel-chip ${sshDiagnosticsStatus}`}>{sshDiagnosticsStatus === 'ok' ? UI.diagnosticsOk : UI.diagnosticsNg}</span>
                       </div>
-                      <p className="ssh-help-note">{'HTTP(S) \u30d7\u30ed\u30ad\u30b7 URL \u306f ProxyCommand \u306b connect-proxy / corkscrew \u5f62\u5f0f\u3067\u8a2d\u5b9a\u3057\u307e\u3059\u3002\u4f8b: connect-proxy -H proxy.example.com:8080 %h %p'}</p>
-
-                      {pane.sshDiagnostics.length > 0 && (
-                        <div className="browser-panel ssh-diagnostics-panel">
-                          <div className="section-headline compact-headline"><strong>{UI.diagnostics}</strong><span>{pane.sshDiagnostics.length}</span></div>
-                          <div className="diagnostic-list">{pane.sshDiagnostics.map((item, index) => <div key={`${pane.id}-diag-${index}`} className="diagnostic-item">{item}</div>)}</div>
-                        </div>
-                      )}
+                      <div className="diagnostic-list">{pane.sshDiagnostics.map((item, index) => <div key={`${pane.id}-diag-${index}`} className="diagnostic-item">{item}</div>)}</div>
                     </div>
-                  </details>
+                  )}
 
                   <div className="workspace-primary-action remote-connect-action">
                     <button type="button" className="primary-button workspace-choose-button remote-connect-button" onClick={() => onLoadRemote(pane.id)}><Wifi size={16} />{UI.refreshConnection}</button>

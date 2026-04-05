@@ -468,9 +468,9 @@ function buildSshConnectionFromPane(pane: PaneState, sshHosts: SshHost[] = []): 
     port: pane.sshPort.trim() || matchedHost?.port || undefined,
     password: pane.sshPassword.trim() || undefined,
     identityFile: pane.sshIdentityFile.trim() || matchedHost?.identityFile || undefined,
-    proxyJump: pane.sshProxyJump.trim() || matchedHost?.proxyJump || undefined,
-    proxyCommand: pane.sshProxyCommand.trim() || matchedHost?.proxyCommand || undefined,
-    extraArgs: pane.sshExtraArgs.trim() || undefined
+    proxyJump: matchedHost?.proxyJump || undefined,
+    proxyCommand: matchedHost?.proxyCommand || undefined,
+    extraArgs: undefined
   }
 }
 
@@ -2616,28 +2616,101 @@ function App() {
     if (!pane || !pane.sshHost.trim()) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: 'SSH \u30db\u30b9\u30c8\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: 'SSH \u30db\u30b9\u30c8\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
+        statusText: 'SSH ホストを入力してください',
+        lastError: 'SSH ホストが未設定です。'
       })
       return
     }
 
+    const host = pane.sshHost.trim()
     const connection = buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+    const requestedBrowsePath = pane.remoteBrowserPath || pane.remoteWorkspacePath || undefined
     const startedAt = Date.now()
     updatePane(paneId, {
       status: 'running',
-      statusText: 'SSH \u63a5\u7d9a\u3092\u78ba\u8a8d\u4e2d\u3067\u3059',
+      statusText: 'SSH 接続を確認中です',
       runningSince: startedAt,
       lastActivityAt: startedAt,
-      lastError: null
+      lastError: null,
+      remoteBrowserLoading: true,
+      sshActionState: 'running',
+      sshActionMessage: `${host} に接続しています...`
     })
 
     try {
-      const [workspacePayload, inspectionPayload, browsePayload] = await Promise.all([
-        fetchRemoteWorkspaces(pane.sshHost.trim(), connection),
-        inspectSshHost(pane.sshHost.trim(), connection),
-        browseRemoteDirectory(pane.sshHost.trim(), pane.remoteBrowserPath || pane.remoteWorkspacePath || undefined, connection)
+      let browsePayload: Awaited<ReturnType<typeof browseRemoteDirectory>> | null = null
+      let browseFallbackWarning: string | null = null
+
+      try {
+        browsePayload = await browseRemoteDirectory(host, requestedBrowsePath, connection)
+      } catch (error) {
+        if (!requestedBrowsePath) {
+          throw error
+        }
+
+        try {
+          browsePayload = await browseRemoteDirectory(host, undefined, connection)
+          browseFallbackWarning = `指定したリモートパスを開けなかったため、ホームディレクトリを表示しています: ${requestedBrowsePath}`
+        } catch {
+          throw error
+        }
+      }
+
+      if (!browsePayload) {
+        throw new Error('remote browse failed')
+      }
+
+      const browseCompletedAt = Date.now()
+      setPanes((current) =>
+        current.map((item) => {
+          if (item.id !== paneId) {
+            return item
+          }
+
+          const nextRemoteWorkspacePath = item.remoteWorkspacePath.trim() || browsePayload.path
+          const nextDiagnostics = browseFallbackWarning
+            ? Array.from(new Set([...item.sshDiagnostics, browseFallbackWarning]))
+            : item.sshDiagnostics
+
+          return {
+            ...item,
+            remoteBrowserLoading: false,
+            remoteBrowserPath: browsePayload.path,
+            remoteParentPath: browsePayload.parentPath,
+            remoteBrowserEntries: browsePayload.entries,
+            remoteHomeDirectory: browsePayload.homeDirectory ?? item.remoteHomeDirectory,
+            remoteWorkspacePath: nextRemoteWorkspacePath,
+            sshRemotePath: item.sshRemotePath || nextRemoteWorkspacePath,
+            remoteShellPath: item.remoteShellPath || nextRemoteWorkspacePath,
+            sshDiagnostics: nextDiagnostics,
+            status: browseFallbackWarning ? 'attention' : 'idle',
+            statusText: browseFallbackWarning ? 'SSH に接続しましたがホームを表示しています' : 'SSH に接続しました',
+            runningSince: null,
+            lastActivityAt: browseCompletedAt,
+            lastFinishedAt: browseCompletedAt,
+            lastError: browseFallbackWarning,
+            sshActionState: 'success',
+            sshActionMessage: `${host} に接続しました`
+          }
+        })
+      )
+
+      const [workspaceResult, inspectionResult] = await Promise.allSettled([
+        fetchRemoteWorkspaces(host, connection),
+        inspectSshHost(host, connection)
       ])
+
+      const workspacePayload = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null
+      const inspectionPayload = inspectionResult.status === 'fulfilled' ? inspectionResult.value : null
+      const partialErrors = [
+        workspaceResult.status === 'rejected'
+          ? `ワークスペース一覧の取得に失敗しました: ${workspaceResult.reason instanceof Error ? workspaceResult.reason.message : String(workspaceResult.reason)}`
+          : null,
+        inspectionResult.status === 'rejected'
+          ? `接続診断の取得に失敗しました: ${inspectionResult.reason instanceof Error ? inspectionResult.reason.message : String(inspectionResult.reason)}`
+          : null,
+        browseFallbackWarning
+      ].filter((item): item is string => Boolean(item))
 
       setPanes((current) =>
         current.map((item) => {
@@ -2646,8 +2719,7 @@ function App() {
           }
 
           const nextProvider =
-            inspectionPayload.availableProviders.length > 0 &&
-            !inspectionPayload.availableProviders.includes(item.provider)
+            inspectionPayload && inspectionPayload.availableProviders.length > 0 && !inspectionPayload.availableProviders.includes(item.provider)
               ? inspectionPayload.availableProviders[0]
               : item.provider
           const nextModel =
@@ -2655,47 +2727,68 @@ function App() {
               ? bootstrap.providers[nextProvider].models[0]?.id ?? item.model
               : item.model
           const updatedAt = Date.now()
-          const selectedKey = inspectionPayload.localKeys.find((key) => key.privateKeyPath === item.sshSelectedKeyPath) ?? inspectionPayload.localKeys[0] ?? null
+          const selectedKey = inspectionPayload
+            ? inspectionPayload.localKeys.find((key) => key.privateKeyPath === item.sshSelectedKeyPath) ?? inspectionPayload.localKeys[0] ?? null
+            : item.sshLocalKeys.find((key) => key.privateKeyPath === item.sshSelectedKeyPath) ?? item.sshLocalKeys[0] ?? null
+          const availableProviders = inspectionPayload?.availableProviders ?? item.remoteAvailableProviders
+          const currentRemoteWorkspacePath = item.remoteWorkspacePath.trim()
+          const nextRemoteWorkspacePath = !currentRemoteWorkspacePath || Boolean(browseFallbackWarning)
+            ? workspacePayload?.workspaces[0]?.path ?? browsePayload.path
+            : item.remoteWorkspacePath
+          const mergedDiagnostics = Array.from(new Set([
+            ...(inspectionPayload?.diagnostics ?? item.sshDiagnostics),
+            ...partialErrors
+          ]))
+          const hasPartialFailure = partialErrors.length > 0
+          const noRemoteProviderDetected = Boolean(inspectionPayload && inspectionPayload.availableProviders.length === 0)
 
           return {
             ...item,
             provider: nextProvider,
             model: nextModel,
-            sshUser: item.sshUser || inspectionPayload.suggestedUser || '',
-            sshPort: item.sshPort || inspectionPayload.suggestedPort || '',
-            sshIdentityFile: item.sshIdentityFile || inspectionPayload.suggestedIdentityFile || '',
-            sshProxyJump: item.sshProxyJump || inspectionPayload.suggestedProxyJump || '',
-            sshProxyCommand: item.sshProxyCommand || inspectionPayload.suggestedProxyCommand || '',
-            sshLocalKeys: inspectionPayload.localKeys,
+            sshUser: item.sshUser || inspectionPayload?.suggestedUser || '',
+            sshPort: item.sshPort || inspectionPayload?.suggestedPort || '',
+            sshIdentityFile: item.sshIdentityFile || inspectionPayload?.suggestedIdentityFile || '',
+            sshProxyJump: item.sshProxyJump || inspectionPayload?.suggestedProxyJump || '',
+            sshProxyCommand: item.sshProxyCommand || inspectionPayload?.suggestedProxyCommand || '',
+            sshLocalKeys: inspectionPayload?.localKeys ?? item.sshLocalKeys,
             sshSelectedKeyPath: selectedKey?.privateKeyPath ?? '',
             sshPublicKeyText: selectedKey?.publicKey ?? item.sshPublicKeyText,
-            sshDiagnostics: inspectionPayload.diagnostics,
+            sshDiagnostics: mergedDiagnostics,
             sshLocalPath: item.sshLocalPath || localWorkspacesRef.current[0]?.path || '',
-            sshRemotePath: item.sshRemotePath || item.remoteWorkspacePath || browsePayload.path,
-            remoteShellPath: item.remoteShellPath || item.remoteWorkspacePath || browsePayload.path,
-            remoteWorkspaces: workspacePayload.workspaces,
-            remoteAvailableProviders: inspectionPayload.availableProviders,
-            remoteHomeDirectory: inspectionPayload.homeDirectory,
+            sshRemotePath: item.sshRemotePath || nextRemoteWorkspacePath || browsePayload.path,
+            remoteShellPath: item.remoteShellPath || nextRemoteWorkspacePath || browsePayload.path,
+            remoteWorkspaces: workspacePayload?.workspaces ?? item.remoteWorkspaces,
+            remoteAvailableProviders: availableProviders,
+            remoteHomeDirectory: inspectionPayload?.homeDirectory ?? browsePayload.homeDirectory ?? item.remoteHomeDirectory,
             remoteBrowserLoading: false,
             remoteBrowserPath: browsePayload.path,
             remoteParentPath: browsePayload.parentPath,
             remoteBrowserEntries: browsePayload.entries,
-            remoteWorkspacePath:
-              item.remoteWorkspacePath || workspacePayload.workspaces[0]?.path || browsePayload.path || item.remoteWorkspacePath,
-            status: inspectionPayload.availableProviders.length === 0 ? 'attention' : 'idle',
-            statusText: inspectionPayload.availableProviders.length === 0 ? 'CLI \u672a\u691c\u51fa' : 'SSH \u3092\u66f4\u65b0\u3057\u307e\u3057\u305f',
+            remoteWorkspacePath: nextRemoteWorkspacePath,
+            status: hasPartialFailure || noRemoteProviderDetected ? 'attention' : 'idle',
+            statusText: hasPartialFailure ? 'SSH に接続しましたが一部取得に失敗しました' : noRemoteProviderDetected ? 'CLI 未検出' : 'SSH を更新しました',
             runningSince: null,
             lastActivityAt: updatedAt,
-            lastFinishedAt: updatedAt
+            lastFinishedAt: updatedAt,
+            lastError: hasPartialFailure ? partialErrors.join('\n') : null,
+            sshActionState: hasPartialFailure ? 'error' : 'success',
+            sshActionMessage: hasPartialFailure ? `${host} への接続は成功しましたが、一部の情報取得に失敗しました` : `${host} の接続情報を更新しました`
           }
         })
       )
     } catch (error) {
+      const failedAt = Date.now()
       updatePane(paneId, {
         status: 'error',
-        statusText: 'SSH \u63a5\u7d9a\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+        statusText: 'SSH 接続に失敗しました',
         runningSince: null,
-        lastError: error instanceof Error ? error.message : String(error)
+        remoteBrowserLoading: false,
+        lastActivityAt: failedAt,
+        lastFinishedAt: failedAt,
+        lastError: error instanceof Error ? error.message : String(error),
+        sshActionState: 'error',
+        sshActionMessage: `SSH 接続に失敗しました: ${error instanceof Error ? error.message : String(error)}`
       })
     }
   }
@@ -2829,7 +2922,7 @@ function App() {
     })
 
     try {
-      const result = await generateSshKey('id_ed25519', 'multi-turtle-cli-dev', '')
+      const result = await generateSshKey('id_ed25519', 'tako-cli-dev-tool', '')
       const finishedAt = Date.now()
       mutatePane(paneId, (pane) => ({
         ...pane,

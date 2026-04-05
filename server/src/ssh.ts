@@ -441,7 +441,7 @@ export async function generateSshKeyPair(keyName: string, comment: string, passp
     throw new Error(`SSH key already exists: ${privateKeyPath}`)
   }
 
-  const keyComment = comment.trim() || `${os.userInfo().username}@${os.hostname()}`
+  const keyComment = comment.trim() || 'tako-cli-dev-tool'
   await runCommand('ssh-keygen', ['-t', 'ed25519', '-f', privateKeyPath, '-C', keyComment, '-N', passphrase], {
     timeoutMs: 25_000
   })
@@ -461,7 +461,10 @@ roots=("$@")
 for root in "${'${roots[@]}'}"; do
   expanded="${'${root/#\\~/$HOME}'}"
   [ -d "$expanded" ] || continue
-  find "$expanded" -maxdepth 2 -mindepth 1 -type d \\( -exec test -d "{}/.git" \\; -o -exec test -f "{}/package.json" \\; -o -exec test -f "{}/pnpm-workspace.yaml" \\; -o -exec test -f "{}/turbo.json" \\; \\) -print 2>/dev/null
+  find "$expanded" -maxdepth 2 -mindepth 1 -type d -print 2>/dev/null | while IFS= read -r candidate; do
+    [ -d "$candidate/.git" ] || [ -f "$candidate/package.json" ] || [ -f "$candidate/pnpm-workspace.yaml" ] || [ -f "$candidate/turbo.json" ] || continue
+    printf '%s\n' "$candidate"
+  done
 done | awk '!seen[$0]++'
 `
 
@@ -594,7 +597,7 @@ target="$1"
 if [ -z "$target" ]; then
   target="$HOME"
 fi
-expanded="${'${target/#\~/$HOME}'}"
+expanded="${'${target/#\\~/$HOME}'}"
 if [ ! -d "$expanded" ]; then
   echo "Directory not found: $expanded" >&2
   exit 1
@@ -605,8 +608,9 @@ printf 'HOME\t%s\n' "$HOME"
 if [ "$resolved" != "/" ]; then
   printf 'PARENT\t%s\n' "$(dirname "$resolved")"
 fi
-find "$resolved" -mindepth 1 -maxdepth 1 \( -type d -o -type f \) -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r entry; do
+for entry in "$resolved"/* "$resolved"/.[!.]* "$resolved"/..?*; do
   [ -e "$entry" ] || continue
+  [ -d "$entry" ] || [ -f "$entry" ] || continue
   name="$(basename "$entry")"
   if [ -d "$entry" ]; then
     workspace=0

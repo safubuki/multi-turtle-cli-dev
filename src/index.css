@@ -983,12 +983,9 @@ label > span {
 }
 
 .provider-version-command-input {
-  min-height: 56px;
-  resize: vertical;
   font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
   font-size: 0.84rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
+  line-height: 1.4;
 }
 
 .provider-command-copy-button {
@@ -2473,10 +2470,6 @@ textarea {
   padding: 12px;
 }
 
-.ssh-support-stack {
-  padding: 12px;
-}
-
 .remote-browser-shell {
   border-color: rgba(84, 210, 194, 0.08);
 }
@@ -2604,7 +2597,58 @@ textarea {
 }
 
 .ssh-key-actions {
-  margin-top: -2px;
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ssh-key-actions + .ssh-action-feedback,
+.ssh-key-actions + .browser-panel,
+.ssh-action-feedback + .browser-panel {
+  margin-top: 12px;
+}
+
+.ssh-info-panel,
+.ssh-diagnostics-panel {
+  gap: 8px;
+}
+
+.ssh-panel-headline {
+  justify-content: flex-start;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 2px;
+  flex-wrap: wrap;
+}
+
+.ssh-panel-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ssh-panel-chip.neutral {
+  color: var(--muted);
+}
+
+.ssh-panel-chip.ok {
+  border-color: rgba(125, 237, 153, 0.24);
+  background: rgba(125, 237, 153, 0.1);
+  color: #dcffe3;
+}
+
+.ssh-panel-chip.ng {
+  border-color: rgba(244, 198, 108, 0.24);
+  background: rgba(244, 198, 108, 0.1);
+  color: #ffe2a3;
 }
 
 .ssh-action-feedback {
