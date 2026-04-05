@@ -506,6 +506,14 @@ select {
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   text-align: left;
+  cursor: grab;
+  user-select: none;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    opacity 180ms ease;
 }
 
 .matrix-tile strong,
@@ -533,9 +541,23 @@ select {
   box-shadow: 0 0 0 1px rgba(84, 210, 194, 0.26);
 }
 
+.matrix-tile.is-dragging {
+  opacity: 0.42;
+  cursor: grabbing;
+}
+
+.matrix-tile.is-drop-target {
+  border-color: rgba(84, 210, 194, 0.48);
+  box-shadow: 0 0 0 1px rgba(84, 210, 194, 0.24), 0 0 20px rgba(84, 210, 194, 0.16);
+}
+
 .pane-grid {
   display: grid;
   gap: 12px;
+}
+
+.pane-grid-item {
+  min-width: 0;
 }
 
 .pane-grid.layout-quad {
@@ -1338,6 +1360,51 @@ textarea {
 
 .panel-header.slim {
   margin-bottom: 10px;
+}
+
+.output-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.incoming-share-strip {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(100%, 420px);
+  flex-wrap: wrap;
+}
+
+.incoming-share-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(84, 210, 194, 0.22);
+  background: rgba(84, 210, 194, 0.1);
+  color: #bcf7f0;
+  font-size: 0.78rem;
+}
+
+.incoming-share-chip-label {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incoming-share-chip-count {
+  color: var(--text);
+  font-weight: 700;
 }
 
 .panel-header.slim h3,

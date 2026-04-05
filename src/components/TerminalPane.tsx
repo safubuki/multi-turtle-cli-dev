@@ -147,6 +147,7 @@ const UI = {
   remotePc: '\u30ea\u30e2\u30fc\u30c8PC\uff08SSH\uff09',
   useWorkspace: '\u4f7f\u3046',
   sharedContext: '\u5171\u6709\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8',
+  sharedFrom: '\u5171\u6709\u5143',
   noSharedContext: '\u5171\u6709\u6e08\u307f\u306e\u6587\u8108\u306f\u307e\u3060\u3042\u308a\u307e\u305b\u3093\u3002',
   selectedCount: '\u4ef6\u9078\u629e',
   runLogs: '\u5b9f\u884c\u30ed\u30b0',
@@ -396,6 +397,29 @@ export function TerminalPane({
     ...pane.sessionHistory.map((session) => ({ key: session.key, label: session.label }))
   ]
   const hasSessionRecords = sessionOptions.length > 0
+  const incomingShareSources = useMemo(() => {
+    const sourceMap = new Map<string, { id: string; title: string; count: number }>()
+
+    for (const item of sharedContext) {
+      if (!item.targetPaneIds.includes(pane.id)) {
+        continue
+      }
+
+      const existing = sourceMap.get(item.sourcePaneId)
+      if (existing) {
+        existing.count += 1
+        continue
+      }
+
+      sourceMap.set(item.sourcePaneId, {
+        id: item.sourcePaneId,
+        title: item.sourcePaneTitle,
+        count: 1
+      })
+    }
+
+    return Array.from(sourceMap.values())
+  }, [pane.id, sharedContext])
   const visibleSharedContext = sharedContext.filter((item) => item.sourcePaneId === pane.id || item.targetPaneIds.includes(pane.id))
   const remoteBaseDropPath = pane.remoteBrowserPath || pane.remoteWorkspacePath
   const currentRemoteLabel = getShortPathLabel(remoteBaseDropPath || pane.remoteHomeDirectory || '')
@@ -599,6 +623,7 @@ export function TerminalPane({
 
         <div className="status-strip compact">
           <span className="tiny-badge">{catalog?.label ?? pane.provider}</span>
+          <span className="tiny-badge">{currentModel?.name ?? pane.model}</span>
           <span className="tiny-badge">{pane.workspaceMode === 'local' ? UI.localPc : UI.remotePc}</span>
           <span className="tiny-badge">{workspaceLabel}</span>
           <span className={isStalled ? 'tiny-badge warning' : 'tiny-badge'}>{isRunInProgress ? `\u5b9f\u884c ${formatElapsed(pane.runningSince, now)}` : isProviderUpdating ? `\u66f4\u65b0 ${formatElapsed(pane.runningSince, now)}` : `\u6700\u7d42 ${formatClock(pane.lastRunAt)}`}</span>
@@ -610,7 +635,20 @@ export function TerminalPane({
               <h3>{UI.output}</h3>
               {hasOutput && pane.lastActivityAt ? <p>{`\u6700\u7d42\u66f4\u65b0 ${formatClock(pane.lastActivityAt)}`}</p> : null}
             </div>
-            <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(true)} title={UI.outputExpand}><Maximize2 size={16} /></button>
+            <div className="output-panel-actions">
+              {incomingShareSources.length > 0 && (
+                <div className="incoming-share-strip" aria-label={UI.sharedFrom}>
+                  {incomingShareSources.map((source) => (
+                    <span key={source.id} className="incoming-share-chip" title={`${UI.sharedFrom}: ${source.title}`}>
+                      <Share2 size={12} />
+                      <span className="incoming-share-chip-label">{source.title}</span>
+                      {source.count > 1 ? <span className="incoming-share-chip-count">x{source.count}</span> : null}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(true)} title={UI.outputExpand}><Maximize2 size={16} /></button>
+            </div>
           </div>
           <div className="output-surface console-output" aria-label="output-console">
             {hasOutput ? <pre>{outputText}</pre> : <p className="panel-placeholder">{UI.outputPlaceholder}</p>}

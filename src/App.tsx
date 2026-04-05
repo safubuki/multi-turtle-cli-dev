@@ -1,4 +1,4 @@
-﻿import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import {
   Activity,
   Bot,
@@ -95,6 +95,42 @@ function clipText(text: string, maxLength: number): string {
   }
 
   return `${text.slice(0, maxLength).trimEnd()}\n\n[truncated]`
+}
+
+function reorderPanesById(panes: PaneState[], sourcePaneId: string, targetPaneId: string): PaneState[] {
+  if (sourcePaneId === targetPaneId) {
+    return panes
+  }
+
+  const sourceIndex = panes.findIndex((pane) => pane.id === sourcePaneId)
+  const targetIndex = panes.findIndex((pane) => pane.id === targetPaneId)
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return panes
+  }
+
+  const next = [...panes]
+  const [movedPane] = next.splice(sourceIndex, 1)
+  next.splice(targetIndex, 0, movedPane)
+  return next
+}
+
+function animateReorder(element: HTMLElement, previousRect: DOMRect, nextRect: DOMRect): void {
+  const deltaX = previousRect.left - nextRect.left
+  const deltaY = previousRect.top - nextRect.top
+  if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) {
+    return
+  }
+
+  element.animate(
+    [
+      { transform: `translate(${deltaX}px, ${deltaY}px)` },
+      { transform: 'translate(0, 0)' }
+    ],
+    {
+      duration: 220,
+      easing: 'cubic-bezier(0.2, 0, 0, 1)'
+    }
+  )
 }
 
 function delay(ms: number): Promise<void> {
@@ -942,6 +978,8 @@ function App() {
     copilot: false,
     gemini: false
   })
+  const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null)
+  const [matrixDropTargetId, setMatrixDropTargetId] = useState<string | null>(null)
 
   const panesRef = useRef<PaneState[]>([])
   const localWorkspacesRef = useRef<LocalWorkspace[]>([])
@@ -951,6 +989,10 @@ function App() {
   const streamErroredRef = useRef<Set<string>>(new Set())
   const shellControllersRef = useRef<Record<string, AbortController>>({})
   const shellStopRequestedRef = useRef<Set<string>>(new Set())
+  const matrixTileRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const paneCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const matrixTileRectsRef = useRef<Map<string, DOMRect>>(new Map())
+  const paneCardRectsRef = useRef<Map<string, DOMRect>>(new Map())
 
   panesRef.current = panes
   localWorkspacesRef.current = localWorkspaces
@@ -1069,6 +1111,40 @@ function App() {
     return result
   }, [now, panes])
 
+  useLayoutEffect(() => {
+    const nextMatrixRects = new Map<string, DOMRect>()
+    for (const pane of panes) {
+      const element = matrixTileRefs.current[pane.id]
+      if (!element) {
+        continue
+      }
+
+      const nextRect = element.getBoundingClientRect()
+      const previousRect = matrixTileRectsRef.current.get(pane.id)
+      if (previousRect) {
+        animateReorder(element, previousRect, nextRect)
+      }
+      nextMatrixRects.set(pane.id, nextRect)
+    }
+    matrixTileRectsRef.current = nextMatrixRects
+
+    const nextPaneRects = new Map<string, DOMRect>()
+    for (const pane of visiblePanes) {
+      const element = paneCardRefs.current[pane.id]
+      if (!element) {
+        continue
+      }
+
+      const nextRect = element.getBoundingClientRect()
+      const previousRect = paneCardRectsRef.current.get(pane.id)
+      if (previousRect) {
+        animateReorder(element, previousRect, nextRect)
+      }
+      nextPaneRects.set(pane.id, nextRect)
+    }
+    paneCardRectsRef.current = nextPaneRects
+  }, [focusedPaneId, layout, panes, visiblePanes])
+
   const updatePane = (paneId: string, updates: Partial<PaneState>) => {
     setPanes((current) => current.map((pane) => (pane.id === paneId ? { ...pane, ...updates } : pane)))
   }
@@ -1114,6 +1190,61 @@ function App() {
 
   const handleMatrixClick = (event: { ctrlKey: boolean; metaKey: boolean }, paneId: string) => {
     handleSelectPane(paneId, layout !== 'focus', event.ctrlKey || event.metaKey)
+  }
+
+  const resolveDraggedPaneId = (event: ReactDragEvent<HTMLElement>): string | null => {
+    const transferPaneId = event.dataTransfer.getData('text/plain').trim()
+    return draggedPaneId ?? (transferPaneId || null)
+  }
+
+  const handleMatrixDragStart = (event: ReactDragEvent<HTMLButtonElement>, paneId: string) => {
+    if (panes.length < 2) {
+      return
+    }
+
+    setDraggedPaneId(paneId)
+    setMatrixDropTargetId(paneId)
+    setFocusedPaneId(paneId)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', paneId)
+  }
+
+  const handleMatrixDragEnter = (event: ReactDragEvent<HTMLButtonElement>, targetPaneId: string) => {
+    const sourcePaneId = resolveDraggedPaneId(event)
+    if (!sourcePaneId || sourcePaneId === targetPaneId) {
+      return
+    }
+
+    event.preventDefault()
+    setMatrixDropTargetId(targetPaneId)
+    setPanes((current) => reorderPanesById(current, sourcePaneId, targetPaneId))
+  }
+
+  const handleMatrixDragOver = (event: ReactDragEvent<HTMLButtonElement>, targetPaneId: string) => {
+    const sourcePaneId = resolveDraggedPaneId(event)
+    if (!sourcePaneId || sourcePaneId === targetPaneId) {
+      return
+    }
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    if (matrixDropTargetId !== targetPaneId) {
+      setMatrixDropTargetId(targetPaneId)
+    }
+  }
+
+  const handleMatrixDrop = (event: ReactDragEvent<HTMLButtonElement>) => {
+    if (!resolveDraggedPaneId(event)) {
+      return
+    }
+
+    event.preventDefault()
+    setMatrixDropTargetId(null)
+  }
+
+  const handleMatrixDragEnd = () => {
+    setDraggedPaneId(null)
+    setMatrixDropTargetId(null)
   }
 
   const handleProviderChange = (paneId: string, provider: ProviderId) => {
@@ -2865,6 +2996,7 @@ function App() {
             <span>{'\u5b9f\u884c\u4e2d'}</span>
           </header>
           <strong>{metrics.running}</strong>
+          <p>{'\u5b9f\u884c\u4e2d\u306e\u30bf\u30b9\u30af'}</p>
         </article>
         <article className="metric-card compact">
           <header>
@@ -3000,9 +3132,22 @@ function App() {
               return (
                 <button
                   key={`matrix-${pane.id}`}
+                  ref={(node) => {
+                    if (node) {
+                      matrixTileRefs.current[pane.id] = node
+                    } else {
+                      delete matrixTileRefs.current[pane.id]
+                    }
+                  }}
                   type="button"
-                  className={`matrix-tile status-${isStalled ? 'attention' : pane.status} ${isFocused ? 'active' : ''} ${selectedPaneIds.includes(pane.id) ? 'selected' : ''}`}
+                  draggable={panes.length > 1}
+                  className={`matrix-tile status-${isStalled ? 'attention' : pane.status} ${isFocused ? 'active' : ''} ${selectedPaneIds.includes(pane.id) ? 'selected' : ''} ${draggedPaneId === pane.id ? 'is-dragging' : ''} ${matrixDropTargetId === pane.id && draggedPaneId !== pane.id ? 'is-drop-target' : ''}`}
                   onClick={(event) => handleMatrixClick(event, pane.id)}
+                  onDragStart={(event) => handleMatrixDragStart(event, pane.id)}
+                  onDragEnter={(event) => handleMatrixDragEnter(event, pane.id)}
+                  onDragOver={(event) => handleMatrixDragOver(event, pane.id)}
+                  onDrop={handleMatrixDrop}
+                  onDragEnd={handleMatrixDragEnd}
                 >
                   <span className="matrix-index">{String(index + 1).padStart(2, '0')}</span>
                   <strong>{pane.title}</strong>
@@ -3014,52 +3159,63 @@ function App() {
 
           <div className={`pane-grid layout-${layout}`}>
             {visiblePanes.map((pane) => (
-              <TerminalPane
+              <div
                 key={pane.id}
-                pane={pane}
-                catalogs={catalogs}
-                localWorkspaces={localWorkspaces}
-                sshHosts={bootstrap?.sshHosts ?? []}
-                sharedContext={sharedContext}
-                now={now}
-                isFocused={pane.id === focusedPaneId}
-                onFocus={(paneId) => handleSelectPane(paneId)}
-                onUpdate={updatePane}
-                onProviderChange={handleProviderChange}
-                onModelChange={handleModelChange}
-                onRun={(paneId) => void handleRun(paneId)}
-                onStop={(paneId) => void handleStop(paneId)}
-                onShare={shareFromPane}
-                onShareToPane={(sourcePaneId, targetPaneId) =>
-                  shareFromPane(sourcePaneId, undefined, { scope: 'direct', targetPaneId })
-                }
-                onCopyLatest={(paneId) => void handleCopyLatest(paneId)}
-                onCopyOutput={(paneId) => void handleCopyOutput(paneId)}
-                onDuplicate={handleDuplicatePane}
-                onStartNewSession={handleStartNewSession}
-                onResetSession={handleResetSession}
-                onSelectSession={handleSelectSession}
-                onDelete={handleDeletePane}
-                onLoadRemote={(paneId) => void handleLoadRemote(paneId)}
-                onBrowseRemote={(paneId, path) => void handleBrowseRemote(paneId, path)}
-                onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
-                onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}
-                onOpenCommandPrompt={(paneId) => void handleOpenCommandPrompt(paneId)}
-                onUpdateProviderCli={(paneId) => void handleUpdateProviderCli(paneId)}
-                providerUpdating={updatingProviders[pane.provider]}
-                onRunShell={(paneId) => void handleRunShell(paneId)}
-                onStopShell={(paneId) => void handleStopShell(paneId)}
-                onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
-                onAddLocalWorkspace={(paneId) => void handleAddLocalWorkspace(paneId)}
-                onSelectLocalWorkspace={(paneId, workspacePath) => void handleSelectLocalWorkspace(paneId, workspacePath)}
-                onRemoveLocalWorkspace={handleRemoveLocalWorkspace}
-                onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
-                onGenerateSshKey={(paneId) => void handleGenerateSshKey(paneId)}
-                onInstallSshPublicKey={(paneId) => void handleInstallSshPublicKey(paneId)}
-                onTransferSshPath={(paneId, direction, options) => void handleTransferSshPath(paneId, direction, options)}
-                shareTargets={panes.filter((item) => item.id !== pane.id).map((item) => ({ id: item.id, title: item.title }))}
-                onToggleContext={handleToggleContext}
-              />
+                className="pane-grid-item"
+                ref={(node) => {
+                  if (node) {
+                    paneCardRefs.current[pane.id] = node
+                  } else {
+                    delete paneCardRefs.current[pane.id]
+                  }
+                }}
+              >
+                <TerminalPane
+                  pane={pane}
+                  catalogs={catalogs}
+                  localWorkspaces={localWorkspaces}
+                  sshHosts={bootstrap?.sshHosts ?? []}
+                  sharedContext={sharedContext}
+                  now={now}
+                  isFocused={pane.id === focusedPaneId}
+                  onFocus={(paneId) => handleSelectPane(paneId)}
+                  onUpdate={updatePane}
+                  onProviderChange={handleProviderChange}
+                  onModelChange={handleModelChange}
+                  onRun={(paneId) => void handleRun(paneId)}
+                  onStop={(paneId) => void handleStop(paneId)}
+                  onShare={shareFromPane}
+                  onShareToPane={(sourcePaneId, targetPaneId) =>
+                    shareFromPane(sourcePaneId, undefined, { scope: 'direct', targetPaneId })
+                  }
+                  onCopyLatest={(paneId) => void handleCopyLatest(paneId)}
+                  onCopyOutput={(paneId) => void handleCopyOutput(paneId)}
+                  onDuplicate={handleDuplicatePane}
+                  onStartNewSession={handleStartNewSession}
+                  onResetSession={handleResetSession}
+                  onSelectSession={handleSelectSession}
+                  onDelete={handleDeletePane}
+                  onLoadRemote={(paneId) => void handleLoadRemote(paneId)}
+                  onBrowseRemote={(paneId, path) => void handleBrowseRemote(paneId, path)}
+                  onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
+                  onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}
+                  onOpenCommandPrompt={(paneId) => void handleOpenCommandPrompt(paneId)}
+                  onUpdateProviderCli={(paneId) => void handleUpdateProviderCli(paneId)}
+                  providerUpdating={updatingProviders[pane.provider]}
+                  onRunShell={(paneId) => void handleRunShell(paneId)}
+                  onStopShell={(paneId) => void handleStopShell(paneId)}
+                  onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
+                  onAddLocalWorkspace={(paneId) => void handleAddLocalWorkspace(paneId)}
+                  onSelectLocalWorkspace={(paneId, workspacePath) => void handleSelectLocalWorkspace(paneId, workspacePath)}
+                  onRemoveLocalWorkspace={handleRemoveLocalWorkspace}
+                  onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
+                  onGenerateSshKey={(paneId) => void handleGenerateSshKey(paneId)}
+                  onInstallSshPublicKey={(paneId) => void handleInstallSshPublicKey(paneId)}
+                  onTransferSshPath={(paneId, direction, options) => void handleTransferSshPath(paneId, direction, options)}
+                  shareTargets={panes.filter((item) => item.id !== pane.id).map((item) => ({ id: item.id, title: item.title }))}
+                  onToggleContext={handleToggleContext}
+                />
+              </div>
             ))}
           </div>
         </main>
