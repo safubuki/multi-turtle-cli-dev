@@ -114,6 +114,16 @@ function reorderPanesById(panes: PaneState[], sourcePaneId: string, targetPaneId
   return next
 }
 
+function getDocumentRect(element: HTMLElement): DOMRect {
+  const rect = element.getBoundingClientRect()
+  return new DOMRect(
+    rect.left + window.scrollX,
+    rect.top + window.scrollY,
+    rect.width,
+    rect.height
+  )
+}
+
 function animateReorder(element: HTMLElement, previousRect: DOMRect, nextRect: DOMRect): void {
   const deltaX = previousRect.left - nextRect.left
   const deltaY = previousRect.top - nextRect.top
@@ -1079,8 +1089,16 @@ function App() {
 
   const catalogs = bootstrap?.providers ?? EMPTY_CATALOGS
   const isBootstrapping = loading && !bootstrap
-  const selectedPane = panes.find((pane) => pane.id === focusedPaneId) ?? panes[0] ?? null
-  const visiblePanes = layout === 'focus' ? (selectedPane ? [selectedPane] : []) : panes
+  const paneOrderKey = useMemo(() => panes.map((pane) => pane.id).join('|'), [panes])
+  const selectedPane = useMemo(
+    () => panes.find((pane) => pane.id === focusedPaneId) ?? panes[0] ?? null,
+    [focusedPaneId, panes]
+  )
+  const visiblePanes = useMemo(
+    () => (layout === 'focus' ? (selectedPane ? [selectedPane] : []) : panes),
+    [layout, panes, selectedPane]
+  )
+  const visiblePaneOrderKey = useMemo(() => visiblePanes.map((pane) => pane.id).join('|'), [visiblePanes])
   const workspacePickerParentPath = workspacePicker ? getAbsoluteLocalParentPath(workspacePicker.path) : null
 
   const metrics = useMemo(() => {
@@ -1119,7 +1137,7 @@ function App() {
         continue
       }
 
-      const nextRect = element.getBoundingClientRect()
+      const nextRect = getDocumentRect(element)
       const previousRect = matrixTileRectsRef.current.get(pane.id)
       if (previousRect) {
         animateReorder(element, previousRect, nextRect)
@@ -1135,7 +1153,7 @@ function App() {
         continue
       }
 
-      const nextRect = element.getBoundingClientRect()
+      const nextRect = getDocumentRect(element)
       const previousRect = paneCardRectsRef.current.get(pane.id)
       if (previousRect) {
         animateReorder(element, previousRect, nextRect)
@@ -1143,7 +1161,7 @@ function App() {
       nextPaneRects.set(pane.id, nextRect)
     }
     paneCardRectsRef.current = nextPaneRects
-  }, [focusedPaneId, layout, panes, visiblePanes])
+  }, [layout, paneOrderKey, visiblePaneOrderKey])
 
   const updatePane = (paneId: string, updates: Partial<PaneState>) => {
     setPanes((current) => current.map((pane) => (pane.id === paneId ? { ...pane, ...updates } : pane)))
@@ -1217,7 +1235,6 @@ function App() {
 
     event.preventDefault()
     setMatrixDropTargetId(targetPaneId)
-    setPanes((current) => reorderPanesById(current, sourcePaneId, targetPaneId))
   }
 
   const handleMatrixDragOver = (event: ReactDragEvent<HTMLButtonElement>, targetPaneId: string) => {
@@ -1233,12 +1250,16 @@ function App() {
     }
   }
 
-  const handleMatrixDrop = (event: ReactDragEvent<HTMLButtonElement>) => {
-    if (!resolveDraggedPaneId(event)) {
+  const handleMatrixDrop = (event: ReactDragEvent<HTMLButtonElement>, targetPaneId: string) => {
+    const sourcePaneId = resolveDraggedPaneId(event)
+    if (!sourcePaneId) {
       return
     }
 
     event.preventDefault()
+    if (sourcePaneId !== targetPaneId) {
+      setPanes((current) => reorderPanesById(current, sourcePaneId, targetPaneId))
+    }
     setMatrixDropTargetId(null)
   }
 
@@ -1289,68 +1310,6 @@ function App() {
       model: normalizedModel,
       reasoningEffort
     })
-  }
-
-  const handleToggleContext = (paneId: string, contextId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    const contextItem = sharedContextRef.current.find((item) => item.id === contextId)
-    if (!pane || !contextItem) {
-      return
-    }
-
-    const isAttached = pane.attachedContextIds.includes(contextId)
-    const isPendingForPane = contextItem.targetPaneIds.includes(paneId) && !contextItem.consumedByPaneIds.includes(paneId)
-
-    if (isAttached && isPendingForPane) {
-      const nextSharedContext = sharedContextRef.current
-        .flatMap((item) => {
-          if (item.id !== contextId) {
-            return [item]
-          }
-
-          const filteredTargetPaneIds = item.targetPaneIds.filter((id) => id !== paneId)
-          const filteredTargetPaneTitles = item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
-          if (item.scope === 'direct' || filteredTargetPaneIds.length === 0) {
-            return []
-          }
-
-          return [{
-            ...item,
-            targetPaneIds: filteredTargetPaneIds,
-            targetPaneTitles: filteredTargetPaneTitles
-          }]
-        })
-        .slice(0, MAX_SHARED_CONTEXT)
-
-      setSharedContext(nextSharedContext)
-      setPanes((current) =>
-        current.map((currentPane) =>
-          currentPane.id === paneId
-            ? {
-                ...currentPane,
-                attachedContextIds: currentPane.attachedContextIds.filter((item) => item !== contextId)
-              }
-            : currentPane
-        )
-      )
-      return
-    }
-
-    setPanes((current) =>
-      current.map((currentPane) => {
-        if (currentPane.id !== paneId) {
-          return currentPane
-        }
-
-        const attached = currentPane.attachedContextIds.includes(contextId)
-        return {
-          ...currentPane,
-          attachedContextIds: attached
-            ? currentPane.attachedContextIds.filter((item) => item !== contextId)
-            : [...currentPane.attachedContextIds, contextId]
-        }
-      })
-    )
   }
 
   const replaceSourceSharedContext = (sourcePaneId: string, nextSourceContexts: SharedContextItem[]) => {
@@ -3146,7 +3105,7 @@ function App() {
                   onDragStart={(event) => handleMatrixDragStart(event, pane.id)}
                   onDragEnter={(event) => handleMatrixDragEnter(event, pane.id)}
                   onDragOver={(event) => handleMatrixDragOver(event, pane.id)}
-                  onDrop={handleMatrixDrop}
+                  onDrop={(event) => handleMatrixDrop(event, pane.id)}
                   onDragEnd={handleMatrixDragEnd}
                 >
                   <span className="matrix-index">{String(index + 1).padStart(2, '0')}</span>
@@ -3213,7 +3172,6 @@ function App() {
                   onInstallSshPublicKey={(paneId) => void handleInstallSshPublicKey(paneId)}
                   onTransferSshPath={(paneId, direction, options) => void handleTransferSshPath(paneId, direction, options)}
                   shareTargets={panes.filter((item) => item.id !== pane.id).map((item) => ({ id: item.id, title: item.title }))}
-                  onToggleContext={handleToggleContext}
                 />
               </div>
             ))}

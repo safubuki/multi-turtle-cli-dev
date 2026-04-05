@@ -1371,7 +1371,7 @@ textarea {
   flex-wrap: wrap;
 }
 
-.incoming-share-strip {
+.share-flow-strip {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1381,20 +1381,35 @@ textarea {
   flex-wrap: wrap;
 }
 
-.incoming-share-chip {
+.share-flow-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(84, 210, 194, 0.22);
-  background: rgba(84, 210, 194, 0.1);
-  color: #bcf7f0;
   font-size: 0.78rem;
 }
 
-.incoming-share-chip-label {
+.share-flow-chip.incoming {
+  border: 1px solid rgba(108, 162, 255, 0.22);
+  background: rgba(108, 162, 255, 0.1);
+  color: #d9e7ff;
+}
+
+.share-flow-chip.outgoing {
+  border: 1px solid rgba(214, 166, 110, 0.22);
+  background: rgba(214, 166, 110, 0.1);
+  color: #f5e1c7;
+}
+
+.share-flow-chip-prefix {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+}
+
+.share-flow-chip-label {
   min-width: 0;
   max-width: 120px;
   overflow: hidden;
@@ -1402,9 +1417,17 @@ textarea {
   white-space: nowrap;
 }
 
-.incoming-share-chip-count {
+.share-flow-chip-count {
   color: var(--text);
   font-weight: 700;
+}
+
+.share-flow-strip.incoming {
+  justify-content: flex-end;
+}
+
+.share-flow-strip.outgoing {
+  justify-content: flex-end;
 }
 
 .panel-header.slim h3,

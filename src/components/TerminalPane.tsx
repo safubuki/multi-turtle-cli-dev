@@ -1,6 +1,8 @@
 ﻿import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import {
   AlertTriangle,
+  ArrowDownLeft,
+  ArrowUpRight,
   ArrowUp,
   ChevronDown,
   ChevronLeft,
@@ -71,7 +73,6 @@ interface TerminalPaneProps {
   onTransferSshPath: (paneId: string, direction: 'upload' | 'download', options?: TransferOptions) => void
   shareTargets: Array<{ id: string; title: string }>
   onSelectSession: (paneId: string, sessionKey: string | null) => void
-  onToggleContext: (paneId: string, contextId: string) => void
 }
 
 const UI = {
@@ -148,6 +149,9 @@ const UI = {
   useWorkspace: '\u4f7f\u3046',
   sharedContext: '\u5171\u6709\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8',
   sharedFrom: '\u5171\u6709\u5143',
+  sharedTo: '\u5171\u6709\u5148',
+  sharedFromPrefix: 'from :',
+  sharedToPrefix: 'to :',
   noSharedContext: '\u5171\u6709\u6e08\u307f\u306e\u6587\u8108\u306f\u307e\u3060\u3042\u308a\u307e\u305b\u3093\u3002',
   selectedCount: '\u4ef6\u9078\u629e',
   runLogs: '\u5b9f\u884c\u30ed\u30b0',
@@ -298,8 +302,7 @@ export function TerminalPane({
   onInstallSshPublicKey,
   onTransferSshPath,
   shareTargets,
-  onSelectSession,
-  onToggleContext
+  onSelectSession
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
   const [isRunLogsExpanded, setIsRunLogsExpanded] = useState(false)
@@ -420,10 +423,32 @@ export function TerminalPane({
 
     return Array.from(sourceMap.values())
   }, [pane.id, sharedContext])
-  const visibleSharedContext = sharedContext.filter((item) => item.sourcePaneId === pane.id || item.targetPaneIds.includes(pane.id))
   const remoteBaseDropPath = pane.remoteBrowserPath || pane.remoteWorkspacePath
   const currentRemoteLabel = getShortPathLabel(remoteBaseDropPath || pane.remoteHomeDirectory || '')
   const outgoingShareContexts = sharedContext.filter((item) => item.sourcePaneId === pane.id && item.targetPaneIds.length > 0)
+  const outgoingShareTargets = useMemo(() => {
+    const targetMap = new Map<string, { id: string; title: string; count: number }>()
+
+    for (const item of outgoingShareContexts) {
+      for (const [index, targetPaneId] of item.targetPaneIds.entries()) {
+        const fallbackTitle = shareTargets.find((target) => target.id === targetPaneId)?.title ?? targetPaneId
+        const nextTitle = item.targetPaneTitles[index] || fallbackTitle
+        const existing = targetMap.get(targetPaneId)
+        if (existing) {
+          existing.count += 1
+          continue
+        }
+
+        targetMap.set(targetPaneId, {
+          id: targetPaneId,
+          title: nextTitle,
+          count: 1
+        })
+      }
+    }
+
+    return Array.from(targetMap.values())
+  }, [outgoingShareContexts, shareTargets])
   const materializedGlobalShare = outgoingShareContexts.find((item) => item.scope === 'global') ?? null
   const isGlobalShareActive = Boolean(materializedGlobalShare) || pane.pendingShareGlobal
   const activeShareTargetIds = new Set(outgoingShareContexts.flatMap((item) => item.targetPaneIds))
@@ -636,13 +661,26 @@ export function TerminalPane({
               {hasOutput && pane.lastActivityAt ? <p>{`\u6700\u7d42\u66f4\u65b0 ${formatClock(pane.lastActivityAt)}`}</p> : null}
             </div>
             <div className="output-panel-actions">
+              {outgoingShareTargets.length > 0 && (
+                <div className="share-flow-strip outgoing" aria-label={UI.sharedTo}>
+                  {outgoingShareTargets.map((target) => (
+                    <span key={target.id} className="share-flow-chip outgoing" title={`${UI.sharedTo}: ${target.title}`}>
+                      <ArrowUpRight size={12} />
+                      <span className="share-flow-chip-prefix">{UI.sharedToPrefix}</span>
+                      <span className="share-flow-chip-label">{target.title}</span>
+                      {target.count > 1 ? <span className="share-flow-chip-count">x{target.count}</span> : null}
+                    </span>
+                  ))}
+                </div>
+              )}
               {incomingShareSources.length > 0 && (
-                <div className="incoming-share-strip" aria-label={UI.sharedFrom}>
+                <div className="share-flow-strip incoming" aria-label={UI.sharedFrom}>
                   {incomingShareSources.map((source) => (
-                    <span key={source.id} className="incoming-share-chip" title={`${UI.sharedFrom}: ${source.title}`}>
-                      <Share2 size={12} />
-                      <span className="incoming-share-chip-label">{source.title}</span>
-                      {source.count > 1 ? <span className="incoming-share-chip-count">x{source.count}</span> : null}
+                    <span key={source.id} className="share-flow-chip incoming" title={`${UI.sharedFrom}: ${source.title}`}>
+                      <ArrowDownLeft size={12} />
+                      <span className="share-flow-chip-prefix">{UI.sharedFromPrefix}</span>
+                      <span className="share-flow-chip-label">{source.title}</span>
+                      {source.count > 1 ? <span className="share-flow-chip-count">x{source.count}</span> : null}
                     </span>
                   ))}
                 </div>
@@ -966,30 +1004,6 @@ export function TerminalPane({
               </div>
             </div>
           </details>
-
-          {(visibleSharedContext.length > 0 || pane.attachedContextIds.length > 0) && (
-            <details className="pane-accordion">
-              <summary className="accordion-summary">
-                <span className="accordion-label"><Share2 size={15} />{UI.sharedContext}</span>
-                <span className="accordion-value">{`${pane.attachedContextIds.length} ${UI.selectedCount}`}</span>
-              </summary>
-              <div className="accordion-body">
-                <div className="chip-list">
-                  {visibleSharedContext.length > 0 ? visibleSharedContext.map((item) => {
-                    const attached = pane.attachedContextIds.includes(item.id)
-                    const consumed = item.consumedByPaneIds.includes(pane.id)
-                    return (
-                      <button key={item.id} type="button" className={attached ? 'context-chip active' : 'context-chip'} onClick={() => onToggleContext(pane.id, item.id)} title={item.detail}>
-                        <strong>{item.sourcePaneTitle}</strong>
-                        <span>{item.contentLabel} / {item.scope === 'global' ? UI.shareGlobal : UI.shareDirect}</span>
-                        <span>{attached ? UI.shareHint : consumed ? '使用済み / もう一度使うなら再選択' : item.summary}</span>
-                      </button>
-                    )
-                  }) : <div className="empty-chip-row">{UI.noSharedContext}</div>}
-                </div>
-              </div>
-            </details>
-          )}
 
         </div>
       </section>
