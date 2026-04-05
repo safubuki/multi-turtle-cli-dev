@@ -22,6 +22,37 @@
   ProviderUpdateResponse
 } from '../types'
 
+const HTML_API_ERROR_MESSAGES = [
+  {
+    path: '/api/shell/stream',
+    message: '簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。'
+  },
+  {
+    path: '/api/run/stream',
+    message: 'CLI 実行 API が見つかりません。TAKO のサーバーを再起動してください。'
+  },
+  {
+    path: '/api/provider/update',
+    message: 'CLI 更新 API が見つかりません。TAKO のサーバーを再起動してください。'
+  },
+  {
+    path: '/api/system/mkdir-local',
+    message: '新しいフォルダ作成 API が見つかりません。TAKO のサーバーを再起動してください。'
+  },
+  {
+    path: '/api/system/browse-local',
+    message: 'ローカルフォルダ参照 API が見つかりません。TAKO のサーバーを再起動してください。'
+  },
+  {
+    path: '/api/ssh/keygen',
+    message: 'SSH 鍵生成 API が見つかりません。TAKO のサーバーを再起動してください。'
+  },
+  {
+    path: '/api/ssh/install-key',
+    message: 'SSH 公開鍵登録 API が見つかりません。TAKO のサーバーを再起動してください。'
+  }
+] as const
+
 async function extractErrorMessage(response: Response): Promise<string> {
   const text = await response.text()
   const contentType = response.headers.get('content-type') ?? ''
@@ -31,14 +62,15 @@ async function extractErrorMessage(response: Response): Promise<string> {
   }
 
   if (contentType.includes('text/html')) {
-    if (response.url.includes('/api/shell/stream') || text.includes('Cannot POST /api/shell/stream')) {
-      return '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
-    }
-    if (response.url.includes('/api/run/stream') || text.includes('Cannot POST /api/run/stream')) {
-      return 'CLI \u5b9f\u884c API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
-    }
-    if (response.url.includes('/api/provider/update') || text.includes('Cannot POST /api/provider/update')) {
-      return 'CLI \u66f4\u65b0 API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
+    const knownApiError = HTML_API_ERROR_MESSAGES.find(
+      (entry) =>
+        response.url.includes(entry.path) ||
+        text.includes(`Cannot POST ${entry.path}`) ||
+        text.includes(`Cannot GET ${entry.path}`)
+    )
+
+    if (knownApiError) {
+      return knownApiError.message
     }
     return 'TAKO \u30b5\u30fc\u30d0\u30fc\u306e\u5fdc\u7b54\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
   }
