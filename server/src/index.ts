@@ -19,7 +19,7 @@ import {
 import { specSections } from './spec.js'
 import type { ActiveCliRun, ActiveShellRun, AutonomyMode, RunRequestBody, RunStreamEvent, ShellRunEvent, ShellRunRequestBody, SshConnectionOptions } from './types.js'
 import { openInCommandPrompt, openInVsCode } from './vscode.js'
-import { browseLocalDirectory, discoverLocalWorkspaces, listLocalBrowseRoots } from './workspaces.js'
+import { browseLocalDirectory, createLocalDirectory, discoverLocalWorkspaces, listLocalBrowseRoots } from './workspaces.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3001)
@@ -224,6 +224,32 @@ app.post('/api/system/browse-local', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'local browse failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/system/mkdir-local', async (req, res) => {
+  try {
+    const { parentPath, directoryName } = req.body as { parentPath?: string; directoryName?: string }
+    if (!parentPath?.trim() || !directoryName?.trim()) {
+      res.status(400).json({
+        success: false,
+        error: 'parentPath and directoryName are required'
+      })
+      return
+    }
+
+    const createdPath = await createLocalDirectory(parentPath.trim(), directoryName.trim())
+    res.json({
+      success: true,
+      path: createdPath,
+      created: true
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'local directory creation failed',
       details: String(error)
     })
   }

@@ -4,6 +4,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   ArrowUp,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   Copy,  FileText,
@@ -899,9 +900,16 @@ export function TerminalPane({
                     </div>
 
                     <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions">
-                      <button type="button" className="secondary-button" onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
-                      <button type="button" className="secondary-button" disabled={!pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>{UI.installKey}</button>
+                      <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
+                      <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>{UI.installKey}</button>
                     </div>
+
+                    {pane.sshActionMessage && (
+                      <div className={`ssh-action-feedback ${pane.sshActionState}`}>
+                        {pane.sshActionState === 'running' ? <LoaderCircle size={15} className="spin" /> : pane.sshActionState === 'success' ? <CheckCircle2 size={15} /> : pane.sshActionState === 'error' ? <AlertTriangle size={15} /> : null}
+                        <span>{pane.sshActionMessage}</span>
+                      </div>
+                    )}
 
                     {pane.sshPublicKeyText && (
                       <div className="browser-panel">

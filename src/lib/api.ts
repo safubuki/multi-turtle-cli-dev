@@ -2,6 +2,7 @@
   BootstrapPayload,
   LocalBrowseResponse,
   LocalBrowseRootsResponse,
+  LocalCreateDirectoryResponse,
   RemoteBrowseResponse,
   RemoteCreateDirectoryResponse,
   RemoteWorkspaceResponse,
@@ -283,6 +284,16 @@ export function browseLocalDirectory(path: string): Promise<LocalBrowseResponse>
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ path })
+  })
+}
+
+export function createLocalDirectory(parentPath: string, directoryName: string): Promise<LocalCreateDirectoryResponse> {
+  return requestJson<LocalCreateDirectoryResponse>('/api/system/mkdir-local', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ parentPath, directoryName })
   })
 }
 

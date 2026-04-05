@@ -121,3 +121,33 @@ export async function browseLocalDirectory(targetPath: string): Promise<LocalDir
     })
     .slice(0, 80)
 }
+
+export async function createLocalDirectory(parentPath: string, directoryName: string): Promise<string> {
+  const normalizedParentPath = path.resolve(parentPath)
+  const normalizedDirectoryName = directoryName.trim()
+
+  if (!normalizedDirectoryName) {
+    throw new Error('Directory name is required')
+  }
+
+  if (normalizedDirectoryName === '.' || normalizedDirectoryName === '..' || /[\\/\r\n]/.test(normalizedDirectoryName)) {
+    throw new Error('Directory name contains invalid characters')
+  }
+
+  if (!existsSync(normalizedParentPath)) {
+    throw new Error(`Local directory not found: ${normalizedParentPath}`)
+  }
+
+  const parentStats = await fs.stat(normalizedParentPath)
+  if (!parentStats.isDirectory()) {
+    throw new Error(`Local path is not a directory: ${normalizedParentPath}`)
+  }
+
+  const createdPath = path.join(normalizedParentPath, normalizedDirectoryName)
+  if (existsSync(createdPath)) {
+    throw new Error(`Directory already exists: ${createdPath}`)
+  }
+
+  await fs.mkdir(createdPath)
+  return createdPath
+}

@@ -2453,6 +2453,35 @@ textarea {
   margin-top: -2px;
 }
 
+.ssh-action-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.82rem;
+}
+
+.ssh-action-feedback.running {
+  border-color: rgba(84, 210, 194, 0.26);
+  background: rgba(84, 210, 194, 0.08);
+  color: #bcf7f0;
+}
+
+.ssh-action-feedback.success {
+  border-color: rgba(125, 237, 153, 0.24);
+  background: rgba(125, 237, 153, 0.08);
+  color: #dcffe3;
+}
+
+.ssh-action-feedback.error {
+  border-color: rgba(255, 127, 127, 0.24);
+  background: rgba(255, 127, 127, 0.08);
+  color: #ffd8d8;
+}
+
 .ssh-help-note {
   margin: 0;
   color: var(--muted);

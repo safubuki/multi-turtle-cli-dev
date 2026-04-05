@@ -15,6 +15,7 @@ import { TerminalPane } from './components/TerminalPane'
 import {
   browseRemoteDirectory,
   browseLocalDirectory,
+  createLocalDirectory,
   createRemoteDirectory,
   fetchBootstrap,
   fetchLocalBrowseRoots,
@@ -557,6 +558,8 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     sshSelectedKeyPath: '',
     sshPublicKeyText: '',
     sshDiagnostics: [],
+    sshActionState: 'idle',
+    sshActionMessage: null,
     sshLocalPath: firstWorkspace?.path ?? '',
     sshRemotePath: '',
     remoteWorkspacePath: '',
@@ -926,6 +929,8 @@ function normalizePane(
     sshDiagnostics: Array.isArray(rawPane.sshDiagnostics)
       ? rawPane.sshDiagnostics.filter((item): item is string => typeof item === 'string')
       : [],
+    sshActionState: rawPane.sshActionState === 'running' || rawPane.sshActionState === 'success' || rawPane.sshActionState === 'error' ? rawPane.sshActionState : 'idle',
+    sshActionMessage: typeof rawPane.sshActionMessage === 'string' ? rawPane.sshActionMessage : null,
     sshLocalPath: typeof rawPane.sshLocalPath === 'string' ? rawPane.sshLocalPath : localWorkspacePath,
     sshRemotePath: typeof rawPane.sshRemotePath === 'string' ? rawPane.sshRemotePath : '',
     remoteWorkspacePath: typeof rawPane.remoteWorkspacePath === 'string' ? rawPane.remoteWorkspacePath : '',
@@ -1971,6 +1976,8 @@ function App() {
       selectedSessionKey: null,
       liveOutput: '',
       sessionId: null,
+      sshActionState: 'idle',
+      sshActionMessage: null,
       lastRunAt: null,
       runningSince: null,
       lastActivityAt: null,
@@ -2205,6 +2212,67 @@ function App() {
 
   const handleAddLocalWorkspace = async (paneId: string) => {
     await handleOpenWorkspacePicker(paneId)
+  }
+
+  const handleCreateWorkspacePickerDirectory = async () => {
+    if (!workspacePicker?.path || workspacePicker.loading) {
+      return
+    }
+
+    const folderName = window.prompt('作成するフォルダ名', '')
+    if (folderName === null) {
+      return
+    }
+
+    const trimmedName = folderName.trim()
+    if (!trimmedName) {
+      setWorkspacePicker((current) =>
+        current
+          ? {
+              ...current,
+              error: '新しいフォルダ名を入力してください。'
+            }
+          : current
+      )
+      return
+    }
+
+    const parentPath = workspacePicker.path
+    setWorkspacePicker((current) =>
+      current
+        ? {
+            ...current,
+            loading: true,
+            error: null
+          }
+        : current
+    )
+
+    try {
+      const payload = await createLocalDirectory(parentPath, trimmedName)
+      const directoryPayload = await browseLocalDirectory(payload.path)
+      setWorkspacePicker((current) =>
+        current
+          ? {
+              ...current,
+              path: directoryPayload.path,
+              entries: directoryPayload.entries.filter((entry) => entry.isDirectory),
+              loading: false,
+              error: null
+            }
+          : current
+      )
+    } catch (error) {
+      setWorkspacePicker((current) =>
+        current
+          ? {
+              ...current,
+              loading: false,
+              error: error instanceof Error ? error.message : String(error)
+            }
+          : current
+      )
+    }
   }
 
   const handleRemoveLocalWorkspace = (paneId: string) => {
@@ -2770,8 +2838,20 @@ function App() {
   }
 
   const handleGenerateSshKey = async (paneId: string) => {
+    const startedAt = Date.now()
+    updatePane(paneId, {
+      status: 'running',
+      statusText: 'SSH 鍵を生成中です',
+      runningSince: startedAt,
+      lastActivityAt: startedAt,
+      lastError: null,
+      sshActionState: 'running',
+      sshActionMessage: 'SSH 鍵を生成中です...'
+    })
+
     try {
       const result = await generateSshKey('id_ed25519', 'multi-turtle-cli-dev', '')
+      const finishedAt = Date.now()
       mutatePane(paneId, (pane) => ({
         ...pane,
         sshLocalKeys: [result.key, ...pane.sshLocalKeys.filter((item) => item.privateKeyPath !== result.key.privateKeyPath)],
@@ -2779,13 +2859,28 @@ function App() {
         sshIdentityFile: pane.sshIdentityFile || result.key.privateKeyPath,
         sshPublicKeyText: result.key.publicKey,
         sshDiagnostics: [...pane.sshDiagnostics.filter((item) => !item.startsWith('\u30ed\u30fc\u30ab\u30eb\u9375:')), `\u30ed\u30fc\u30ab\u30eb\u9375: ${result.key.privateKeyPath}`],
-        lastError: null
+        sshActionState: 'success',
+        sshActionMessage: `SSH 鍵を生成しました: ${result.key.privateKeyPath}`,
+        status: 'completed',
+        statusText: 'SSH 鍵を生成しました',
+        runningSince: null,
+        lastActivityAt: finishedAt,
+        lastFinishedAt: finishedAt,
+        lastError: null,
+        streamEntries: appendStreamEntry(pane.streamEntries, 'system', `SSH 鍵を生成しました: ${result.key.privateKeyPath}`, finishedAt)
       }))
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const failedAt = Date.now()
       updatePane(paneId, {
         status: 'error',
         statusText: 'SSH \u9375\u306e\u751f\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
+        runningSince: null,
+        lastActivityAt: failedAt,
+        lastFinishedAt: failedAt,
+        lastError: message,
+        sshActionState: 'error',
+        sshActionMessage: `SSH 鍵の生成に失敗しました: ${message}`
       })
     }
   }
@@ -2796,24 +2891,52 @@ function App() {
       updatePane(paneId, {
         status: 'attention',
         statusText: '\u63a5\u7d9a\u5148\u3068\u516c\u958b\u9375\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: 'SSH \u516c\u958b\u9375\u306e\u767b\u9332\u306b\u5fc5\u8981\u306a\u60c5\u5831\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002'
+        lastError: 'SSH \u516c\u958b\u9375\u306e\u767b\u9332\u306b\u5fc5\u8981\u306a\u60c5\u5831\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002',
+        sshActionState: 'error',
+        sshActionMessage: '接続先と公開鍵を確認してください。'
       })
       return
     }
 
+    const startedAt = Date.now()
+    updatePane(paneId, {
+      status: 'running',
+      statusText: '公開鍵を登録中です',
+      runningSince: startedAt,
+      lastActivityAt: startedAt,
+      lastError: null,
+      sshActionState: 'running',
+      sshActionMessage: `公開鍵を ${pane.sshHost.trim()} へ登録中です...`
+    })
+
     try {
       await installSshKey(pane.sshHost.trim(), pane.sshPublicKeyText.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? []))
-      appendPaneSystemMessage(paneId, '\u516c\u958b\u9375\u3092\u63a5\u7d9a\u5148\u3078\u767b\u9332\u3057\u307e\u3057\u305f')
-      updatePane(paneId, {
-        status: 'idle',
-        statusText: '\u516c\u958b\u9375\u3092\u767b\u9332\u3057\u307e\u3057\u305f',
-        lastError: null
-      })
+      const finishedAt = Date.now()
+      mutatePane(paneId, (currentPane) => ({
+        ...currentPane,
+        sshDiagnostics: [`公開鍵を登録しました: ${pane.sshHost.trim()}`, ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('公開鍵を登録しました:'))],
+        sshActionState: 'success',
+        sshActionMessage: `公開鍵を ${pane.sshHost.trim()} へ登録しました`,
+        status: 'completed',
+        statusText: '公開鍵を登録しました',
+        runningSince: null,
+        lastActivityAt: finishedAt,
+        lastFinishedAt: finishedAt,
+        lastError: null,
+        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', `公開鍵を接続先へ登録しました: ${pane.sshHost.trim()}`, finishedAt)
+      }))
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const failedAt = Date.now()
       updatePane(paneId, {
         status: 'error',
         statusText: '\u516c\u958b\u9375\u306e\u767b\u9332\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
+        runningSince: null,
+        lastActivityAt: failedAt,
+        lastFinishedAt: failedAt,
+        lastError: message,
+        sshActionState: 'error',
+        sshActionMessage: `公開鍵の登録に失敗しました: ${message}`
       })
     }
   }
@@ -3200,9 +3323,14 @@ function App() {
                 ))}
               </div>
               <div className="workspace-picker-actions">
-                <button type="button" className="secondary-button" disabled={!workspacePickerParentPath || workspacePicker.loading} onClick={() => workspacePickerParentPath && void handleBrowseWorkspacePicker(workspacePickerParentPath)}>
-                  {'\u4e00\u3064\u4e0a\u3078'}
+                <button type="button" className="secondary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleCreateWorkspacePickerDirectory()}>
+                  {'\u65b0\u3057\u3044\u30d5\u30a9\u30eb\u30c0'}
                 </button>
+                {workspacePickerParentPath && (
+                  <button type="button" className="secondary-button" disabled={workspacePicker.loading} onClick={() => void handleBrowseWorkspacePicker(workspacePickerParentPath)}>
+                    {'\u4e00\u3064\u4e0a\u3078'}
+                  </button>
+                )}
                 <button type="button" className="secondary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleBrowseWorkspacePicker(workspacePicker.path)}>
                   {'\u518d\u8aad\u8fbc'}
                 </button>

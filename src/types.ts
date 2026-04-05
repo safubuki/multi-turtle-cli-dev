@@ -214,6 +214,8 @@ export interface PaneState {
   sshSelectedKeyPath: string
   sshPublicKeyText: string
   sshDiagnostics: string[]
+  sshActionState: 'idle' | 'running' | 'success' | 'error'
+  sshActionMessage: string | null
   sshLocalPath: string
   sshRemotePath: string
   remoteWorkspacePath: string
@@ -342,6 +344,12 @@ export interface LocalBrowseResponse {
 export interface LocalBrowseRootsResponse {
   success: boolean
   roots: LocalBrowseRoot[]
+}
+
+export interface LocalCreateDirectoryResponse {
+  success: boolean
+  path: string
+  created: boolean
 }
 
 export interface RemoteWorkspaceResponse {
