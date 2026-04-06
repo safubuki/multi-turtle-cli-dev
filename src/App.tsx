@@ -3739,7 +3739,12 @@ function App() {
               </button>
             </div>
 
-            <div className="toolbar-note">local {localWorkspaces.length} / ssh {bootstrap?.sshHosts.length ?? 0} / shared {sharedContext.length}</div>
+            <div className="toolbar-status-strip" aria-label="pane-status-summary">
+              <span className="toolbar-status-chip running">実行中 {metrics.running}</span>
+              <span className="toolbar-status-chip completed">完了 {metrics.completed}</span>
+              <span className="toolbar-status-chip attention">確認待ち {metrics.attention}</span>
+              <span className="toolbar-status-chip issue">停滞 / エラー {metrics.error + metrics.stalled}</span>
+            </div>
           </div>
 
           <div className="pane-matrix">

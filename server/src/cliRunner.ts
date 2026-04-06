@@ -41,6 +41,10 @@ interface ParsedRunState {
   stderrText: string
 }
 
+const REMOTE_CAPTURE_BEGIN = '__TAKO_REMOTE_CAPTURE_BEGIN__'
+const REMOTE_CAPTURE_END = '__TAKO_REMOTE_CAPTURE_END__'
+const REMOTE_CODEX_OUTPUT_PLACEHOLDER = '__TAKO_REMOTE_CODEX_OUTPUT__'
+
 const DEFAULT_STATE = (): ParsedRunState => ({
   sessionId: null,
   assistantText: '',
@@ -621,6 +625,8 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
             '--json',
             '--full-auto',
             '--skip-git-repo-check',
+            '-o',
+            REMOTE_CODEX_OUTPUT_PLACEHOLDER,
             '-m',
             options.model,
             'resume',
@@ -633,6 +639,8 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
             '--json',
             '--full-auto',
             '--skip-git-repo-check',
+            '-o',
+            REMOTE_CODEX_OUTPUT_PLACEHOLDER,
             '-m',
             options.model,
             '-'
@@ -671,16 +679,38 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
             options.prompt
           ]
 
-  const escapedRemoteArgs = remoteArgs.map((entry) => shellEscapePosix(entry)).join(' ')
+  const escapedRemoteArgs = remoteArgs
+    .map((entry) => entry === REMOTE_CODEX_OUTPUT_PLACEHOLDER ? '"$tako_codex_output"' : shellEscapePosix(entry))
+    .join(' ')
   const providerCommand = options.provider === 'codex' ? 'codex' : options.provider === 'gemini' ? 'gemini' : 'copilot'
-  const remoteCommand = [
+  const remoteCommandLines = [
     buildRemoteBashBootstrap(),
     'export TERM=xterm-256color',
     'export COLORTERM=truecolor',
     `cd ${shellEscapePosix(options.target.path)}`,
-    `if ! command -v ${providerCommand} >/dev/null 2>&1; then printf '%s\n' 'Remote ${providerCommand} CLI was not found in PATH after loading shell profiles.' >&2; exit 127; fi`,
-    escapedRemoteArgs
-  ].join('\n')
+    `if ! command -v ${providerCommand} >/dev/null 2>&1; then printf '%s\n' 'Remote ${providerCommand} CLI was not found in PATH after loading shell profiles.' >&2; exit 127; fi`
+  ]
+
+  if (options.provider === 'codex') {
+    remoteCommandLines.push(
+      'tako_codex_output=""',
+      'if command -v mktemp >/dev/null 2>&1; then',
+      '  tako_codex_output="$(mktemp "${TMPDIR:-/tmp}/tako-codex-output.XXXXXX")"',
+      'else',
+      '  tako_codex_output="${TMPDIR:-/tmp}/tako-codex-output-$$.txt"',
+      '  : > "$tako_codex_output"',
+      'fi',
+      escapedRemoteArgs,
+      'tako_codex_status=$?',
+      `if [ -f "$tako_codex_output" ]; then printf '%s\n' ${shellEscapePosix(REMOTE_CAPTURE_BEGIN)}; cat "$tako_codex_output"; printf '\n%s\n' ${shellEscapePosix(REMOTE_CAPTURE_END)}; fi`,
+      'rm -f "$tako_codex_output"',
+      'exit "$tako_codex_status"'
+    )
+  } else {
+    remoteCommandLines.push(escapedRemoteArgs)
+  }
+
+  const remoteCommand = remoteCommandLines.join('\n')
 
   return {
     command: 'ssh',
@@ -702,11 +732,29 @@ function createActiveRun(
 ): ActiveCliRun {
   const state = DEFAULT_STATE()
   let stdoutBuffer = ''
+  let remoteCapturedOutput = ''
+  let isCapturingRemoteOutput = false
   let stopped = false
   const stdoutDecoder = createBufferDecoder(process.platform === 'win32' ? 'auto' : 'utf8')
   const stderrDecoder = createBufferDecoder(process.platform === 'win32' ? 'auto' : 'utf8')
 
   const processStdoutLine = (line: string) => {
+    if (line === REMOTE_CAPTURE_BEGIN) {
+      remoteCapturedOutput = ''
+      isCapturingRemoteOutput = true
+      return
+    }
+
+    if (line === REMOTE_CAPTURE_END) {
+      isCapturingRemoteOutput = false
+      return
+    }
+
+    if (isCapturingRemoteOutput) {
+      remoteCapturedOutput += remoteCapturedOutput ? `\n${line}` : line
+      return
+    }
+
     const trimmed = line.trim()
     if (!trimmed) {
       return
@@ -805,7 +853,7 @@ function createActiveRun(
         return
       }
 
-      const response = (state.finalText ?? state.assistantText).trim() || capturedOutput
+      const response = (state.finalText ?? state.assistantText).trim() || capturedOutput || remoteCapturedOutput.trim()
       if (!response) {
         reject(new Error(state.stderrText.trim() || 'CLI returned empty output'))
         return

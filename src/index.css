@@ -491,9 +491,51 @@ select {
   backdrop-filter: blur(14px);
 }
 
-.toolbar-note {
-  color: var(--muted);
-  font-size: 0.92rem;
+.toolbar-status-strip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.toolbar-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #d6e0db;
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.toolbar-status-chip.running {
+  border-color: rgba(84, 210, 194, 0.22);
+  background: rgba(84, 210, 194, 0.1);
+  color: #c6faf2;
+}
+
+.toolbar-status-chip.completed {
+  border-color: rgba(124, 214, 164, 0.24);
+  background: rgba(59, 118, 83, 0.18);
+  color: #d7f6e4;
+}
+
+.toolbar-status-chip.attention {
+  border-color: rgba(114, 182, 255, 0.24);
+  background: rgba(58, 91, 132, 0.18);
+  color: #d8ebff;
+}
+
+.toolbar-status-chip.issue {
+  border-color: rgba(244, 198, 108, 0.24);
+  background: rgba(122, 86, 38, 0.18);
+  color: #ffe0a6;
 }
 
 .pane-matrix {
@@ -1515,7 +1557,7 @@ textarea {
   border-radius: 16px;
 }
 
-.toolbar-note {
+.toolbar-status-chip {
   font-size: 0.84rem;
 }
 
