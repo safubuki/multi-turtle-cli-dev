@@ -13,6 +13,7 @@ import {
   FolderPlus,
   Home,
   History,
+  KeyRound,
   LoaderCircle,
   Maximize2,
   Play,
@@ -156,8 +157,8 @@ const UI = {
   keySettings: '\u9375\u8a2d\u5b9a',
   selectable: '\u9078\u629e\u53ef\u80fd',
   infoOnly: '\u60c5\u5831\u306e\u307f',
-  passwordHint: '\u9375\u8a2d\u5b9a\u524d\u306f\u5165\u529b\u304c\u5fc5\u8981\u3067\u3059\u3002\u9375\u8a2d\u5b9a\u5f8c\u306f\u4e0d\u8981\u3067\u3001\u9375\u3092\u8a2d\u5b9a\u305b\u305a\u306b\u30d1\u30b9\u30ef\u30fc\u30c9\u3060\u3051\u3067\u63a5\u7d9a\u3059\u308b\u3053\u3068\u3082\u3067\u304d\u307e\u3059\u3002',
-  userHint: 'SSH config \u306e Host \u3092\u4f7f\u3046\u304b\u3001SSH Host / IP \u306b user@host \u3092\u542b\u3081\u308b\u5834\u5408\u306f\u7701\u7565\u3067\u304d\u307e\u3059\u3002\u305d\u308c\u4ee5\u5916\u306f User \u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
+  passwordHint: '\u203b\u30d1\u30b9\u30ef\u30fc\u30c9\u63a5\u7d9a\u3092\u4f7f\u3046\u5834\u5408\u306e\u307f\u5165\u529b\u3057\u307e\u3059\u3002\u9375\u3092\u4f7f\u3046\u5834\u5408\u306f\u3001\u8a2d\u5b9a\u5f8c\u306f\u7a7a\u6b04\u3067\u69cb\u3044\u307e\u305b\u3093\u3002',
+  userHint: '\u203bSSH config \u306e Host \u3092\u4f7f\u3046\u304b\u3001SSH Host / IP \u306b user@host \u3092\u542b\u3081\u308b\u5834\u5408\u306f\u7701\u7565\u3067\u304d\u307e\u3059\u3002\u305d\u308c\u4ee5\u5916\u306f User \u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
   refreshConnection: '\u30ea\u30e2\u30fc\u30c8\u306b\u63a5\u7d9a',
   remoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   publicKey: '\u516c\u958b\u9375',
@@ -168,9 +169,9 @@ const UI = {
   keyComment: '\u30b3\u30e1\u30f3\u30c8',
   generateKey: '\u9375\u3092\u751f\u6210',
   deleteKey: '\u9078\u629e\u4e2d\u306e\u9375\u3092\u524a\u9664',
-  installKey: '\u516c\u958b\u9375\u3092\u767b\u9332',
-  removeKnownHost: '\u63a5\u7d9a\u5148\u306e\u78ba\u8a8d\u3092\u3084\u308a\u76f4\u3059',
-  removeKnownHostHint: 'known_hosts \u306b\u4fdd\u5b58\u3055\u308c\u305f\u63a5\u7d9a\u5148\u306e\u30db\u30b9\u30c8\u9375\u3092\u524a\u9664\u3057\u3001\u6b21\u56de\u63a5\u7d9a\u6642\u306b\u5b89\u5168\u78ba\u8a8d\u3092\u3084\u308a\u76f4\u3057\u307e\u3059\u3002\u63a5\u7d9a\u5148\u3092\u518d\u69cb\u7bc9\u3057\u305f\u5f8c\u306e\u8b66\u544a\u89e3\u6d88\u306b\u5411\u3044\u3066\u3044\u307e\u3059\u3002',
+  installKey: '\u516c\u958b\u9375\u3092\u63a5\u7d9a\u5148\u306b\u767b\u9332',
+  removeKnownHost: '\u63a5\u7d9a\u5148\u306e\u30db\u30b9\u30c8\u9375\u3092\u524a\u9664',
+  keyActionHint: '\u9078\u629e\u4e2d\u306e\u9375\u3092\u524a\u9664\u3057\u305f\u5834\u5408\u306f\u3001\u65b0\u3057\u3044\u9375\u3092\u751f\u6210\u3057\u3066\u3001\u516c\u958b\u9375\u3092\u63a5\u7d9a\u5148\u306b\u767b\u9332\u3057\u3066\u304f\u3060\u3055\u3044\u3002\n\u63a5\u7d9a\u5148\u306e\u30db\u30b9\u30c8\u9375\u3092\u524a\u9664\u3057\u305f\u5834\u5408\u306f\u3001\u6b21\u56de\u63a5\u7d9a\u6642\u306b\u63a5\u7d9a\u5148\u306e\u5b89\u5168\u78ba\u8a8d\u3060\u3051\u3092\u3084\u308a\u76f4\u3057\u307e\u3059\u3002\u901a\u5e38\u306f\u516c\u958b\u9375\u306e\u518d\u767b\u9332\u306f\u4e0d\u8981\u3067\u3059\u3002',
   diagnostics: '\u63a5\u7d9a\u8a3a\u65ad / CLI\u78ba\u8a8d',
   diagnosticsOk: 'OK',
   diagnosticsNg: 'NG',
@@ -1062,12 +1063,12 @@ export function TerminalPane({
                           <label>
                             <span>User</span>
                             <input value={pane.sshUser} onChange={(event) => onUpdate(pane.id, { sshUser: event.target.value })} placeholder="yourusername / ubuntu" />
-                            <small className="field-support-note">{UI.userHint}</small>
                           </label>
                           <label>
                             <span>Port</span>
                             <input value={pane.sshPort} onChange={(event) => onUpdate(pane.id, { sshPort: event.target.value })} placeholder="22" />
                           </label>
+                          <p className="field-support-note ssh-inline-note ssh-inline-note-nowrap">{UI.userHint}</p>
                           <label className="full-span">
                             <span>Password</span>
                             <input type="password" value={pane.sshPassword} onChange={(event) => onUpdate(pane.id, { sshPassword: event.target.value })} placeholder="optional" />
@@ -1090,9 +1091,9 @@ export function TerminalPane({
                         </div>
 
                         <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions ssh-key-primary-actions">
-                          <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
+                          <button type="button" className="secondary-button ssh-soft-button accent" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}><KeyRound size={16} />{UI.generateKey}</button>
                           <span className="ssh-action-separator" aria-hidden="true">→</span>
-                          <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>{UI.installKey}</button>
+                          <button type="button" className="secondary-button ssh-soft-button accent" disabled={pane.sshActionState === 'running' || !pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}><ArrowUpRight size={16} />{UI.installKey}</button>
                         </div>
 
                         <label className="full-span ssh-key-select-field">
@@ -1123,10 +1124,10 @@ export function TerminalPane({
                         </div>
 
                         <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions ssh-key-secondary-actions">
-                          <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !sshKeySelectValue} onClick={() => onDeleteSshKey(pane.id)}>{UI.deleteKey}</button>
-                          <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshHost.trim()} onClick={() => onRemoveKnownHost(pane.id)}>{UI.removeKnownHost}</button>
+                          <button type="button" className="secondary-button ssh-soft-button danger" disabled={pane.sshActionState === 'running' || !sshKeySelectValue} onClick={() => onDeleteSshKey(pane.id)}><Trash2 size={16} />{UI.deleteKey}</button>
+                          <button type="button" className="secondary-button ssh-soft-button caution" disabled={pane.sshActionState === 'running' || !pane.sshHost.trim()} onClick={() => onRemoveKnownHost(pane.id)}><X size={16} />{UI.removeKnownHost}</button>
                         </div>
-                        <p className="field-support-note ssh-support-note">{UI.removeKnownHostHint}</p>
+                        <div className="ssh-guidance-note"><AlertTriangle size={14} /><span>{UI.keyActionHint}</span></div>
 
                         {pane.sshActionMessage && (
                           <div className={`ssh-action-feedback ${pane.sshActionState}`}>

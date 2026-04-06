@@ -3347,9 +3347,9 @@ function App() {
       updatePane(paneId, {
         status: 'attention',
         statusText: 'SSH ホストを入力してください',
-        lastError: '確認をやり直す接続先が未設定です。',
+        lastError: '削除する接続先ホスト鍵の対象が未設定です。',
         sshActionState: 'error',
-        sshActionMessage: '確認をやり直す接続先を入力してください。'
+        sshActionMessage: '接続先のホスト鍵を削除する対象を入力してください。'
       })
       return
     }
@@ -3358,12 +3358,12 @@ function App() {
     const startedAt = Date.now()
     updatePane(paneId, {
       status: 'running',
-      statusText: '接続先の確認をやり直しています',
+      statusText: '接続先のホスト鍵を削除しています',
       runningSince: startedAt,
       lastActivityAt: startedAt,
       lastError: null,
       sshActionState: 'running',
-      sshActionMessage: `${host} の接続先確認をやり直しています...`
+      sshActionMessage: `${host} の接続先ホスト鍵を削除しています...`
     })
 
     try {
@@ -3372,31 +3372,31 @@ function App() {
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
         sshDiagnostics: [
-          `接続先の確認をやり直しました: ${result.removedHosts.length > 0 ? result.removedHosts.join(', ') : host}`,
-          ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('接続先の確認をやり直しました:'))
+          `接続先のホスト鍵を削除しました: ${result.removedHosts.length > 0 ? result.removedHosts.join(', ') : host}`,
+          ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('接続先のホスト鍵を削除しました:'))
         ],
         sshActionState: 'success',
-        sshActionMessage: result.removedHosts.length > 0 ? `${host} の接続先確認をやり直しました` : `${host} の確認履歴は見つかりませんでした`,
+        sshActionMessage: result.removedHosts.length > 0 ? `${host} の接続先ホスト鍵を削除しました` : `${host} のホスト鍵は見つかりませんでした`,
         status: 'completed',
-        statusText: result.removedHosts.length > 0 ? '接続先の確認をやり直しました' : '確認履歴は見つかりませんでした',
+        statusText: result.removedHosts.length > 0 ? '接続先のホスト鍵を削除しました' : '削除対象のホスト鍵はありませんでした',
         runningSince: null,
         lastActivityAt: finishedAt,
         lastFinishedAt: finishedAt,
         lastError: null,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', result.removedHosts.length > 0 ? `接続先の確認をやり直しました: ${result.removedHosts.join(', ')}` : `確認履歴は見つかりませんでした: ${host}`, finishedAt)
+        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', result.removedHosts.length > 0 ? `接続先のホスト鍵を削除しました: ${result.removedHosts.join(', ')}` : `削除対象のホスト鍵はありませんでした: ${host}`, finishedAt)
       }))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const failedAt = Date.now()
       updatePane(paneId, {
         status: 'error',
-        statusText: '接続先確認のやり直しに失敗しました',
+        statusText: '接続先のホスト鍵の削除に失敗しました',
         runningSince: null,
         lastActivityAt: failedAt,
         lastFinishedAt: failedAt,
         lastError: message,
         sshActionState: 'error',
-        sshActionMessage: `接続先確認のやり直しに失敗しました: ${message}`
+        sshActionMessage: `接続先のホスト鍵の削除に失敗しました: ${message}`
       })
     }
   }
@@ -3417,12 +3417,12 @@ function App() {
     const startedAt = Date.now()
     updatePane(paneId, {
       status: 'running',
-      statusText: '公開鍵を登録中です',
+      statusText: '公開鍵を接続先に登録中です',
       runningSince: startedAt,
       lastActivityAt: startedAt,
       lastError: null,
       sshActionState: 'running',
-      sshActionMessage: `公開鍵を ${pane.sshHost.trim()} へ登録中です...`
+      sshActionMessage: `公開鍵を ${pane.sshHost.trim()} の接続先へ登録中です...`
     })
 
     try {
@@ -3430,11 +3430,11 @@ function App() {
       const finishedAt = Date.now()
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
-        sshDiagnostics: [`公開鍵を登録しました: ${pane.sshHost.trim()}`, ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('公開鍵を登録しました:'))],
+        sshDiagnostics: [`公開鍵を接続先へ登録しました: ${pane.sshHost.trim()}`, ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('公開鍵を接続先へ登録しました:'))],
         sshActionState: 'success',
-        sshActionMessage: `公開鍵を ${pane.sshHost.trim()} へ登録しました`,
+        sshActionMessage: `公開鍵を ${pane.sshHost.trim()} の接続先へ登録しました`,
         status: 'completed',
-        statusText: '公開鍵を登録しました',
+        statusText: '公開鍵を接続先に登録しました',
         runningSince: null,
         lastActivityAt: finishedAt,
         lastFinishedAt: finishedAt,
