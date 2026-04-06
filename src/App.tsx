@@ -57,9 +57,14 @@ import type {
 type LayoutMode = 'quad' | 'triple' | 'focus'
 
 interface WorkspacePickerState {
+  mode: 'local' | 'ssh'
   paneId: string
   path: string
-  entries: LocalDirectoryEntry[]
+  entries: Array<{
+    label: string
+    path: string
+    isWorkspace?: boolean
+  }>
   roots: LocalBrowseRoot[]
   loading: boolean
   error: string | null
@@ -264,6 +269,77 @@ function getAbsoluteLocalParentPath(currentPath: string): string | null {
   }
 
   return parent || null
+}
+
+function getAbsoluteRemoteParentPath(currentPath: string): string | null {
+  const normalizedPath = currentPath.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!normalizedPath || normalizedPath === '/') {
+    return null
+  }
+
+  const segments = normalizedPath.split('/').filter(Boolean)
+  if (segments.length === 0) {
+    return '/'
+  }
+
+  segments.pop()
+  return segments.length === 0 ? '/' : `/${segments.join('/')}`
+}
+
+function getPathLabel(path: string): string {
+  const trimmed = path.trim().replace(/[\/]+$/, '')
+  const parts = trimmed.split(/[\/]/).filter(Boolean)
+  return parts[parts.length - 1] ?? path
+}
+
+function resolveRemoteRootPath(rootPath: string, homeDirectory: string | null): string {
+  const trimmed = rootPath.trim()
+  if (!trimmed || trimmed === '.') {
+    return homeDirectory || '~'
+  }
+
+  if (trimmed === '~') {
+    return homeDirectory || '~'
+  }
+
+  if (trimmed.startsWith('~/') && homeDirectory) {
+    return `${homeDirectory.replace(/\/+$/, '')}/${trimmed.slice(2)}`
+  }
+
+  return trimmed
+}
+
+function buildRemoteWorkspacePickerRoots(remoteRoots: string[], homeDirectory: string | null): LocalBrowseRoot[] {
+  const seen = new Set<string>()
+  const roots = [homeDirectory || '~', ...remoteRoots]
+
+  return roots
+    .map((rootPath) => resolveRemoteRootPath(rootPath, homeDirectory))
+    .filter((rootPath) => {
+      if (!rootPath || seen.has(rootPath)) {
+        return false
+      }
+      seen.add(rootPath)
+      return true
+    })
+    .map((rootPath) => ({
+      label: rootPath === homeDirectory || rootPath === '~' ? 'Home' : getPathLabel(rootPath),
+      path: rootPath
+    }))
+}
+
+function isWorkspacePickerRootActive(workspacePicker: WorkspacePickerState, rootPath: string): boolean {
+  const normalizedCurrentPath = normalizeComparablePath(workspacePicker.path)
+  const normalizedRootPath = normalizeComparablePath(rootPath)
+  if (!normalizedCurrentPath || !normalizedRootPath) {
+    return false
+  }
+
+  if (workspacePicker.mode === 'local') {
+    return normalizedCurrentPath.toLowerCase().startsWith(normalizedRootPath.toLowerCase())
+  }
+
+  return normalizedCurrentPath === normalizedRootPath || normalizedCurrentPath.startsWith(`${normalizedRootPath}/`)
 }
 
 function normalizeComparablePath(value: string): string {
@@ -1133,7 +1209,11 @@ function App() {
     [layout, panes, selectedPane]
   )
   const visiblePaneOrderKey = useMemo(() => visiblePanes.map((pane) => pane.id).join('|'), [visiblePanes])
-  const workspacePickerParentPath = workspacePicker ? getAbsoluteLocalParentPath(workspacePicker.path) : null
+  const workspacePickerParentPath = workspacePicker
+    ? workspacePicker.mode === 'local'
+      ? getAbsoluteLocalParentPath(workspacePicker.path)
+      : getAbsoluteRemoteParentPath(workspacePicker.path)
+    : null
 
   const metrics = useMemo(() => {
     const result = {
@@ -2148,7 +2228,7 @@ function App() {
 
   const handleBrowseWorkspacePicker = async (targetPath: string) => {
     const normalizedTargetPath = targetPath.trim()
-    if (!normalizedTargetPath) {
+    if (!workspacePicker || !normalizedTargetPath) {
       return
     }
 
@@ -2163,18 +2243,51 @@ function App() {
     )
 
     try {
-      const payload = await browseLocalDirectory(normalizedTargetPath)
-      setWorkspacePicker((current) =>
-        current
-          ? {
-              ...current,
-              path: payload.path,
-              entries: payload.entries.filter((entry) => entry.isDirectory),
-              loading: false,
-              error: null
-            }
-          : current
-      )
+      if (workspacePicker.mode === 'local') {
+        const payload = await browseLocalDirectory(normalizedTargetPath)
+        setWorkspacePicker((current) =>
+          current
+            ? {
+                ...current,
+                path: payload.path,
+                entries: payload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
+                  label: entry.label,
+                  path: entry.path
+                })),
+                loading: false,
+                error: null
+              }
+            : current
+        )
+      } else {
+        const pane = panesRef.current.find((item) => item.id === workspacePicker.paneId)
+        if (!pane || !pane.sshHost.trim()) {
+          throw new Error('SSH 接続先が未設定です。')
+        }
+
+        const payload = await browseRemoteDirectory(
+          pane.sshHost.trim(),
+          normalizedTargetPath,
+          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+        )
+
+        setWorkspacePicker((current) =>
+          current
+            ? {
+                ...current,
+                path: payload.path,
+                entries: payload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
+                  label: entry.label,
+                  path: entry.path,
+                  isWorkspace: entry.isWorkspace
+                })),
+                roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], payload.homeDirectory),
+                loading: false,
+                error: null
+              }
+            : current
+        )
+      }
     } catch (error) {
       setWorkspacePicker((current) =>
         current
@@ -2193,6 +2306,7 @@ function App() {
     const startPath = pane?.localWorkspacePath || localWorkspacesRef.current[0]?.path || ''
 
     setWorkspacePicker({
+      mode: 'local',
       paneId,
       path: startPath,
       entries: [],
@@ -2208,19 +2322,81 @@ function App() {
       ])
 
       setWorkspacePicker({
+        mode: 'local',
         paneId,
         path: directoryPayload.path,
-        entries: directoryPayload.entries.filter((entry) => entry.isDirectory),
+        entries: directoryPayload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
+          label: entry.label,
+          path: entry.path
+        })),
         roots: rootsPayload.roots,
         loading: false,
         error: null
       })
     } catch (error) {
       setWorkspacePicker({
+        mode: 'local',
         paneId,
         path: startPath,
         entries: [],
         roots: [],
+        loading: false,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const handleOpenRemoteWorkspacePicker = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane || !pane.sshHost.trim()) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '先にリモートに接続してください',
+        lastError: 'リモートワークスペースを選択する前に SSH 接続が必要です。'
+      })
+      return
+    }
+
+    const startPath = pane.remoteWorkspacePath || pane.remoteBrowserPath || pane.remoteHomeDirectory || '~'
+    const roots = buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], pane.remoteHomeDirectory)
+
+    setWorkspacePicker({
+      mode: 'ssh',
+      paneId,
+      path: startPath,
+      entries: [],
+      roots,
+      loading: true,
+      error: null
+    })
+
+    try {
+      const payload = await browseRemoteDirectory(
+        pane.sshHost.trim(),
+        startPath,
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+      )
+
+      setWorkspacePicker({
+        mode: 'ssh',
+        paneId,
+        path: payload.path,
+        entries: payload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
+          label: entry.label,
+          path: entry.path,
+          isWorkspace: entry.isWorkspace
+        })),
+        roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], payload.homeDirectory),
+        loading: false,
+        error: null
+      })
+    } catch (error) {
+      setWorkspacePicker({
+        mode: 'ssh',
+        paneId,
+        path: startPath,
+        entries: [],
+        roots,
         loading: false,
         error: error instanceof Error ? error.message : String(error)
       })
@@ -2232,9 +2408,24 @@ function App() {
       return
     }
 
-    const workspace = buildLocalWorkspaceRecord(workspacePicker.path)
-    setLocalWorkspaces((current) => mergeLocalWorkspaces([workspace], current))
-    await handleSelectLocalWorkspace(workspacePicker.paneId, workspace.path)
+    if (workspacePicker.mode === 'local') {
+      const workspace = buildLocalWorkspaceRecord(workspacePicker.path)
+      setLocalWorkspaces((current) => mergeLocalWorkspaces([workspace], current))
+      await handleSelectLocalWorkspace(workspacePicker.paneId, workspace.path)
+    } else {
+      const selectedPath = workspacePicker.path
+      updatePane(workspacePicker.paneId, {
+        workspaceMode: 'ssh',
+        remoteWorkspacePath: selectedPath,
+        sshRemotePath: selectedPath,
+        remoteShellPath: selectedPath,
+        status: 'idle',
+        statusText: 'リモートワークスペースを選択しました',
+        lastError: null
+      })
+      void handleBrowseRemote(workspacePicker.paneId, selectedPath)
+    }
+
     setWorkspacePicker(null)
   }
 
@@ -2277,19 +2468,58 @@ function App() {
     )
 
     try {
-      const payload = await createLocalDirectory(parentPath, trimmedName)
-      const directoryPayload = await browseLocalDirectory(payload.path)
-      setWorkspacePicker((current) =>
-        current
-          ? {
-              ...current,
-              path: directoryPayload.path,
-              entries: directoryPayload.entries.filter((entry) => entry.isDirectory),
-              loading: false,
-              error: null
-            }
-          : current
-      )
+      if (workspacePicker.mode === 'local') {
+        const payload = await createLocalDirectory(parentPath, trimmedName)
+        const directoryPayload = await browseLocalDirectory(payload.path)
+        setWorkspacePicker((current) =>
+          current
+            ? {
+                ...current,
+                path: directoryPayload.path,
+                entries: directoryPayload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
+                  label: entry.label,
+                  path: entry.path
+                })),
+                loading: false,
+                error: null
+              }
+            : current
+        )
+      } else {
+        const pane = panesRef.current.find((item) => item.id === workspacePicker.paneId)
+        if (!pane || !pane.sshHost.trim()) {
+          throw new Error('SSH 接続先が未設定です。')
+        }
+
+        const payload = await createRemoteDirectory(
+          pane.sshHost.trim(),
+          parentPath,
+          trimmedName,
+          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+        )
+        const directoryPayload = await browseRemoteDirectory(
+          pane.sshHost.trim(),
+          payload.path,
+          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+        )
+
+        setWorkspacePicker((current) =>
+          current
+            ? {
+                ...current,
+                path: directoryPayload.path,
+                entries: directoryPayload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
+                  label: entry.label,
+                  path: entry.path,
+                  isWorkspace: entry.isWorkspace
+                })),
+                roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], directoryPayload.homeDirectory),
+                loading: false,
+                error: null
+              }
+            : current
+        )
+      }
     } catch (error) {
       setWorkspacePicker((current) =>
         current
@@ -2667,7 +2897,7 @@ function App() {
             return item
           }
 
-          const nextRemoteWorkspacePath = item.remoteWorkspacePath.trim() || browsePayload.path
+          const nextRemoteWorkspacePath = browseFallbackWarning ? '' : item.remoteWorkspacePath.trim()
           const nextDiagnostics = browseFallbackWarning
             ? Array.from(new Set([...item.sshDiagnostics, browseFallbackWarning]))
             : item.sshDiagnostics
@@ -2680,8 +2910,8 @@ function App() {
             remoteBrowserEntries: browsePayload.entries,
             remoteHomeDirectory: browsePayload.homeDirectory ?? item.remoteHomeDirectory,
             remoteWorkspacePath: nextRemoteWorkspacePath,
-            sshRemotePath: item.sshRemotePath || nextRemoteWorkspacePath,
-            remoteShellPath: item.remoteShellPath || nextRemoteWorkspacePath,
+            sshRemotePath: item.sshRemotePath || nextRemoteWorkspacePath || browsePayload.path,
+            remoteShellPath: item.remoteShellPath || nextRemoteWorkspacePath || browsePayload.path,
             sshDiagnostics: nextDiagnostics,
             status: browseFallbackWarning ? 'attention' : 'idle',
             statusText: browseFallbackWarning ? 'SSH に接続しましたがホームを表示しています' : 'SSH に接続しました',
@@ -2732,9 +2962,7 @@ function App() {
             : item.sshLocalKeys.find((key) => key.privateKeyPath === item.sshSelectedKeyPath) ?? item.sshLocalKeys[0] ?? null
           const availableProviders = inspectionPayload?.availableProviders ?? item.remoteAvailableProviders
           const currentRemoteWorkspacePath = item.remoteWorkspacePath.trim()
-          const nextRemoteWorkspacePath = !currentRemoteWorkspacePath || Boolean(browseFallbackWarning)
-            ? workspacePayload?.workspaces[0]?.path ?? browsePayload.path
-            : item.remoteWorkspacePath
+          const nextRemoteWorkspacePath = browseFallbackWarning ? '' : currentRemoteWorkspacePath
           const mergedDiagnostics = Array.from(new Set([
             ...(inspectionPayload?.diagnostics ?? item.sshDiagnostics),
             ...partialErrors
@@ -2767,13 +2995,13 @@ function App() {
             remoteBrowserEntries: browsePayload.entries,
             remoteWorkspacePath: nextRemoteWorkspacePath,
             status: hasPartialFailure || noRemoteProviderDetected ? 'attention' : 'idle',
-            statusText: hasPartialFailure ? 'SSH に接続しましたが一部取得に失敗しました' : noRemoteProviderDetected ? 'CLI 未検出' : 'SSH を更新しました',
+            statusText: hasPartialFailure ? 'SSH に接続しましたが一部取得に失敗しました' : noRemoteProviderDetected ? 'SSH 接続済み / CLI 未検出' : 'SSH を更新しました',
             runningSince: null,
             lastActivityAt: updatedAt,
             lastFinishedAt: updatedAt,
             lastError: hasPartialFailure ? partialErrors.join('\n') : null,
             sshActionState: hasPartialFailure ? 'error' : 'success',
-            sshActionMessage: hasPartialFailure ? `${host} への接続は成功しましたが、一部の情報取得に失敗しました` : `${host} の接続情報を更新しました`
+            sshActionMessage: hasPartialFailure ? `${host} への接続は成功しましたが、一部の情報取得に失敗しました` : noRemoteProviderDetected ? `${host} に接続しました。CLI を確認してください` : `${host} の接続情報を更新しました`
           }
         })
       )
@@ -3358,6 +3586,7 @@ function App() {
                   onStopShell={(paneId) => void handleStopShell(paneId)}
                   onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
                   onAddLocalWorkspace={(paneId) => void handleAddLocalWorkspace(paneId)}
+                  onOpenRemoteWorkspacePicker={(paneId) => void handleOpenRemoteWorkspacePicker(paneId)}
                   onSelectLocalWorkspace={(paneId, workspacePath) => void handleSelectLocalWorkspace(paneId, workspacePath)}
                   onRemoveLocalWorkspace={handleRemoveLocalWorkspace}
                   onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
@@ -3378,8 +3607,8 @@ function App() {
           <div className="output-modal workspace-picker-modal">
             <div className="panel-header slim">
               <div>
-                <h3>{'\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e'}</h3>
-                <p className="workspace-picker-current-path">{workspacePicker.path || '\u4f7f\u3044\u305f\u3044\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002'}</p>
+                <h3>{workspacePicker.mode === 'local' ? '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e' : '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7/\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u9078\u629e'}</h3>
+                <p className="workspace-picker-current-path">{workspacePicker.path || (workspacePicker.mode === 'local' ? '\u4f7f\u3044\u305f\u3044\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002' : '\u4f7f\u3044\u305f\u3044\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002')}</p>
               </div>
               <button type="button" className="secondary-button" onClick={() => setWorkspacePicker(null)}>{'\u9589\u3058\u308b'}</button>
             </div>
@@ -3387,7 +3616,7 @@ function App() {
             <div className="workspace-picker-toolbar">
               <div className="workspace-picker-roots">
                 {workspacePicker.roots.map((root) => (
-                  <button key={root.path} type="button" className={workspacePicker.path.toLowerCase().startsWith(root.path.toLowerCase()) ? 'switch-button active' : 'switch-button'} onClick={() => void handleBrowseWorkspacePicker(root.path)}>
+                  <button key={root.path} type="button" className={isWorkspacePickerRootActive(workspacePicker, root.path) ? 'switch-button active' : 'switch-button'} onClick={() => void handleBrowseWorkspacePicker(root.path)}>
                     {root.label}
                   </button>
                 ))}
@@ -3416,23 +3645,24 @@ function App() {
 
             <div className="workspace-picker-list">
               {workspacePicker.loading ? (
-                <div className="panel-placeholder">{'\u30d5\u30a9\u30eb\u30c0\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</div>
+                <div className="panel-placeholder">{workspacePicker.mode === 'local' ? '\u30d5\u30a9\u30eb\u30c0\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002' : '\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</div>
               ) : workspacePicker.entries.length > 0 ? (
                 workspacePicker.entries.map((entry) => (
                   <button key={entry.path} type="button" className="workspace-picker-entry" onClick={() => void handleBrowseWorkspacePicker(entry.path)}>
                     <strong>{entry.label}</strong>
                     <span>{entry.path}</span>
+                    {entry.isWorkspace ? <span>{'\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u5019\u88dc'}</span> : null}
                   </button>
                 ))
               ) : (
-                <div className="panel-placeholder">{'\u3053\u306e\u5834\u6240\u306b\u8868\u793a\u3067\u304d\u308b\u30d5\u30a9\u30eb\u30c0\u304c\u3042\u308a\u307e\u305b\u3093\u3002'}</div>
+                <div className="panel-placeholder">{workspacePicker.mode === 'local' ? '\u3053\u306e\u5834\u6240\u306b\u8868\u793a\u3067\u304d\u308b\u30d5\u30a9\u30eb\u30c0\u304c\u3042\u308a\u307e\u305b\u3093\u3002' : '\u3053\u306e\u5834\u6240\u306b\u8868\u793a\u3067\u304d\u308b\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u304c\u3042\u308a\u307e\u305b\u3093\u3002'}</div>
               )}
             </div>
 
             <div className="output-modal-footer workspace-picker-footer">
               <button type="button" className="secondary-button" onClick={() => setWorkspacePicker(null)}>{'\u30ad\u30e3\u30f3\u30bb\u30eb'}</button>
               <button type="button" className="primary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleConfirmWorkspacePicker()}>
-                {'\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u4f7f\u3046'}
+                {workspacePicker.mode === 'local' ? '\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u4f7f\u3046' : '\u3053\u306e\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u3092\u4f7f\u3046'}
               </button>
             </div>
           </div>

@@ -1679,6 +1679,54 @@ textarea {
   font-weight: 600;
 }
 
+.accordion-label-with-statuses {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.accordion-label-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-env-statuses {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.settings-env-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(122, 160, 144, 0.22);
+  background: rgba(63, 86, 77, 0.18);
+  color: #d8e9e0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.settings-env-chip.ok {
+  border-color: rgba(124, 214, 164, 0.3);
+  background: rgba(59, 118, 83, 0.24);
+  color: #d7f6e4;
+}
+
+.settings-env-chip.ng {
+  border-color: rgba(121, 157, 144, 0.22);
+  background: rgba(56, 78, 72, 0.22);
+  color: #cfddd8;
+}
+
 .accordion-meta {
   min-width: 0;
   display: inline-flex;
@@ -2161,11 +2209,17 @@ textarea {
 }
 
 .settings-accordion {
+  order: 2;
   background: linear-gradient(180deg, rgba(18, 27, 32, 0.84), rgba(11, 18, 22, 0.92));
 }
 
 .workspace-accordion {
+  order: 1;
   background: linear-gradient(180deg, rgba(16, 24, 28, 0.88), rgba(10, 17, 21, 0.96));
+}
+
+.shell-accordion {
+  order: 3;
 }
 
 .terminal-pane.minimal-pane {
@@ -2471,6 +2525,7 @@ textarea {
 }
 
 .remote-browser-shell {
+  display: none;
   border-color: rgba(84, 210, 194, 0.08);
 }
 
@@ -2776,6 +2831,16 @@ textarea {
   color: var(--muted);
   font-size: 0.8rem;
   word-break: break-all;
+}
+
+.remote-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ssh-diagnostics-panel .badge-row {
+  margin-top: 8px;
 }
 
 .workspace-picker-footer {

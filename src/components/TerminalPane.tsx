@@ -64,6 +64,7 @@ interface TerminalPaneProps {
   onStopShell: (paneId: string) => void
   onOpenPath: (paneId: string, path: string, resourceType: 'folder' | 'file') => void
   onAddLocalWorkspace: (paneId: string) => void
+  onOpenRemoteWorkspacePicker: (paneId: string) => void
   onSelectLocalWorkspace: (paneId: string, workspacePath: string) => void
   onRemoveLocalWorkspace: (paneId: string) => void
   onBrowseLocal: (paneId: string, path: string) => void
@@ -137,6 +138,7 @@ const UI = {
   active: '\u5236\u9650\u306a\u3057\u306e\u81ea\u52d5\u627f\u8a8d',
   currentWorkspace: '\u73fe\u5728\u306e\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   chooseWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
+  chooseRemoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7/\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u9078\u629e',
   removeFromList: '\u4e00\u89a7\u304b\u3089\u5916\u3059',
   savedWorkspaces: '\u767b\u9332\u6e08\u307f\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   folderContents: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u306e\u5185\u5bb9',
@@ -152,9 +154,11 @@ const UI = {
   generateKey: '\u9375\u3092\u751f\u6210',
   installKey: '\u516c\u958b\u9375\u3092\u767b\u9332',
   sshDirectConnectionNote: '\u81ea\u5b85 Wi-Fi \u3084\u540c\u4e00 LAN \u306e\u76f4\u63a5\u63a5\u7d9a\u3067\u306f\u3001\u901a\u5e38\u306f User / Port / Password \u307e\u305f\u306f Identity File \u306e\u8a2d\u5b9a\u3060\u3051\u3067\u5341\u5206\u3067\u3059\u3002\u8e0f\u307f\u53f0\u3084\u793e\u5185\u30d7\u30ed\u30ad\u30b7\u304c\u5fc5\u8981\u306a\u5834\u5408\u306f SSH config \u5074\u3067\u7ba1\u7406\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
-  diagnostics: '\u63a5\u7d9a\u8a3a\u65ad',
+  diagnostics: '\u63a5\u7d9a\u8a3a\u65ad / CLI\u78ba\u8a8d',
   diagnosticsOk: 'OK',
   diagnosticsNg: 'NG',
+  cliAvailable: '\u5229\u7528\u53ef',
+  cliMissing: '\u672a\u691c\u51fa',
   dragHint: '\u30ed\u30fc\u30ab\u30eb\u4e00\u89a7\u304b\u3089\u30c9\u30e9\u30c3\u30b0\u3059\u308b\u3068\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u3067\u304d\u307e\u3059\u3002',
   remoteList: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7',
   remoteLoading: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
@@ -198,6 +202,7 @@ const UI = {
 } as const
 
 const LOCAL_DRAG_MIME = 'application/x-multi-turtle-local-path'
+const REMOTE_PROVIDER_ORDER: ProviderId[] = ['codex', 'gemini', 'copilot']
 function formatClock(timestamp: number | null): string {
   if (!timestamp) {
     return UI.notRun
@@ -313,6 +318,7 @@ export function TerminalPane({
   onRunShell,
   onOpenPath,
   onAddLocalWorkspace,
+  onOpenRemoteWorkspacePicker,
   onSelectLocalWorkspace,
   onRemoveLocalWorkspace,
   onBrowseLocal,
@@ -389,7 +395,8 @@ export function TerminalPane({
   const currentModel = catalog?.models.find((model) => model.id === pane.model) ?? catalog?.models[0]
   const reasoningOptions = currentModel?.supportedReasoningEfforts ?? []
   const canSelectReasoning = reasoningOptions.length > 0
-  const availableRemoteProviders = pane.remoteAvailableProviders.length > 0 ? pane.remoteAvailableProviders : (['codex', 'copilot', 'gemini'] as ProviderId[])
+  const isRemoteConnected = Boolean(pane.sshHost.trim() && (pane.remoteBrowserPath.trim() || pane.remoteHomeDirectory))
+  const availableRemoteProviders = isRemoteConnected ? pane.remoteAvailableProviders : (['codex', 'copilot', 'gemini'] as ProviderId[])
   const selectedLocalWorkspace = localWorkspaces.find((workspace) => workspace.path === pane.localWorkspacePath)
   const canRemoveLocalWorkspace = selectedLocalWorkspace?.source === 'manual'
   const isProviderUpdating = pane.status === 'updating'
@@ -498,6 +505,12 @@ export function TerminalPane({
       ? `${versionInfo?.installedVersion ?? UI.versionUnknown}`
       : `${versionInfo?.installedVersion ?? UI.versionUnknown} / ${UI.versionStatusUnknown}`
   const sshKeyLabel = getShortPathLabel(pane.sshSelectedKeyPath || pane.sshIdentityFile || '')
+  const remoteCliStates = REMOTE_PROVIDER_ORDER.map((provider) => ({
+    provider,
+    installed: pane.remoteAvailableProviders.includes(provider)
+  }))
+  const localSettingsStatus = catalog?.available ? 'ok' : 'ng'
+  const remoteSettingsStatus = isRemoteConnected && pane.remoteAvailableProviders.includes(pane.provider) ? 'ok' : 'ng'
   const sshDiagnosticsStatus = pane.sshActionState === 'error' || pane.sshDiagnostics.some((item) => /\u898b\u3064\u304b\u308a\u307e\u305b\u3093|\u5931\u6557|\u5fc5\u8981|\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059|error|failed|timed out/i.test(item))
     ? 'ng'
     : 'ok'
@@ -778,7 +791,13 @@ export function TerminalPane({
         <div className="pane-accordion-group">
           <details className="pane-accordion settings-accordion" open={pane.settingsOpen} onToggle={(event) => onUpdate(pane.id, { settingsOpen: (event.currentTarget as HTMLDetailsElement).open })}>
             <summary className="accordion-summary">
-              <span className="accordion-label"><Settings2 size={15} />{UI.settings}</span>
+              <span className="accordion-label accordion-label-with-statuses">
+                <span className="accordion-label-main"><Settings2 size={15} />{UI.settings}</span>
+                <span className="settings-env-statuses">
+                  <span className={`settings-env-chip ${localSettingsStatus}`}>{`ローカル ${localSettingsStatus === 'ok' ? 'OK' : 'NG'}`}</span>
+                  <span className={`settings-env-chip ${remoteSettingsStatus}`}>{`リモート ${remoteSettingsStatus === 'ok' ? 'OK' : 'NG'}`}</span>
+                </span>
+              </span>
               <span className="accordion-meta">
                 <span className="accordion-value">{catalog?.label ?? pane.provider} / {currentModel?.name ?? pane.model}</span>
                 <span className={`accordion-caret ${pane.settingsOpen ? 'is-open' : ''}`}><ChevronDown size={14} /></span>
@@ -954,8 +973,7 @@ export function TerminalPane({
                     </label>
                     <label>
                       <span>{UI.remoteWorkspace}</span>
-                      <input list={`remote-workspaces-${pane.id}`} value={pane.remoteWorkspacePath} onChange={(event) => onUpdate(pane.id, { remoteWorkspacePath: event.target.value, sshRemotePath: event.target.value, remoteShellPath: event.target.value })} placeholder="~/projects/app" />
-                      <datalist id={`remote-workspaces-${pane.id}`}>{pane.remoteWorkspaces.map((workspace) => <option key={workspace.path} value={workspace.path}>{workspace.label}</option>)}</datalist>
+                      <input readOnly value={pane.remoteWorkspacePath} placeholder={isRemoteConnected ? UI.unselected : UI.sshUnset} />
                     </label>
                   </div>
 
@@ -1005,18 +1023,26 @@ export function TerminalPane({
                     )}
                   </details>
 
-                  {pane.sshDiagnostics.length > 0 && (
+                  {(pane.sshDiagnostics.length > 0 || isRemoteConnected) && (
                     <div className="browser-panel ssh-diagnostics-panel">
                       <div className="section-headline compact-headline ssh-panel-headline">
                         <strong>{UI.diagnostics}</strong>
                         <span className={`ssh-panel-chip ${sshDiagnosticsStatus}`}>{sshDiagnosticsStatus === 'ok' ? UI.diagnosticsOk : UI.diagnosticsNg}</span>
                       </div>
-                      <div className="diagnostic-list">{pane.sshDiagnostics.map((item, index) => <div key={`${pane.id}-diag-${index}`} className="diagnostic-item">{item}</div>)}</div>
+                      {pane.sshDiagnostics.length > 0 ? <div className="diagnostic-list">{pane.sshDiagnostics.map((item, index) => <div key={`${pane.id}-diag-${index}`} className="diagnostic-item">{item}</div>)}</div> : null}
+                      <div className="badge-row">
+                        {remoteCliStates.map(({ provider, installed }) => (
+                          <span key={`${pane.id}-${provider}`} className={installed ? 'availability-badge' : 'availability-badge muted'}>
+                            {`${catalogs[provider].label}: ${installed ? UI.cliAvailable : UI.cliMissing}`}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
 
-                  <div className="workspace-primary-action remote-connect-action">
+                  <div className="workspace-primary-action remote-connect-action remote-action-row">
                     <button type="button" className="primary-button workspace-choose-button remote-connect-button" onClick={() => onLoadRemote(pane.id)}><Wifi size={16} />{UI.refreshConnection}</button>
+                    <button type="button" className="primary-button workspace-choose-button remote-connect-button" disabled={!isRemoteConnected || pane.remoteBrowserLoading} onClick={() => onOpenRemoteWorkspacePicker(pane.id)}><FolderOpen size={16} />{UI.chooseRemoteWorkspace}</button>
                   </div>
 
                   <div className={`browser-panel workspace-browser-shell remote-browser-shell ${remoteDropTarget === remoteBaseDropPath ? 'is-drop-active' : ''}`} onDragOver={(event) => { if (remoteBaseDropPath) { allowRemoteDrop(event, remoteBaseDropPath) } }} onDragLeave={clearRemoteDrop} onDrop={(event) => { if (remoteBaseDropPath) { handleRemoteDrop(event, remoteBaseDropPath) } }}>
@@ -1047,7 +1073,6 @@ export function TerminalPane({
                         ))
                       ) : <div className="panel-placeholder browser-placeholder">{pane.remoteBrowserLoading ? UI.remoteLoading : UI.remoteEmpty}</div>}
                     </div>
-                    <div className="badge-row">{pane.remoteAvailableProviders.length > 0 ? pane.remoteAvailableProviders.map((provider) => <span key={provider} className="availability-badge">{catalogs[provider].label}</span>) : <span className="availability-badge muted">CLI unavailable</span>}</div>
                   </div>
                 </div>
               )}
