@@ -38,6 +38,7 @@ import {
 } from './lib/api'
 import type {
   BootstrapPayload,
+  LocalSshKey,
   LocalBrowseRoot,
   LocalDirectoryEntry,
   LocalWorkspace,
@@ -539,9 +540,92 @@ function appendSessionRecord(history: PaneSessionRecord[], record: PaneSessionRe
   return [record, ...history].slice(0, MAX_SESSION_HISTORY)
 }
 
-function buildSshConnectionFromPane(pane: PaneState, sshHosts: SshHost[] = []): SshConnectionOptions {
+function normalizeSshHostKey(host: string): string {
+  return host.trim().toLowerCase()
+}
+
+function mergeLocalSshKeys(...collections: LocalSshKey[][]): LocalSshKey[] {
+  const merged = new Map<string, LocalSshKey>()
+
+  for (const keys of collections) {
+    for (const key of keys) {
+      if (!key.privateKeyPath) {
+        continue
+      }
+
+      merged.set(key.privateKeyPath, key)
+    }
+  }
+
+  return [...merged.values()]
+}
+
+function getPaneRecentActivity(pane: PaneState): number {
+  return Math.max(
+    pane.lastActivityAt ?? 0,
+    pane.lastFinishedAt ?? 0,
+    pane.lastRunAt ?? 0,
+    pane.shellLastRunAt ?? 0
+  )
+}
+
+function findReusableSshPane(paneId: string, host: string, panes: PaneState[]): PaneState | null {
+  const normalizedHost = normalizeSshHostKey(host)
+  if (!normalizedHost) {
+    return null
+  }
+
+  const candidates = panes
+    .filter((pane) => pane.id !== paneId && normalizeSshHostKey(pane.sshHost) === normalizedHost)
+    .sort((left, right) => {
+      const leftScore = (left.sshSelectedKeyPath.trim() ? 4 : 0) + (left.sshIdentityFile.trim() ? 2 : 0) + (left.sshLocalKeys.length > 0 ? 1 : 0)
+      const rightScore = (right.sshSelectedKeyPath.trim() ? 4 : 0) + (right.sshIdentityFile.trim() ? 2 : 0) + (right.sshLocalKeys.length > 0 ? 1 : 0)
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore
+      }
+
+      return getPaneRecentActivity(right) - getPaneRecentActivity(left)
+    })
+
+  return candidates[0] ?? null
+}
+
+function getPreferredLocalSshKey(pane: PaneState, localKeys: LocalSshKey[], panes: PaneState[]): LocalSshKey | null {
+  if (localKeys.length === 0) {
+    return null
+  }
+
+  const keyByPath = new Map(localKeys.map((key) => [key.privateKeyPath, key] as const))
+  const currentSelectedPath = pane.sshSelectedKeyPath.trim()
+  if (currentSelectedPath && keyByPath.has(currentSelectedPath)) {
+    return keyByPath.get(currentSelectedPath) ?? null
+  }
+
+  const currentIdentityPath = pane.sshIdentityFile.trim()
+  if (currentIdentityPath && keyByPath.has(currentIdentityPath)) {
+    return keyByPath.get(currentIdentityPath) ?? null
+  }
+
+  const reusablePane = findReusableSshPane(pane.id, pane.sshHost, panes)
+  const reusableSelectedPath = reusablePane?.sshSelectedKeyPath.trim() ?? ''
+  if (reusableSelectedPath && keyByPath.has(reusableSelectedPath)) {
+    return keyByPath.get(reusableSelectedPath) ?? null
+  }
+
+  const reusableIdentityPath = reusablePane?.sshIdentityFile.trim() ?? ''
+  if (reusableIdentityPath && keyByPath.has(reusableIdentityPath)) {
+    return keyByPath.get(reusableIdentityPath) ?? null
+  }
+
+  return localKeys[0] ?? null
+}
+
+function buildSshConnectionFromPane(pane: PaneState, sshHosts: SshHost[] = [], panes: PaneState[] = []): SshConnectionOptions {
   const matchedHost = sshHosts.find((item) => item.alias === pane.sshHost.trim())
-  const selectedLocalKeyPath = pane.sshLocalKeys.some((item) => item.privateKeyPath === pane.sshSelectedKeyPath.trim())
+  const reusablePane = findReusableSshPane(pane.id, pane.sshHost, panes)
+  const localKeys = mergeLocalSshKeys(pane.sshLocalKeys, reusablePane?.sshLocalKeys ?? [])
+  const preferredKey = getPreferredLocalSshKey({ ...pane, sshLocalKeys: localKeys }, localKeys, panes)
+  const selectedLocalKeyPath = localKeys.some((item) => item.privateKeyPath === pane.sshSelectedKeyPath.trim())
     ? pane.sshSelectedKeyPath.trim()
     : ''
 
@@ -549,7 +633,7 @@ function buildSshConnectionFromPane(pane: PaneState, sshHosts: SshHost[] = []): 
     username: pane.sshUser.trim() || matchedHost?.user || undefined,
     port: pane.sshPort.trim() || matchedHost?.port || undefined,
     password: pane.sshPassword.trim() || undefined,
-    identityFile: selectedLocalKeyPath || pane.sshIdentityFile.trim() || matchedHost?.identityFile || undefined,
+    identityFile: selectedLocalKeyPath || pane.sshIdentityFile.trim() || preferredKey?.privateKeyPath || reusablePane?.sshIdentityFile.trim() || matchedHost?.identityFile || undefined,
     proxyJump: matchedHost?.proxyJump || undefined,
     proxyCommand: matchedHost?.proxyCommand || undefined,
     extraArgs: undefined
@@ -561,7 +645,7 @@ function buildSshLabel(host: string, remotePath: string, connection?: SshConnect
   return `${userPrefix}${host}:${remotePath}`
 }
 
-function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[], sshHosts: SshHost[] = []): WorkspaceTarget | null {
+function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[], sshHosts: SshHost[] = [], panes: PaneState[] = []): WorkspaceTarget | null {
   if (pane.workspaceMode === 'local') {
     if (!pane.localWorkspacePath.trim()) {
       return null
@@ -580,7 +664,7 @@ function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[],
     return null
   }
 
-  const connection = buildSshConnectionFromPane(pane, sshHosts)
+  const connection = buildSshConnectionFromPane(pane, sshHosts, panes)
 
   return {
     kind: 'ssh',
@@ -1301,7 +1385,43 @@ function App() {
   }, [layout, paneOrderKey, visiblePaneOrderKey])
 
   const updatePane = (paneId: string, updates: Partial<PaneState>) => {
-    setPanes((current) => current.map((pane) => (pane.id === paneId ? { ...pane, ...updates } : pane)))
+    setPanes((current) => current.map((pane) => {
+      if (pane.id !== paneId) {
+        return pane
+      }
+
+      const nextPane = { ...pane, ...updates }
+      if (typeof updates.sshHost !== 'string') {
+        return nextPane
+      }
+
+      const reusablePane = findReusableSshPane(paneId, nextPane.sshHost, current)
+      if (!reusablePane) {
+        return nextPane
+      }
+
+      const mergedLocalKeys = mergeLocalSshKeys(nextPane.sshLocalKeys, reusablePane.sshLocalKeys)
+      const hasExplicitKeySelection = Boolean(nextPane.sshSelectedKeyPath.trim() || nextPane.sshIdentityFile.trim())
+      const preferredKey = getPreferredLocalSshKey({ ...nextPane, sshLocalKeys: mergedLocalKeys }, mergedLocalKeys, current)
+
+      if (mergedLocalKeys.length !== nextPane.sshLocalKeys.length) {
+        nextPane.sshLocalKeys = mergedLocalKeys
+      }
+
+      if (!hasExplicitKeySelection) {
+        if (preferredKey) {
+          nextPane.sshSelectedKeyPath = preferredKey.privateKeyPath
+          nextPane.sshIdentityFile = preferredKey.privateKeyPath
+          nextPane.sshPublicKeyText = preferredKey.publicKey
+          nextPane.sshKeyName = preferredKey.name
+          nextPane.sshKeyComment = preferredKey.comment
+        } else if (reusablePane.sshIdentityFile.trim()) {
+          nextPane.sshIdentityFile = reusablePane.sshIdentityFile.trim()
+        }
+      }
+
+      return nextPane
+    }))
   }
 
   const mutatePane = (paneId: string, updater: (pane: PaneState) => PaneState) => {
@@ -1515,7 +1635,7 @@ function App() {
       pendingShareTargetIds: []
     })
 
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
     const selectedTargetPanes = targetPanes.filter((item) => normalizedTargetIds.includes(item.id))
 
     const nextSourceContexts = selection.mode === 'global'
@@ -1776,7 +1896,7 @@ function App() {
       return
     }
 
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
     if (!target) {
       updatePane(paneId, {
         status: 'attention',
@@ -2299,7 +2419,7 @@ function App() {
         const payload = await browseRemoteDirectory(
           pane.sshHost.trim(),
           normalizedTargetPath,
-          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
         )
 
         setWorkspacePicker((current) =>
@@ -2405,7 +2525,7 @@ function App() {
       const payload = await browseRemoteDirectory(
         pane.sshHost.trim(),
         startPath,
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
       )
 
       setWorkspacePicker({
@@ -2526,12 +2646,12 @@ function App() {
           pane.sshHost.trim(),
           parentPath,
           trimmedName,
-          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
         )
         const directoryPayload = await browseRemoteDirectory(
           pane.sshHost.trim(),
           payload.path,
-          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
         )
 
         setWorkspacePicker((current) =>
@@ -2603,7 +2723,7 @@ function App() {
       return
     }
 
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
     if (!target) {
       return
     }
@@ -2662,7 +2782,7 @@ function App() {
       return
     }
 
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
     if (!target) {
       return
     }
@@ -2711,7 +2831,7 @@ function App() {
       return
     }
 
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [])
+    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
     if (!target) {
       mutatePane(paneId, (current) => ({
         ...current,
@@ -2888,9 +3008,9 @@ function App() {
             kind: 'ssh',
             host: pane.sshHost.trim(),
             path: path.trim(),
-            label: buildSshLabel(pane.sshHost.trim(), path.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])),
+            label: buildSshLabel(pane.sshHost.trim(), path.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)),
             resourceType,
-            connection: buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+            connection: buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
           }
 
     try {
@@ -2916,7 +3036,7 @@ function App() {
     }
 
     const host = pane.sshHost.trim()
-    const connection = buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+    const connection = buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
     const requestedBrowsePath = pane.remoteBrowserPath || pane.remoteWorkspacePath || undefined
     const startedAt = Date.now()
     updatePane(paneId, {
@@ -3024,9 +3144,8 @@ function App() {
               ? bootstrap.providers[nextProvider].models[0]?.id ?? item.model
               : item.model
           const updatedAt = Date.now()
-          const selectedKey = inspectionPayload
-            ? inspectionPayload.localKeys.find((key) => key.privateKeyPath === item.sshSelectedKeyPath) ?? inspectionPayload.localKeys[0] ?? null
-            : item.sshLocalKeys.find((key) => key.privateKeyPath === item.sshSelectedKeyPath) ?? item.sshLocalKeys[0] ?? null
+          const nextLocalKeys = mergeLocalSshKeys(inspectionPayload?.localKeys ?? [], item.sshLocalKeys)
+          const selectedKey = getPreferredLocalSshKey({ ...item, sshLocalKeys: nextLocalKeys }, nextLocalKeys, current)
           const availableProviders = inspectionPayload?.availableProviders ?? item.remoteAvailableProviders
           const currentRemoteWorkspacePath = item.remoteWorkspacePath.trim()
           const nextRemoteWorkspacePath = browseFallbackWarning ? '' : currentRemoteWorkspacePath
@@ -3046,7 +3165,7 @@ function App() {
             sshIdentityFile: selectedKey?.privateKeyPath || item.sshIdentityFile || inspectionPayload?.suggestedIdentityFile || '',
             sshProxyJump: item.sshProxyJump || inspectionPayload?.suggestedProxyJump || '',
             sshProxyCommand: item.sshProxyCommand || inspectionPayload?.suggestedProxyCommand || '',
-            sshLocalKeys: inspectionPayload?.localKeys ?? item.sshLocalKeys,
+            sshLocalKeys: nextLocalKeys,
             sshSelectedKeyPath: selectedKey?.privateKeyPath ?? '',
             sshPublicKeyText: selectedKey?.publicKey ?? item.sshPublicKeyText,
             sshKeyName: selectedKey?.name ?? item.sshKeyName,
@@ -3109,7 +3228,7 @@ function App() {
       const browsePayload = await browseRemoteDirectory(
         pane.sshHost.trim(),
         nextPath || pane.remoteBrowserPath || pane.remoteHomeDirectory || undefined,
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
       )
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
@@ -3172,12 +3291,12 @@ function App() {
         pane.sshHost.trim(),
         pane.remoteBrowserPath.trim(),
         trimmedName,
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
       )
       const browsePayload = await browseRemoteDirectory(
         pane.sshHost.trim(),
         pane.remoteBrowserPath.trim(),
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
       )
       const finishedAt = Date.now()
       mutatePane(paneId, (currentPane) => ({
@@ -3370,7 +3489,7 @@ function App() {
     })
 
     try {
-      const result = await removeKnownHost(host, buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? []))
+      const result = await removeKnownHost(host, buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current))
       const finishedAt = Date.now()
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
@@ -3444,7 +3563,7 @@ function App() {
     })
 
     try {
-      await installSshKey(pane.sshHost.trim(), pane.sshPublicKeyText.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? []))
+      await installSshKey(pane.sshHost.trim(), pane.sshPublicKeyText.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current))
       const finishedAt = Date.now()
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
@@ -3529,7 +3648,7 @@ function App() {
         pane.sshHost.trim(),
         localPath,
         remotePath,
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [])
+        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
       )
       appendPaneSystemMessage(
         paneId,

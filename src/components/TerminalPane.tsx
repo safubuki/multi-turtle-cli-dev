@@ -265,6 +265,16 @@ function getOutputText(pane: PaneState): string {
   return ''
 }
 
+function appendInlineShellOutput(existing: string, prompt: string): string {
+  const nextLine = prompt.replace(/\r/g, '').replace(/\n$/, '')
+  if (!existing) {
+    return nextLine
+  }
+
+  const nextOutput = `${existing}\n${nextLine}`
+  return nextOutput.length <= 48_000 ? nextOutput : `${nextOutput.slice(0, 48_000).trimEnd()}\n\n[truncated]`
+}
+
 function hasCurrentSessionContent(pane: PaneState): boolean {
   return (
     pane.logs.length > 0 ||
@@ -695,6 +705,20 @@ export function TerminalPane({
   }
 
   const handleShellKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.ctrlKey && event.key.toLowerCase() === 'c' && !pane.shellRunning) {
+      event.preventDefault()
+      onUpdate(pane.id, {
+        shellCommand: '',
+        shellHistoryIndex: null,
+        shellOutput: appendInlineShellOutput(pane.shellOutput, shellPromptLabel)
+      })
+      window.requestAnimationFrame(() => {
+        const target = isShellExpanded ? shellModalInputRef.current : shellInputRef.current
+        target?.focus()
+      })
+      return
+    }
+
     if (event.key === 'ArrowUp') {
       event.preventDefault()
       if (pane.shellHistory.length === 0) {
