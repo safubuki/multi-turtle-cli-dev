@@ -3347,9 +3347,9 @@ function App() {
       updatePane(paneId, {
         status: 'attention',
         statusText: 'SSH ホストを入力してください',
-        lastError: 'known_hosts から削除するホストが未設定です。',
+        lastError: '確認をやり直す接続先が未設定です。',
         sshActionState: 'error',
-        sshActionMessage: 'known_hosts から削除するホストを入力してください。'
+        sshActionMessage: '確認をやり直す接続先を入力してください。'
       })
       return
     }
@@ -3358,12 +3358,12 @@ function App() {
     const startedAt = Date.now()
     updatePane(paneId, {
       status: 'running',
-      statusText: 'known_hosts を整理中です',
+      statusText: '接続先の確認をやり直しています',
       runningSince: startedAt,
       lastActivityAt: startedAt,
       lastError: null,
       sshActionState: 'running',
-      sshActionMessage: `${host} の known_hosts を整理しています...`
+      sshActionMessage: `${host} の接続先確認をやり直しています...`
     })
 
     try {
@@ -3372,31 +3372,31 @@ function App() {
       mutatePane(paneId, (currentPane) => ({
         ...currentPane,
         sshDiagnostics: [
-          `known_hosts を整理しました: ${result.removedHosts.length > 0 ? result.removedHosts.join(', ') : host}`,
-          ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('known_hosts を整理しました:'))
+          `接続先の確認をやり直しました: ${result.removedHosts.length > 0 ? result.removedHosts.join(', ') : host}`,
+          ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('接続先の確認をやり直しました:'))
         ],
         sshActionState: 'success',
-        sshActionMessage: result.removedHosts.length > 0 ? `${host} の known_hosts を整理しました` : `${host} の known_hosts 該当エントリは見つかりませんでした`,
+        sshActionMessage: result.removedHosts.length > 0 ? `${host} の接続先確認をやり直しました` : `${host} の確認履歴は見つかりませんでした`,
         status: 'completed',
-        statusText: result.removedHosts.length > 0 ? 'known_hosts を整理しました' : 'known_hosts の該当エントリはありませんでした',
+        statusText: result.removedHosts.length > 0 ? '接続先の確認をやり直しました' : '確認履歴は見つかりませんでした',
         runningSince: null,
         lastActivityAt: finishedAt,
         lastFinishedAt: finishedAt,
         lastError: null,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', result.removedHosts.length > 0 ? `known_hosts を整理しました: ${result.removedHosts.join(', ')}` : `known_hosts の該当エントリはありませんでした: ${host}`, finishedAt)
+        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', result.removedHosts.length > 0 ? `接続先の確認をやり直しました: ${result.removedHosts.join(', ')}` : `確認履歴は見つかりませんでした: ${host}`, finishedAt)
       }))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const failedAt = Date.now()
       updatePane(paneId, {
         status: 'error',
-        statusText: 'known_hosts の整理に失敗しました',
+        statusText: '接続先確認のやり直しに失敗しました',
         runningSince: null,
         lastActivityAt: failedAt,
         lastFinishedAt: failedAt,
         lastError: message,
         sshActionState: 'error',
-        sshActionMessage: `known_hosts の整理に失敗しました: ${message}`
+        sshActionMessage: `接続先確認のやり直しに失敗しました: ${message}`
       })
     }
   }

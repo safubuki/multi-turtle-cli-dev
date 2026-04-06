@@ -2353,6 +2353,64 @@ textarea {
   gap: 14px;
 }
 
+.ssh-connection-panel {
+  gap: 12px;
+  padding: 10px 12px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ssh-settings-section {
+  display: grid;
+  gap: 10px;
+}
+
+.ssh-settings-section + .ssh-settings-section {
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ssh-settings-section-title {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.ssh-settings-grid {
+  padding: 0;
+}
+
+.field-label-with-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.required-mark {
+  display: inline-flex;
+  margin-left: 4px;
+  color: #90efe0;
+  font-weight: 700;
+}
+
+.field-support-note {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.ssh-support-note {
+  margin: 0;
+}
+
+.ssh-key-select-field {
+  display: grid;
+  gap: 6px;
+}
+
 .ssh-config-grid .full-span {
   grid-column: 1 / -1;
 }
@@ -2503,6 +2561,32 @@ textarea {
   overflow: hidden;
 }
 
+.ssh-mini-body {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.ssh-connection-body {
+  gap: 12px;
+}
+
+.ssh-summary-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ssh-diagnostics-accordion .ssh-mini-summary-row {
+  justify-content: space-between;
+}
+
+.ssh-diagnostics-accordion .ssh-panel-chip {
+  margin-left: 0;
+}
+
 .ssh-mini-summary {
   cursor: pointer;
   padding: 12px 14px;
@@ -2525,7 +2609,8 @@ textarea {
 }
 
 .remote-browser-shell {
-  display: none;
+  display: grid;
+  gap: 10px;
   border-color: rgba(84, 210, 194, 0.08);
 }
 
@@ -2548,6 +2633,7 @@ textarea {
 .modern-remote-entry {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  padding: 6px 8px;
 }
 
 .modern-remote-entry.drop-ready {
@@ -2557,6 +2643,19 @@ textarea {
 
 .modern-browser-button {
   width: 100%;
+}
+
+.remote-browser-list-modern .modern-browser-button {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.remote-browser-list-modern .modern-browser-button strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .browser-entry-actions {
@@ -2569,6 +2668,11 @@ textarea {
 
 .browser-entry-actions .ghost-button {
   min-width: 74px;
+}
+
+.remote-browser-list-modern .browser-entry-actions .ghost-button {
+  min-width: 0;
+  padding: 0 12px;
 }
 
 .metric-card.compact p {
@@ -2658,6 +2762,16 @@ textarea {
   flex-wrap: wrap;
 }
 
+.ssh-key-primary-actions {
+  align-items: center;
+}
+
+.ssh-action-separator {
+  color: var(--muted);
+  font-weight: 700;
+  line-height: 1;
+}
+
 .ssh-key-actions + .ssh-action-feedback,
 .ssh-key-actions + .browser-panel,
 .ssh-action-feedback + .browser-panel {
@@ -2667,6 +2781,21 @@ textarea {
 .ssh-info-panel,
 .ssh-diagnostics-panel {
   gap: 8px;
+}
+
+.settings-availability-panel {
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-availability-panel .badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 0;
 }
 
 .ssh-panel-headline {
@@ -2692,6 +2821,12 @@ textarea {
 
 .ssh-panel-chip.neutral {
   color: var(--muted);
+}
+
+.ssh-panel-chip.pending {
+  border-color: rgba(151, 188, 255, 0.24);
+  background: rgba(151, 188, 255, 0.1);
+  color: #dce9ff;
 }
 
 .ssh-panel-chip.ok {

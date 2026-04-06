@@ -142,7 +142,7 @@ const UI = {
   active: '\u5236\u9650\u306a\u3057\u306e\u81ea\u52d5\u627f\u8a8d',
   currentWorkspace: '\u73fe\u5728\u306e\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   chooseWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
-  chooseRemoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7/\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u9078\u629e',
+  chooseRemoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
   removeFromList: '\u4e00\u89a7\u304b\u3089\u5916\u3059',
   savedWorkspaces: '\u767b\u9332\u6e08\u307f\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   folderContents: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u306e\u5185\u5bb9',
@@ -150,9 +150,18 @@ const UI = {
   browseEmpty: '\u9078\u629e\u3057\u305f\u30d5\u30a9\u30eb\u30c0\u306e\u5185\u5bb9\u304c\u3053\u3053\u306b\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   currentConnection: '\u73fe\u5728\u306e\u63a5\u7d9a',
   connectionSettings: '\u63a5\u7d9a\u8a2d\u5b9a',
+  connectionConfigured: '\u63a5\u7d9a\u8a2d\u5b9aOK',
+  connectionUnconfigured: '\u63a5\u7d9a\u672a\u8a2d\u5b9a',
+  connectionInfo: '\u63a5\u7d9a\u60c5\u5831',
+  keySettings: '\u9375\u8a2d\u5b9a',
+  selectable: '\u9078\u629e\u53ef\u80fd',
+  infoOnly: '\u60c5\u5831\u306e\u307f',
+  passwordHint: '\u9375\u8a2d\u5b9a\u524d\u306f\u5165\u529b\u304c\u5fc5\u8981\u3067\u3059\u3002\u9375\u8a2d\u5b9a\u5f8c\u306f\u4e0d\u8981\u3067\u3001\u9375\u3092\u8a2d\u5b9a\u305b\u305a\u306b\u30d1\u30b9\u30ef\u30fc\u30c9\u3060\u3051\u3067\u63a5\u7d9a\u3059\u308b\u3053\u3068\u3082\u3067\u304d\u307e\u3059\u3002',
+  userHint: 'SSH config \u306e Host \u3092\u4f7f\u3046\u304b\u3001SSH Host / IP \u306b user@host \u3092\u542b\u3081\u308b\u5834\u5408\u306f\u7701\u7565\u3067\u304d\u307e\u3059\u3002\u305d\u308c\u4ee5\u5916\u306f User \u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
   refreshConnection: '\u30ea\u30e2\u30fc\u30c8\u306b\u63a5\u7d9a',
   remoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   publicKey: '\u516c\u958b\u9375',
+  publicKeyEmpty: '\u9375\u3092\u751f\u6210\u3059\u308b\u304b\u3001\u65e2\u5b58\u306e\u9375\u3092\u9078\u629e\u3059\u308b\u3068\u3001\u3053\u3053\u306b\u516c\u958b\u9375\u3092\u8868\u793a\u3057\u307e\u3059\u3002',
   selectedKey: '\u4f7f\u7528\u3059\u308b\u9375',
   keyName: '\u9375\u540d',
   keyFileName: '\u9375\u30d5\u30a1\u30a4\u30eb\u540d',
@@ -160,16 +169,20 @@ const UI = {
   generateKey: '\u9375\u3092\u751f\u6210',
   deleteKey: '\u9078\u629e\u4e2d\u306e\u9375\u3092\u524a\u9664',
   installKey: '\u516c\u958b\u9375\u3092\u767b\u9332',
-  removeKnownHost: 'known_hosts \u3092\u6574\u7406',
+  removeKnownHost: '\u63a5\u7d9a\u5148\u306e\u78ba\u8a8d\u3092\u3084\u308a\u76f4\u3059',
+  removeKnownHostHint: 'known_hosts \u306b\u4fdd\u5b58\u3055\u308c\u305f\u63a5\u7d9a\u5148\u306e\u30db\u30b9\u30c8\u9375\u3092\u524a\u9664\u3057\u3001\u6b21\u56de\u63a5\u7d9a\u6642\u306b\u5b89\u5168\u78ba\u8a8d\u3092\u3084\u308a\u76f4\u3057\u307e\u3059\u3002\u63a5\u7d9a\u5148\u3092\u518d\u69cb\u7bc9\u3057\u305f\u5f8c\u306e\u8b66\u544a\u89e3\u6d88\u306b\u5411\u3044\u3066\u3044\u307e\u3059\u3002',
   diagnostics: '\u63a5\u7d9a\u8a3a\u65ad / CLI\u78ba\u8a8d',
   diagnosticsOk: 'OK',
   diagnosticsNg: 'NG',
+  diagnosticsPending: '\u672a\u78ba\u8a8d',
+  remoteCliStatus: 'SSH \u63a5\u7d9a\u5148 CLI',
+  remoteCliPending: '\u30ea\u30e2\u30fc\u30c8\u63a5\u7d9a\u5f8c\u306b\u8868\u793a\u3057\u307e\u3059\u3002',
   cliAvailable: '\u5229\u7528\u53ef',
   cliMissing: '\u672a\u691c\u51fa',
   dragHint: '\u30ed\u30fc\u30ab\u30eb\u4e00\u89a7\u304b\u3089\u30c9\u30e9\u30c3\u30b0\u3059\u308b\u3068\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u3067\u304d\u307e\u3059\u3002',
   remoteList: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7',
-  remoteLoading: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
-  remoteEmpty: '\u63a5\u7d9a\u3092\u66f4\u65b0\u3059\u308b\u3068\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
+  remoteLoading: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
+  remoteEmpty: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3059\u308b\u3068\u5185\u5bb9\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   oneLevelUp: '\u4e00\u3064\u4e0a\u3078',
   createFolder: '\u30d5\u30a9\u30eb\u30c0\u4f5c\u6210',
   receive: '\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9',
@@ -283,6 +296,32 @@ function getLocalParentPath(currentPath: string, workspaceRoot: string): string 
   }
 
   return parent.toLowerCase().startsWith(root.toLowerCase()) ? parent : root
+}
+
+function normalizePosixPath(path: string): string {
+  const normalized = path.replace(/\/+$/, '')
+  return normalized || '/'
+}
+
+function getRemoteParentPath(currentPath: string, workspaceRoot: string): string | null {
+  const current = normalizePosixPath(currentPath)
+  const root = normalizePosixPath(workspaceRoot)
+  if (!current || !root || current === root) {
+    return null
+  }
+
+  const segments = current.split('/').filter(Boolean)
+  if (segments.length === 0) {
+    return null
+  }
+
+  segments.pop()
+  const parent = segments.length > 0 ? `/${segments.join('/')}` : '/'
+  if (root === '/') {
+    return parent
+  }
+
+  return parent === root || parent.startsWith(`${root}/`) ? parent : root
 }
 
 function readDraggedLocalPath(event: ReactDragEvent<HTMLElement>): string {
@@ -423,6 +462,13 @@ export function TerminalPane({
   const canRunShell = pane.shellCommand.trim().length > 0 && (pane.workspaceMode === 'local' ? currentShellPath.trim().length > 0 : Boolean(pane.sshHost.trim() && currentShellPath.trim()))
   const localParentPath = useMemo(() => getLocalParentPath(pane.localBrowserPath || pane.localWorkspacePath, pane.localWorkspacePath), [pane.localBrowserPath, pane.localWorkspacePath])
   const isAtLocalWorkspaceTop = normalizeWindowsPath(pane.localBrowserPath || pane.localWorkspacePath) === normalizeWindowsPath(pane.localWorkspacePath)
+  const remoteParentPath = useMemo(
+    () => (pane.remoteWorkspacePath ? getRemoteParentPath(pane.remoteBrowserPath || pane.remoteWorkspacePath, pane.remoteWorkspacePath) : null),
+    [pane.remoteBrowserPath, pane.remoteWorkspacePath]
+  )
+  const isAtRemoteWorkspaceTop = pane.remoteWorkspacePath
+    ? normalizePosixPath(pane.remoteBrowserPath || pane.remoteWorkspacePath) === normalizePosixPath(pane.remoteWorkspacePath)
+    : true
   const sshDisplayName = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim()
   const workspaceLabel = pane.workspaceMode === 'local' ? selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || UI.unselected) : pane.remoteWorkspacePath ? getShortPathLabel(pane.remoteWorkspacePath) : sshDisplayName || UI.sshUnset
   const currentSessionAvailable = hasCurrentSessionContent(pane)
@@ -459,8 +505,9 @@ export function TerminalPane({
 
     return Array.from(sourceMap.values())
   }, [pane.id, sharedContext])
-  const remoteBaseDropPath = pane.remoteBrowserPath || pane.remoteWorkspacePath
-  const currentRemoteLabel = getShortPathLabel(remoteBaseDropPath || pane.remoteHomeDirectory || '')
+  const remoteWorkspaceBrowserPath = pane.remoteWorkspacePath ? (pane.remoteBrowserPath || pane.remoteWorkspacePath) : ''
+  const remoteBaseDropPath = remoteWorkspaceBrowserPath
+  const currentRemoteLabel = getShortPathLabel(remoteWorkspaceBrowserPath || pane.remoteWorkspacePath || '')
   const outgoingShareContexts = sharedContext.filter((item) => item.sourcePaneId === pane.id && item.targetPaneIds.length > 0)
   const outgoingShareTargets = useMemo(() => {
     const targetMap = new Map<string, { id: string; title: string; count: number }>()
@@ -514,16 +561,38 @@ export function TerminalPane({
     : providerVersionStatus === 'current'
       ? `${versionInfo?.installedVersion ?? UI.versionUnknown}`
       : `${versionInfo?.installedVersion ?? UI.versionUnknown} / ${UI.versionStatusUnknown}`
-  const sshKeyLabel = getShortPathLabel(pane.sshSelectedKeyPath || pane.sshIdentityFile || '')
+  const matchedSshHost = sshHosts.find((item) => item.alias === pane.sshHost.trim()) ?? null
+  const effectiveIdentityFile = pane.sshSelectedKeyPath.trim() || pane.sshIdentityFile.trim() || matchedSshHost?.identityFile || ''
+  const sshKeyLabel = getShortPathLabel(effectiveIdentityFile)
   const remoteCliStates = REMOTE_PROVIDER_ORDER.map((provider) => ({
     provider,
     installed: pane.remoteAvailableProviders.includes(provider)
   }))
+  const hasRemoteConfiguration = Boolean(
+    pane.sshHost.trim() ||
+    pane.sshUser.trim() ||
+    pane.sshPort.trim() ||
+    pane.sshPassword.trim() ||
+    pane.sshIdentityFile.trim() ||
+    pane.sshSelectedKeyPath.trim() ||
+    pane.remoteWorkspacePath.trim()
+  )
   const localSettingsStatus = catalog?.available ? 'ok' : 'ng'
   const remoteSettingsStatus = isRemoteConnected && pane.remoteAvailableProviders.includes(pane.provider) ? 'ok' : 'ng'
-  const sshDiagnosticsStatus = pane.sshActionState === 'error' || pane.sshDiagnostics.some((item) => /\u898b\u3064\u304b\u308a\u307e\u305b\u3093|\u5931\u6557|\u5fc5\u8981|\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059|error|failed|timed out/i.test(item))
-    ? 'ng'
-    : 'ok'
+  const connectionSettingsStatus = pane.sshHost.trim() ? 'ok' : 'pending'
+  const connectionSettingsLabel = connectionSettingsStatus === 'ok' ? UI.connectionConfigured : UI.connectionUnconfigured
+  const sshDiagnosticsStatus = !isRemoteConnected && pane.sshDiagnostics.length === 0
+    ? 'pending'
+    : pane.sshActionState === 'error' || pane.sshDiagnostics.some((item) => /\u898b\u3064\u304b\u308a\u307e\u305b\u3093|\u5931\u6557|\u5fc5\u8981|\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059|error|failed|timed out/i.test(item))
+      ? 'ng'
+      : 'ok'
+  const sshDiagnosticsLabel = sshDiagnosticsStatus === 'ok'
+    ? UI.diagnosticsOk
+    : sshDiagnosticsStatus === 'ng'
+      ? UI.diagnosticsNg
+      : UI.diagnosticsPending
+  const sshKeySelectValue = pane.sshSelectedKeyPath || effectiveIdentityFile
+  const hasSelectableSshKeys = pane.sshLocalKeys.length > 0 || Boolean(effectiveIdentityFile)
 
   useEffect(() => {
     setIsVersionAccordionOpen(providerVersionStatus === 'outdated')
@@ -806,7 +875,7 @@ export function TerminalPane({
                 <span className="accordion-label-main"><Settings2 size={15} />{UI.settings}</span>
                 <span className="settings-env-statuses">
                   <span className={`settings-env-chip ${localSettingsStatus}`}>{`ローカル ${localSettingsStatus === 'ok' ? 'OK' : 'NG'}`}</span>
-                  <span className={`settings-env-chip ${remoteSettingsStatus}`}>{`リモート ${remoteSettingsStatus === 'ok' ? 'OK' : 'NG'}`}</span>
+                  {hasRemoteConfiguration ? <span className={`settings-env-chip ${remoteSettingsStatus}`}>{`リモート ${remoteSettingsStatus === 'ok' ? 'OK' : 'NG'}`}</span> : null}
                 </span>
               </span>
               <span className="accordion-meta">
@@ -969,132 +1038,171 @@ export function TerminalPane({
                     </div>
                   </div>
                 </div>
-              ) : (                <div className="workspace-stack ssh-stack compact-ssh-stack">
-                  <div className="workspace-current ssh-current-card">
-                    <span className="workspace-caption">{UI.currentConnection}</span>
-                    <strong>{sshDisplayName || UI.sshUnset}</strong>
-                    <span>{pane.remoteWorkspacePath || pane.remoteBrowserPath || UI.workspaceUnset}</span>
-                  </div>
+              ) : (
+                <div className="workspace-stack ssh-stack compact-ssh-stack">
+                  <details className="ssh-mini-accordion ssh-connection-accordion">
+                    <summary className="ssh-mini-summary">
+                      <span className="ssh-mini-summary-row">
+                        <span className="ssh-summary-inline">
+                          <span>{UI.connectionSettings}</span>
+                          <span className={`ssh-panel-chip ${connectionSettingsStatus}`}>{connectionSettingsLabel}</span>
+                        </span>
+                        <span className="ssh-mini-caret"><ChevronDown size={14} /></span>
+                      </span>
+                    </summary>
+                    <div className="ssh-mini-body ssh-connection-body">
+                      <div className="ssh-settings-section">
+                        <div className="ssh-settings-section-title">{UI.connectionInfo}</div>
+                        <div className="pane-meta-grid compact-grid ssh-config-grid ssh-settings-grid">
+                          <label className="full-span">
+                            <span>SSH Host / IP<span className="required-mark">*</span></span>
+                            <input list={`ssh-hosts-${pane.id}`} value={pane.sshHost} onChange={(event) => onUpdate(pane.id, { sshHost: event.target.value })} placeholder="server.example.com / 192.168.1.20 / ssh-config host" />
+                            <datalist id={`ssh-hosts-${pane.id}`}>{sshHosts.map((host) => <option key={host.id} value={host.alias} />)}</datalist>
+                          </label>
+                          <label>
+                            <span>User</span>
+                            <input value={pane.sshUser} onChange={(event) => onUpdate(pane.id, { sshUser: event.target.value })} placeholder="yourusername / ubuntu" />
+                            <small className="field-support-note">{UI.userHint}</small>
+                          </label>
+                          <label>
+                            <span>Port</span>
+                            <input value={pane.sshPort} onChange={(event) => onUpdate(pane.id, { sshPort: event.target.value })} placeholder="22" />
+                          </label>
+                          <label className="full-span">
+                            <span>Password</span>
+                            <input type="password" value={pane.sshPassword} onChange={(event) => onUpdate(pane.id, { sshPassword: event.target.value })} placeholder="optional" />
+                            <small className="field-support-note">{UI.passwordHint}</small>
+                          </label>
+                        </div>
+                      </div>
 
-                  <div className="pane-meta-grid compact-grid ssh-primary-grid">
-                    <label>
-                      <span>SSH Host / IP</span>
-                      <input list={`ssh-hosts-${pane.id}`} value={pane.sshHost} onChange={(event) => onUpdate(pane.id, { sshHost: event.target.value })} placeholder="server.example.com / 192.168.1.20 / ssh-config host" />
-                      <datalist id={`ssh-hosts-${pane.id}`}>{sshHosts.map((host) => <option key={host.id} value={host.alias} />)}</datalist>
-                    </label>
-                    <label>
-                      <span>{UI.remoteWorkspace}</span>
-                      <input readOnly value={pane.remoteWorkspacePath} placeholder={isRemoteConnected ? UI.unselected : UI.sshUnset} />
-                    </label>
-                  </div>
+                      <div className="ssh-settings-section">
+                        <div className="ssh-settings-section-title">{UI.keySettings}</div>
+                        <div className="pane-meta-grid compact-grid ssh-config-grid ssh-settings-grid">
+                          <label>
+                            <span>{UI.keyFileName}</span>
+                            <input value={pane.sshKeyName} onChange={(event) => onUpdate(pane.id, { sshKeyName: event.target.value })} placeholder="id_ed25519-raspi" />
+                          </label>
+                          <label>
+                            <span>{UI.keyComment}</span>
+                            <input value={pane.sshKeyComment} onChange={(event) => onUpdate(pane.id, { sshKeyComment: event.target.value })} placeholder="user@device" />
+                          </label>
+                        </div>
 
+                        <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions ssh-key-primary-actions">
+                          <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
+                          <span className="ssh-action-separator" aria-hidden="true">→</span>
+                          <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>{UI.installKey}</button>
+                        </div>
 
-
-                  <details className="ssh-mini-accordion">
-                    <summary className="ssh-mini-summary"><span className="ssh-mini-summary-row"><span>{UI.connectionSettings}</span><span className="ssh-mini-caret"><ChevronDown size={14} /></span></span></summary>
-                    <div className="pane-meta-grid compact-grid ssh-config-grid compact-ssh-grid">
-                      <label><span>User</span><input value={pane.sshUser} onChange={(event) => onUpdate(pane.id, { sshUser: event.target.value })} placeholder="yourusername / ubuntu" /></label>
-                      <label><span>Port</span><input value={pane.sshPort} onChange={(event) => onUpdate(pane.id, { sshPort: event.target.value })} placeholder="22" /></label>
-                      <label><span>Password</span><input type="password" value={pane.sshPassword} onChange={(event) => onUpdate(pane.id, { sshPassword: event.target.value })} placeholder="optional" /></label>
-                      <label><span>Identity File</span><input value={pane.sshIdentityFile} onChange={(event) => onUpdate(pane.id, { sshIdentityFile: event.target.value })} placeholder="C:\\Users\\...\\id_ed25519" /></label>
-                      {pane.sshLocalKeys.length > 0 && (
-                        <label className="full-span">
-                          <span>{UI.selectedKey}</span>
-                          <select value={pane.sshSelectedKeyPath} onChange={(event) => {
-                            const selected = pane.sshLocalKeys.find((item) => item.privateKeyPath === event.target.value) ?? null
+                        <label className="full-span ssh-key-select-field">
+                          <span className="field-label-with-chip"><span>{UI.selectedKey}</span><span className="ssh-panel-chip neutral">{UI.selectable}</span></span>
+                          <select value={sshKeySelectValue} disabled={!hasSelectableSshKeys} onChange={(event) => {
+                            const selectedPath = event.target.value
+                            const selected = pane.sshLocalKeys.find((item) => item.privateKeyPath === selectedPath) ?? null
                             onUpdate(pane.id, {
-                              sshSelectedKeyPath: event.target.value,
-                              sshIdentityFile: event.target.value,
-                              sshPublicKeyText: selected?.publicKey ?? pane.sshPublicKeyText,
+                              sshSelectedKeyPath: selectedPath,
+                              sshIdentityFile: selectedPath,
+                              sshPublicKeyText: selected?.publicKey ?? '',
                               sshKeyName: selected?.name ?? pane.sshKeyName,
                               sshKeyComment: selected?.comment ?? pane.sshKeyComment
                             })
                           }}>
+                            <option value="">{UI.unselected}</option>
                             {pane.sshLocalKeys.map((key) => <option key={key.privateKeyPath} value={key.privateKeyPath}>{key.name}</option>)}
+                            {effectiveIdentityFile && !pane.sshLocalKeys.some((key) => key.privateKeyPath === effectiveIdentityFile) ? <option value={effectiveIdentityFile}>{`${getShortPathLabel(effectiveIdentityFile)} (SSH config / current)`}</option> : null}
                           </select>
                         </label>
-                      )}
-                    </div>
-                    <div className="pane-meta-grid compact-grid ssh-config-grid compact-ssh-grid">
-                      <label>
-                        <span>{UI.keyFileName}</span>
-                        <input value={pane.sshKeyName} onChange={(event) => onUpdate(pane.id, { sshKeyName: event.target.value })} placeholder="id_ed25519-raspi" />
-                      </label>
-                      <label>
-                        <span>{UI.keyComment}</span>
-                        <input value={pane.sshKeyComment} onChange={(event) => onUpdate(pane.id, { sshKeyComment: event.target.value })} placeholder="user@device" />
-                      </label>
-                    </div>
 
-                    <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions">
-                      <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
-                      <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshSelectedKeyPath} onClick={() => onDeleteSshKey(pane.id)}>{UI.deleteKey}</button>
-                      <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>{UI.installKey}</button>
-                      <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshHost.trim()} onClick={() => onRemoveKnownHost(pane.id)}>{UI.removeKnownHost}</button>
-                    </div>
-
-                    {pane.sshActionMessage && (
-                      <div className={`ssh-action-feedback ${pane.sshActionState}`}>
-                        {pane.sshActionState === 'running' ? <LoaderCircle size={15} className="spin" /> : pane.sshActionState === 'success' ? <CheckCircle2 size={15} /> : pane.sshActionState === 'error' ? <AlertTriangle size={15} /> : null}
-                        <span>{pane.sshActionMessage}</span>
-                      </div>
-                    )}
-
-                    {pane.sshPublicKeyText && (
-                      <div className="browser-panel ssh-info-panel">
-                        <div className="section-headline compact-headline ssh-panel-headline">
-                          <strong>{UI.publicKey}</strong>
-                          {sshKeyLabel ? <span className="ssh-panel-chip neutral">{`${UI.keyName}: ${sshKeyLabel}`}</span> : null}
+                        <div className="browser-panel ssh-info-panel">
+                          <div className="section-headline compact-headline ssh-panel-headline">
+                            <strong>{UI.publicKey}</strong>
+                            {sshKeyLabel ? <span className="ssh-panel-chip neutral">{`${UI.keyName}: ${sshKeyLabel}`}</span> : null}
+                          </div>
+                          <div className="output-surface inline-console-output"><pre>{pane.sshPublicKeyText || UI.publicKeyEmpty}</pre></div>
                         </div>
-                        <div className="output-surface inline-console-output"><pre>{pane.sshPublicKeyText}</pre></div>
+
+                        <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions ssh-key-secondary-actions">
+                          <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !sshKeySelectValue} onClick={() => onDeleteSshKey(pane.id)}>{UI.deleteKey}</button>
+                          <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshHost.trim()} onClick={() => onRemoveKnownHost(pane.id)}>{UI.removeKnownHost}</button>
+                        </div>
+                        <p className="field-support-note ssh-support-note">{UI.removeKnownHostHint}</p>
+
+                        {pane.sshActionMessage && (
+                          <div className={`ssh-action-feedback ${pane.sshActionState}`}>
+                            {pane.sshActionState === 'running' ? <LoaderCircle size={15} className="spin" /> : pane.sshActionState === 'success' ? <CheckCircle2 size={15} /> : pane.sshActionState === 'error' ? <AlertTriangle size={15} /> : null}
+                            <span>{pane.sshActionMessage}</span>
+                          </div>
+                        )}
                       </div>
-                    )}
+
+                      <details className="ssh-mini-accordion ssh-diagnostics-accordion">
+                        <summary className="ssh-mini-summary">
+                          <span className="ssh-mini-summary-row">
+                            <span className="ssh-summary-inline">
+                              <span>{UI.diagnostics}</span>
+                              <span className="ssh-panel-chip neutral">{UI.infoOnly}</span>
+                              <span className={`ssh-panel-chip ${sshDiagnosticsStatus}`}>{sshDiagnosticsLabel}</span>
+                            </span>
+                            <span className="ssh-mini-caret"><ChevronDown size={14} /></span>
+                          </span>
+                        </summary>
+                        <div className="ssh-mini-body">
+                          <div className="settings-availability-panel">
+                            <div className="section-headline compact-headline">
+                              <strong>{UI.remoteCliStatus}</strong>
+                              {!isRemoteConnected ? <span>{UI.remoteCliPending}</span> : null}
+                            </div>
+                            {isRemoteConnected ? (
+                              <div className="badge-row">
+                                {remoteCliStates.map(({ provider, installed }) => (
+                                  <span key={`${pane.id}-${provider}`} className={installed ? 'availability-badge' : 'availability-badge muted'}>
+                                    {`${catalogs[provider].label}: ${installed ? UI.cliAvailable : UI.cliMissing}`}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : <p className="panel-placeholder compact-error">{UI.remoteCliPending}</p>}
+                          </div>
+                          {pane.sshDiagnostics.length > 0 ? <div className="diagnostic-list">{pane.sshDiagnostics.map((item, index) => <div key={`${pane.id}-diag-${index}`} className="diagnostic-item">{item}</div>)}</div> : <p className="panel-placeholder compact-error">{UI.remoteCliPending}</p>}
+                        </div>
+                      </details>
+                    </div>
                   </details>
 
-                  {(pane.sshDiagnostics.length > 0 || isRemoteConnected) && (
-                    <div className="browser-panel ssh-diagnostics-panel">
-                      <div className="section-headline compact-headline ssh-panel-headline">
-                        <strong>{UI.diagnostics}</strong>
-                        <span className={`ssh-panel-chip ${sshDiagnosticsStatus}`}>{sshDiagnosticsStatus === 'ok' ? UI.diagnosticsOk : UI.diagnosticsNg}</span>
-                      </div>
-                      {pane.sshDiagnostics.length > 0 ? <div className="diagnostic-list">{pane.sshDiagnostics.map((item, index) => <div key={`${pane.id}-diag-${index}`} className="diagnostic-item">{item}</div>)}</div> : null}
-                      <div className="badge-row">
-                        {remoteCliStates.map(({ provider, installed }) => (
-                          <span key={`${pane.id}-${provider}`} className={installed ? 'availability-badge' : 'availability-badge muted'}>
-                            {`${catalogs[provider].label}: ${installed ? UI.cliAvailable : UI.cliMissing}`}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="workspace-primary-action remote-connect-action remote-action-row">
+                  <div className="workspace-primary-action">
                     <button type="button" className="primary-button workspace-choose-button remote-connect-button" onClick={() => onLoadRemote(pane.id)}><Wifi size={16} />{UI.refreshConnection}</button>
+                  </div>
+
+                  <div className="workspace-primary-action">
                     <button type="button" className="primary-button workspace-choose-button remote-connect-button" disabled={!isRemoteConnected || pane.remoteBrowserLoading} onClick={() => onOpenRemoteWorkspacePicker(pane.id)}><FolderOpen size={16} />{UI.chooseRemoteWorkspace}</button>
                   </div>
 
+                  <div className="workspace-current">
+                    <span className="workspace-caption">{UI.currentWorkspace}<span className="required-mark">*</span></span>
+                    <strong>{pane.remoteWorkspacePath ? getShortPathLabel(pane.remoteWorkspacePath) : UI.unselected}</strong>
+                    <span>{pane.remoteWorkspacePath || UI.remoteEmpty}</span>
+                  </div>
+
                   <div className={`browser-panel workspace-browser-shell remote-browser-shell ${remoteDropTarget === remoteBaseDropPath ? 'is-drop-active' : ''}`} onDragOver={(event) => { if (remoteBaseDropPath) { allowRemoteDrop(event, remoteBaseDropPath) } }} onDragLeave={clearRemoteDrop} onDrop={(event) => { if (remoteBaseDropPath) { handleRemoteDrop(event, remoteBaseDropPath) } }}>
-                    <div className="section-headline compact-headline browser-headline ssh-browser-headline">
-                      <div><strong>{UI.remoteList}</strong><span className="browser-current-path">{pane.remoteBrowserLoading ? UI.remoteLoading : pane.remoteBrowserPath || pane.remoteHomeDirectory || UI.sshUnset}</span></div>
-                      <div className="browser-toolbar-actions wide-toolbar-actions">
-                        <button type="button" className="ghost-button compact-ghost" disabled={!pane.remoteHomeDirectory} onClick={() => onBrowseRemote(pane.id, pane.remoteHomeDirectory || undefined)}><Home size={14} />Home</button>
-                        <button type="button" className="ghost-button compact-ghost" disabled={!pane.remoteParentPath} onClick={() => onBrowseRemote(pane.id, pane.remoteParentPath || undefined)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>
+                    <div className="section-headline compact-headline browser-headline">
+                      <div><strong>{UI.folderContents}</strong></div>
+                      <div className="browser-toolbar-actions">
+                        {!isAtRemoteWorkspaceTop && pane.remoteWorkspacePath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseRemote(pane.id, pane.remoteWorkspacePath)}><Home size={14} />{UI.workspaceTop}</button>}
+                        {remoteParentPath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseRemote(pane.id, remoteParentPath)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>}
                         <button type="button" className="ghost-button compact-ghost" disabled={!remoteBaseDropPath} onClick={() => onCreateRemoteDirectory(pane.id)}><FolderPlus size={14} />{UI.createFolder}</button>
                         <button type="button" className="ghost-button compact-ghost" disabled={!remoteBaseDropPath} onClick={() => remoteBaseDropPath && onTransferSshPath(pane.id, 'download', { remotePath: remoteBaseDropPath, remoteLabel: currentRemoteLabel, isDirectory: true })}>{UI.downloadCurrent}</button>
                       </div>
                     </div>
 
-                    <p className="browser-inline-note">{UI.dragHint}</p>
                     <div className="browser-list browser-list-shell remote-browser-list-modern">
-                      {pane.remoteBrowserEntries.length > 0 ? (
+                      {pane.remoteWorkspacePath && pane.remoteBrowserEntries.length > 0 ? (
                         pane.remoteBrowserEntries.map((entry) => (
-                          <div key={entry.path} className={`browser-entry remote-entry modern-remote-entry ${entry.path === pane.remoteWorkspacePath ? 'active' : ''} ${remoteDropTarget === entry.path ? 'drop-ready' : ''}`} onDragOver={(event) => { if (entry.isDirectory) { allowRemoteDrop(event, entry.path) } }} onDragLeave={clearRemoteDrop} onDrop={(event) => { if (entry.isDirectory) { handleRemoteDrop(event, entry.path) } }}>
+                          <div key={entry.path} className={`browser-entry remote-entry modern-remote-entry ${remoteDropTarget === entry.path ? 'drop-ready' : ''}`} onDragOver={(event) => { if (entry.isDirectory) { allowRemoteDrop(event, entry.path) } }} onDragLeave={clearRemoteDrop} onDrop={(event) => { if (entry.isDirectory) { handleRemoteDrop(event, entry.path) } }}>
                             <button type="button" className="browser-entry-main browser-entry-button modern-browser-button" onClick={() => entry.isDirectory ? onBrowseRemote(pane.id, entry.path) : onOpenPath(pane.id, entry.path, 'file')}>
                               {entry.isDirectory ? <Folder size={16} /> : <FileText size={16} />}
-                              <div><strong>{entry.label}</strong><span>{entry.path}</span></div>
+                              <strong>{entry.label}</strong>
                             </button>
                             <div className="browser-entry-actions">
-                              {entry.isDirectory && <button type="button" className={entry.isWorkspace ? 'ghost-button workspace' : 'ghost-button'} onClick={() => onUpdate(pane.id, { remoteWorkspacePath: entry.path, sshRemotePath: entry.path, remoteShellPath: entry.path })}>{UI.useWorkspace}</button>}
                               <button type="button" className="ghost-button" onClick={() => onTransferSshPath(pane.id, 'download', { remotePath: entry.path, remoteLabel: entry.label, isDirectory: entry.isDirectory })}>{UI.receive}</button>
                             </div>
                           </div>
