@@ -245,6 +245,7 @@ export interface PaneState {
   liveOutput: string
   attachedContextIds: string[]
   sessionId: string | null
+  sessionScopeKey: string | null
   autoShare: boolean
   autoShareTargetIds: string[]
   pendingShareGlobal: boolean

@@ -11,7 +11,7 @@ import type {
   SshConnectionOptions,
   SshHost
 } from './types.js'
-import { dedupeStrings, getPathName, shellEscapePosix, toWorkspaceId } from './util.js'
+import { buildRemoteBashBootstrap, dedupeStrings, getPathName, shellEscapePosix, toWorkspaceId } from './util.js'
 
 const DEFAULT_REMOTE_ROOTS = ['~/workspaces', '~/projects', '~/src', '.']
 const SSH_TIMEOUT_MS = 20_000
@@ -496,7 +496,7 @@ export async function inspectRemoteHost(
   const knownHosts = await discoverSshHosts()
   const resolved = resolveConnection({ host, connection }, knownHosts)
   const localKeys = await findLocalSshKeys()
-  const script = `
+  const script = `${buildRemoteBashBootstrap()}
 printf 'HOME\t%s\n' "$HOME"
 printf 'SHELL\t%s\n' "${'${SHELL:-}'}"
 printf 'PATH\t%s\n' "$PATH"

@@ -2,7 +2,7 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { buildSshCommandArgs } from './ssh.js'
 import type { ActiveShellRun, ShellExecResult, ShellRunEvent, ShellRunRequestBody, WorkspaceTarget } from './types.js'
-import { shellEscapePosix } from './util.js'
+import { buildRemoteBashBootstrap, shellEscapePosix } from './util.js'
 
 const CWD_MARKER = '__TAKO_SHELL_CWD__:'
 
@@ -120,6 +120,7 @@ function buildLocalPosixSpec(target: Extract<WorkspaceTarget, { kind: 'local' }>
 function buildRemoteSpec(target: Extract<WorkspaceTarget, { kind: 'ssh' }>, command: string, cwd?: string | null) {
   const workingDirectory = resolveRemoteWorkingDirectory(target, cwd)
   const remoteScript = [
+    buildRemoteBashBootstrap(),
     `cd ${shellEscapePosix(workingDirectory)}`,
     command,
     'tako_exit=$?',

@@ -13,7 +13,7 @@ import type {
 } from './types.js'
 import { getProviderCatalogs } from './providerCatalog.js'
 import { buildSshCommandArgs } from './ssh.js'
-import { APP_ROOT, dedupeStrings, shellEscapePosix } from './util.js'
+import { APP_ROOT, buildRemoteBashBootstrap, dedupeStrings, shellEscapePosix } from './util.js'
 
 interface RunOptions {
   provider: ProviderId
@@ -672,14 +672,15 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
           ]
 
   const escapedRemoteArgs = remoteArgs.map((entry) => shellEscapePosix(entry)).join(' ')
+  const providerCommand = options.provider === 'codex' ? 'codex' : options.provider === 'gemini' ? 'gemini' : 'copilot'
   const remoteCommand = [
-    'export PATH="$HOME/.local/bin:$HOME/bin:$PATH"',
+    buildRemoteBashBootstrap(),
     'export TERM=xterm-256color',
     'export COLORTERM=truecolor',
-    options.provider === 'codex'
-      ? `cd ${shellEscapePosix(options.target.path)} && ${escapedRemoteArgs}`
-      : escapedRemoteArgs
-  ].join(' && ')
+    `cd ${shellEscapePosix(options.target.path)}`,
+    `if ! command -v ${providerCommand} >/dev/null 2>&1; then printf '%s\n' 'Remote ${providerCommand} CLI was not found in PATH after loading shell profiles.' >&2; exit 127; fi`,
+    escapedRemoteArgs
+  ].join('\n')
 
   return {
     command: 'ssh',

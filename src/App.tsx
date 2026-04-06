@@ -586,6 +586,14 @@ function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[],
   }
 }
 
+function buildPaneSessionScopeKey(pane: Pick<PaneState, 'provider' | 'model' | 'workspaceMode' | 'localWorkspacePath' | 'sshHost' | 'sshUser' | 'sshPort' | 'remoteWorkspacePath'>): string {
+  if (pane.workspaceMode === 'local') {
+    return ['local', pane.provider, pane.model, pane.localWorkspacePath.trim()].join('::')
+  }
+
+  return ['ssh', pane.provider, pane.model, pane.sshUser.trim(), pane.sshHost.trim(), pane.sshPort.trim(), pane.remoteWorkspacePath.trim()].join('::')
+}
+
 function createInitialPane(index: number, payload: BootstrapPayload, localWorkspaces: LocalWorkspace[]): PaneState {
   const provider = PROVIDER_ORDER[index % PROVIDER_ORDER.length]
   const providerCatalog = payload.providers[provider]
@@ -654,6 +662,7 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     liveOutput: '',
     attachedContextIds: [],
     sessionId: null,
+    sessionScopeKey: null,
     autoShare: false,
     autoShareTargetIds: [],
     pendingShareGlobal: false,
@@ -785,6 +794,7 @@ function resetActiveSessionFields(pane: PaneState): PaneState {
     selectedSessionKey: null,
     liveOutput: '',
     sessionId: null,
+    sessionScopeKey: null,
     lastRunAt: null,
     runningSince: null,
     lastActivityAt: null,
@@ -1033,6 +1043,7 @@ function normalizePane(
       ? rawPane.attachedContextIds.filter((item): item is string => typeof item === 'string')
       : [],
     sessionId: typeof rawPane.sessionId === 'string' ? rawPane.sessionId : null,
+    sessionScopeKey: typeof rawPane.sessionScopeKey === 'string' ? rawPane.sessionScopeKey : null,
     autoShare: Boolean(rawPane.autoShare),
     autoShareTargetIds: Array.isArray(rawPane.autoShareTargetIds)
       ? rawPane.autoShareTargetIds.filter((item): item is string => typeof item === 'string')
@@ -1647,6 +1658,7 @@ function App() {
       mutatePane(paneId, (pane) => ({
         ...pane,
         sessionId: event.sessionId,
+        sessionScopeKey: buildPaneSessionScopeKey(pane),
         lastActivityAt: eventAt,
         streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb: ${event.sessionId}`, eventAt)
       }))
@@ -1703,6 +1715,7 @@ function App() {
           lastResponse: assistantEntry.text,
           liveOutput: nextLiveOutput,
           sessionId: event.sessionId ?? pane.sessionId,
+          sessionScopeKey: buildPaneSessionScopeKey(pane),
           streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u7d50\u679c: ${statusLabel(event.statusHint)}`, eventAt)
         }
       })
@@ -1772,6 +1785,8 @@ function App() {
     }
 
     const startedAt = Date.now()
+    const currentSessionScopeKey = buildPaneSessionScopeKey(pane)
+    const resumeSessionId = pane.sessionScopeKey === currentSessionScopeKey ? pane.sessionId : null
     const userEntry: PaneLogEntry = {
       id: createId('log'),
       role: 'user',
@@ -1837,6 +1852,8 @@ function App() {
       lastError: null,
       selectedSessionKey: null,
       liveOutput: '',
+      sessionId: resumeSessionId,
+      sessionScopeKey: currentSessionScopeKey,
       attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
       streamEntries: appendStreamEntry([], 'system', `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
@@ -1852,7 +1869,7 @@ function App() {
           codexFastMode: pane.codexFastMode,
           target,
           prompt,
-          sessionId: pane.sessionId,
+          sessionId: resumeSessionId,
           memory,
           sharedContext: sharedContextPayload
         },
@@ -2085,6 +2102,7 @@ function App() {
       selectedSessionKey: null,
       liveOutput: '',
       sessionId: null,
+      sessionScopeKey: null,
       sshActionState: 'idle',
       sshActionMessage: null,
       lastRunAt: null,
