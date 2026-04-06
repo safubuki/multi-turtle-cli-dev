@@ -74,6 +74,11 @@ function getPowerShellExecutable(): string {
   return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
+function getExplorerExecutable(): string {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+  return path.join(systemRoot, 'explorer.exe')
+}
+
 function buildRemoteFolderUri(host: string, remotePath: string): string {
   const normalized = remotePath.replace(/\\/g, '/')
   const pathname = normalized.startsWith('/') ? normalized : `/${normalized}`
@@ -292,6 +297,40 @@ export async function openInCommandPrompt(target: WorkspaceTarget): Promise<void
   throw new Error(`\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${detail}`)
 }
 
+export async function openInFileManager(target: WorkspaceTarget): Promise<void> {
+  if (target.kind !== 'local') {
+    throw new Error('Explorer で開けるのはローカルパスのみです。')
+  }
+
+  const resolvedPath = path.resolve(target.path)
+  const resourceType = target.resourceType ?? 'folder'
+
+  if (process.platform === 'win32') {
+    const args = resourceType === 'file'
+      ? [`/select,${resolvedPath}`]
+      : [resolvedPath]
+
+    await tryLaunch(getExplorerExecutable(), args, {
+      cwd: resourceType === 'file' ? path.dirname(resolvedPath) : resolvedPath,
+      windowsHide: false
+    })
+    return
+  }
+
+  if (process.platform === 'darwin') {
+    await tryLaunch('open', resourceType === 'file' ? ['-R', resolvedPath] : [resolvedPath], {
+      cwd: resourceType === 'file' ? path.dirname(resolvedPath) : resolvedPath,
+      windowsHide: false
+    })
+    return
+  }
+
+  await tryLaunch('xdg-open', [resourceType === 'file' ? path.dirname(resolvedPath) : resolvedPath], {
+    cwd: resourceType === 'file' ? path.dirname(resolvedPath) : resolvedPath,
+    windowsHide: false
+  })
+}
+
 async function openInWindowsCommandPrompt(target: WorkspaceTarget): Promise<void> {
   const powerShellExecutable = getPowerShellExecutable()
   const { args, cwd } = buildWindowsPowerShellCommand(target)
@@ -341,7 +380,7 @@ function buildWindowsPowerShellCommand(target: WorkspaceTarget): { args: string[
       host: target.host,
       connection: target.connection
     },
-    ['-t', 'bash', '-lc', remoteCommand]
+    ['-t', 'bash', '-lc', shellEscapePosix(remoteCommand)]
   )
 
   return {
@@ -364,7 +403,7 @@ function buildPosixTerminalCommand(target: WorkspaceTarget): string {
       host: target.host,
       connection: target.connection
     },
-    ['-t', 'bash', '-lc', remoteCommand]
+    ['-t', 'bash', '-lc', shellEscapePosix(remoteCommand)]
   )
 
   return `ssh ${sshArgs.map((value) => shellEscapePosix(value)).join(' ')}`

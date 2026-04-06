@@ -79,6 +79,7 @@ export interface LocalSshKey {
   privateKeyPath: string
   publicKey: string
   algorithm: string
+  comment: string
 }
 
 export interface RemoteWorkspace {

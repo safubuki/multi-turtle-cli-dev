@@ -35,6 +35,24 @@ function getSshDirectory(): string {
   return path.join(os.homedir(), '.ssh')
 }
 
+function parseSshPublicKeyComment(publicKey: string): string {
+  const segments = publicKey.trim().split(/\s+/)
+  return segments.length > 2 ? segments.slice(2).join(' ') : ''
+}
+
+function assertPathInsideSshDirectory(targetPath: string): string {
+  const sshDirectory = path.resolve(getSshDirectory())
+  const resolvedPath = path.resolve(targetPath)
+  const normalizedSshDirectory = process.platform === 'win32' ? sshDirectory.toLowerCase() : sshDirectory
+  const normalizedResolvedPath = process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath
+
+  if (normalizedResolvedPath === normalizedSshDirectory || normalizedResolvedPath.startsWith(`${normalizedSshDirectory}${path.sep}`)) {
+    return resolvedPath
+  }
+
+  throw new Error(`SSH key path is outside ~/.ssh: ${targetPath}`)
+}
+
 function createHostRecord(alias: string, currentMeta: Partial<SshHost>): SshHost {
   return {
     id: `ssh-${toWorkspaceId(alias)}`,
@@ -117,7 +135,7 @@ function splitSshArgs(raw: string | undefined): string[] {
   return args
 }
 
-async function createAskPassEnv(password: string): Promise<{
+export async function createSshAskPassEnv(password: string): Promise<{
   env: NodeJS.ProcessEnv
   cleanup: () => Promise<void>
 }> {
@@ -155,7 +173,7 @@ async function createAskPassEnv(password: string): Promise<{
 }
 
 async function runCommand(command: string, args: string[], options: CommandRunOptions = {}): Promise<string> {
-  const askPass = options.password?.trim() ? await createAskPassEnv(options.password.trim()) : null
+  const askPass = options.password?.trim() ? await createSshAskPassEnv(options.password.trim()) : null
 
   try {
     return await new Promise((resolve, reject) => {
@@ -415,7 +433,8 @@ export async function findLocalSshKeys(): Promise<LocalSshKey[]> {
       publicKeyPath,
       privateKeyPath,
       publicKey,
-      algorithm: publicKey.split(/\s+/)[0] ?? 'ssh'
+      algorithm: publicKey.split(/\s+/)[0] ?? 'ssh',
+      comment: parseSshPublicKeyComment(publicKey)
     })
   }
 
@@ -430,7 +449,11 @@ export async function findLocalSshKeys(): Promise<LocalSshKey[]> {
   })
 }
 
-export async function generateSshKeyPair(keyName: string, comment: string, passphrase: string): Promise<LocalSshKey> {
+export async function generateSshKeyPair(
+  keyName: string,
+  comment: string,
+  passphrase: string
+): Promise<{ key: LocalSshKey; created: boolean }> {
   const sshDirectory = getSshDirectory()
   await fs.mkdir(sshDirectory, { recursive: true })
 
@@ -438,7 +461,15 @@ export async function generateSshKeyPair(keyName: string, comment: string, passp
   const privateKeyPath = path.join(sshDirectory, safeName)
   const publicKeyPath = `${privateKeyPath}.pub`
   if (existsSync(privateKeyPath) || existsSync(publicKeyPath)) {
-    throw new Error(`SSH key already exists: ${privateKeyPath}`)
+    const existing = (await findLocalSshKeys()).find((item) => item.privateKeyPath === privateKeyPath)
+    if (existing) {
+      return {
+        key: existing,
+        created: false
+      }
+    }
+
+    throw new Error(`SSH key already exists but could not be loaded: ${privateKeyPath}`)
   }
 
   const keyComment = comment.trim() || 'tako-cli-dev-tool'
@@ -451,7 +482,66 @@ export async function generateSshKeyPair(keyName: string, comment: string, passp
     throw new Error('SSH key was generated but could not be loaded')
   }
 
-  return created
+  return {
+    key: created,
+    created: true
+  }
+}
+
+export async function deleteSshKeyPair(privateKeyPath: string): Promise<{
+  deleted: boolean
+  remainingKeys: LocalSshKey[]
+}> {
+  const normalizedPrivateKeyPath = assertPathInsideSshDirectory(privateKeyPath)
+  const normalizedPublicKeyPath = `${normalizedPrivateKeyPath}.pub`
+  let deleted = false
+
+  for (const candidatePath of [normalizedPrivateKeyPath, normalizedPublicKeyPath]) {
+    if (!existsSync(candidatePath)) {
+      continue
+    }
+
+    await fs.rm(candidatePath, { force: true })
+    deleted = true
+  }
+
+  return {
+    deleted,
+    remainingKeys: await findLocalSshKeys()
+  }
+}
+
+export async function removeKnownHostEntries(host: string, connection?: SshConnectionOptions): Promise<string[]> {
+  const trimmedHost = host.trim()
+  if (!trimmedHost) {
+    return []
+  }
+
+  const normalizedConnection = connection ?? {}
+  const port = normalizedConnection.port?.trim() ?? ''
+  const targets = dedupeStrings([
+    trimmedHost,
+    port && port !== '22' ? `[${trimmedHost}]:${port}` : null
+  ])
+  const removedHosts: string[] = []
+
+  for (const target of targets) {
+    try {
+      await runCommand('ssh-keygen', ['-R', target], {
+        timeoutMs: 15_000
+      })
+      removedHosts.push(target)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (/not found in|does not exist/i.test(message)) {
+        continue
+      }
+
+      throw error
+    }
+  }
+
+  return removedHosts
 }
 
 export async function listRemoteWorkspaces(host: string, connection?: SshConnectionOptions): Promise<RemoteWorkspace[]> {
@@ -516,7 +606,7 @@ if command -v copilot >/dev/null 2>&1; then
 fi
 `
 
-  const stdout = await runSsh({ host, connection }, ['bash', '-lc', script])
+  const stdout = await runSsh({ host, connection }, ['bash', '-lc', shellEscapePosix(script)])
   const availableProviders: ProviderId[] = []
   const diagnostics: string[] = []
   let homeDirectory: string | null = null
@@ -708,7 +798,7 @@ export async function installSshPublicKey(host: string, connection: SshConnectio
   }
 
   const script = `
-key="$1"
+key=${shellEscapePosix(normalizedKey)}
 umask 077
 mkdir -p "$HOME/.ssh"
 touch "$HOME/.ssh/authorized_keys"
@@ -717,5 +807,5 @@ chmod 600 "$HOME/.ssh/authorized_keys"
 grep -qxF "$key" "$HOME/.ssh/authorized_keys" || printf '%s\n' "$key" >> "$HOME/.ssh/authorized_keys"
 `
 
-  await runSsh({ host, connection }, ['bash', '-s', '--', normalizedKey], script)
+  await runSsh({ host, connection }, ['bash', '-s', '--'], script)
 }

@@ -8,17 +8,19 @@ import { getProviderCatalogs } from './providerCatalog.js'
 import {
   browseRemoteDirectory,
   createRemoteDirectory,
+  deleteSshKeyPair,
   discoverSshHosts,
   generateSshKeyPair,
   getRemoteWorkspaceRoots,
   inspectRemoteHost,
   installSshPublicKey,
   listRemoteWorkspaces,
+  removeKnownHostEntries,
   scpTransfer
 } from './ssh.js'
 import { specSections } from './spec.js'
 import type { ActiveCliRun, ActiveShellRun, AutonomyMode, RunRequestBody, RunStreamEvent, ShellRunEvent, ShellRunRequestBody, SshConnectionOptions } from './types.js'
-import { openInCommandPrompt, openInVsCode } from './vscode.js'
+import { openInCommandPrompt, openInFileManager, openInVsCode } from './vscode.js'
 import { browseLocalDirectory, createLocalDirectory, discoverLocalWorkspaces, listLocalBrowseRoots } from './workspaces.js'
 
 const app = express()
@@ -316,6 +318,28 @@ app.post('/api/system/open-cmd', async (req, res) => {
   }
 })
 
+app.post('/api/system/open-explorer', async (req, res) => {
+  try {
+    const { target } = req.body as { target?: RunRequestBody['target'] }
+    if (!target) {
+      res.status(400).json({
+        success: false,
+        error: 'target required'
+      })
+      return
+    }
+
+    await openInFileManager(target)
+    res.json({ success: true })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'explorer open failed',
+      details: String(error)
+    })
+  }
+})
+
 app.post('/api/ssh/workspaces', async (req, res) => {
   try {
     const { host, connection } = req.body as { host?: string; connection?: unknown }
@@ -438,12 +462,40 @@ app.post('/api/ssh/keygen', async (req, res) => {
     const key = await generateSshKeyPair(keyName ?? 'id_ed25519', comment ?? '', passphrase ?? '')
     res.json({
       success: true,
-      key
+      ...key
     })
   } catch (error) {
     res.status(500).json({
       success: false,
       error: 'ssh key generation failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/ssh/delete-key', async (req, res) => {
+  try {
+    const { privateKeyPath } = req.body as {
+      privateKeyPath?: string
+    }
+
+    if (!privateKeyPath?.trim()) {
+      res.status(400).json({
+        success: false,
+        error: 'privateKeyPath required'
+      })
+      return
+    }
+
+    const result = await deleteSshKeyPair(privateKeyPath.trim())
+    res.json({
+      success: true,
+      ...result
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'ssh key deletion failed',
       details: String(error)
     })
   }
@@ -475,6 +527,35 @@ app.post('/api/ssh/install-key', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'ssh key installation failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/ssh/remove-known-host', async (req, res) => {
+  try {
+    const { host, connection } = req.body as {
+      host?: string
+      connection?: unknown
+    }
+
+    if (!host?.trim()) {
+      res.status(400).json({
+        success: false,
+        error: 'host required'
+      })
+      return
+    }
+
+    const removedHosts = await removeKnownHostEntries(host.trim(), normalizeConnection(connection))
+    res.json({
+      success: true,
+      removedHosts
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'known_hosts cleanup failed',
       details: String(error)
     })
   }

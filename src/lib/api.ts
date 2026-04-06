@@ -13,8 +13,10 @@
   ShellRunRequest,
   SshConnectionOptions,
   SshInspectionResponse,
+  SshKeyDeleteResponse,
   SshKeyGenerateResponse,
   SshKeyInstallResponse,
+  SshKnownHostRemoveResponse,
   SshTransferResponse,
   StopRunResponse,
   WorkspaceTarget
@@ -44,6 +46,10 @@ const HTML_API_ERROR_MESSAGES = [
   {
     path: '/api/ssh/install-key',
     message: 'SSH 公開鍵登録 API が見つかりません。TAKO のサーバーを再起動してください。'
+  },
+  {
+    path: '/api/system/open-explorer',
+    message: 'Explorer 起動 API が見つかりません。TAKO のサーバーを再起動してください。'
   }
 ] as const
 
@@ -269,6 +275,16 @@ export function openTargetInCommandPrompt(target: WorkspaceTarget): Promise<{ su
   })
 }
 
+export function openTargetInFileManager(target: WorkspaceTarget): Promise<{ success: boolean }> {
+  return requestJson<{ success: boolean }>('/api/system/open-explorer', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ target })
+  })
+}
+
 export function fetchLocalBrowseRoots(): Promise<LocalBrowseRootsResponse> {
   return requestJson<LocalBrowseRootsResponse>('/api/system/local-roots')
 }
@@ -368,6 +384,16 @@ export function generateSshKey(keyName: string, comment: string, passphrase = ''
   })
 }
 
+export function deleteSshKey(privateKeyPath: string): Promise<SshKeyDeleteResponse> {
+  return requestJson<SshKeyDeleteResponse>('/api/ssh/delete-key', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ privateKeyPath })
+  })
+}
+
 export function installSshKey(host: string, publicKey: string, connection?: SshConnectionOptions): Promise<SshKeyInstallResponse> {
   return requestJson<SshKeyInstallResponse>('/api/ssh/install-key', {
     method: 'POST',
@@ -375,6 +401,16 @@ export function installSshKey(host: string, publicKey: string, connection?: SshC
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ host, publicKey, connection })
+  })
+}
+
+export function removeKnownHost(host: string, connection?: SshConnectionOptions): Promise<SshKnownHostRemoveResponse> {
+  return requestJson<SshKnownHostRemoveResponse>('/api/ssh/remove-known-host', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ host, connection })
   })
 }
 

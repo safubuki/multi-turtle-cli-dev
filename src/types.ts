@@ -82,6 +82,7 @@ export interface LocalSshKey {
   privateKeyPath: string
   publicKey: string
   algorithm: string
+  comment: string
 }
 
 export interface RemoteWorkspace {
@@ -223,6 +224,8 @@ export interface PaneState {
   sshLocalKeys: LocalSshKey[]
   sshSelectedKeyPath: string
   sshPublicKeyText: string
+  sshKeyName: string
+  sshKeyComment: string
   sshDiagnostics: string[]
   sshActionState: 'idle' | 'running' | 'success' | 'error'
   sshActionMessage: string | null
@@ -402,12 +405,24 @@ export interface SshInspectionResponse {
 export interface SshKeyGenerateResponse {
   success: boolean
   key: LocalSshKey
+  created: boolean
+}
+
+export interface SshKeyDeleteResponse {
+  success: boolean
+  deleted: boolean
+  remainingKeys: LocalSshKey[]
 }
 
 export interface SshKeyInstallResponse {
   success: boolean
   host: string
   installed: boolean
+}
+
+export interface SshKnownHostRemoveResponse {
+  success: boolean
+  removedHosts: string[]
 }
 
 export interface SshTransferResponse {

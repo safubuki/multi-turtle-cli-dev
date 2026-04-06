@@ -1,12 +1,21 @@
 ﻿import path from 'path'
 import { spawn, type ChildProcess } from 'child_process'
-import { buildSshCommandArgs } from './ssh.js'
+import { buildSshCommandArgs, createSshAskPassEnv } from './ssh.js'
 import type { ActiveShellRun, ShellExecResult, ShellRunEvent, ShellRunRequestBody, WorkspaceTarget } from './types.js'
-import { buildRemoteBashBootstrap, shellEscapePosix } from './util.js'
+import { APP_ROOT, buildRemoteBashBootstrap, shellEscapePosix } from './util.js'
 
 const CWD_MARKER = '__TAKO_SHELL_CWD__:'
 
 type ShellEncoding = 'auto' | 'utf8' | 'shift_jis'
+
+type ShellLaunchSpec = {
+  command: string
+  args: string[]
+  workingDirectory: string
+  sessionCwd: string
+  encoding: ShellEncoding
+  stdinContent?: string
+}
 
 function getCmdExecutable(): string {
   return process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe'
@@ -78,7 +87,7 @@ function createBufferDecoder(encoding: ShellEncoding) {
   }
 }
 
-function buildLocalWindowsSpec(target: Extract<WorkspaceTarget, { kind: 'local' }>, command: string, cwd?: string | null) {
+function buildLocalWindowsSpec(target: Extract<WorkspaceTarget, { kind: 'local' }>, command: string, cwd?: string | null): ShellLaunchSpec {
   const workingDirectory = resolveLocalWorkingDirectory(target, cwd)
   const script = [
     '@echo off',
@@ -94,11 +103,12 @@ function buildLocalWindowsSpec(target: Extract<WorkspaceTarget, { kind: 'local' 
     command: getCmdExecutable(),
     args: ['/d', '/s', '/c', script],
     workingDirectory,
+    sessionCwd: workingDirectory,
     encoding: 'auto' as const
   }
 }
 
-function buildLocalPosixSpec(target: Extract<WorkspaceTarget, { kind: 'local' }>, command: string, cwd?: string | null) {
+function buildLocalPosixSpec(target: Extract<WorkspaceTarget, { kind: 'local' }>, command: string, cwd?: string | null): ShellLaunchSpec {
   const basePath = target.resourceType === 'file' ? path.dirname(target.path) : target.path
   const workingDirectory = path.resolve(cwd?.trim() || basePath)
   const script = [
@@ -113,15 +123,16 @@ function buildLocalPosixSpec(target: Extract<WorkspaceTarget, { kind: 'local' }>
     command: 'bash',
     args: ['-lc', script],
     workingDirectory,
+    sessionCwd: workingDirectory,
     encoding: 'utf8' as const
   }
 }
 
-function buildRemoteSpec(target: Extract<WorkspaceTarget, { kind: 'ssh' }>, command: string, cwd?: string | null) {
-  const workingDirectory = resolveRemoteWorkingDirectory(target, cwd)
+function buildRemoteSpec(target: Extract<WorkspaceTarget, { kind: 'ssh' }>, command: string, cwd?: string | null): ShellLaunchSpec {
+  const remoteWorkingDirectory = resolveRemoteWorkingDirectory(target, cwd)
   const remoteScript = [
     buildRemoteBashBootstrap(),
-    `cd ${shellEscapePosix(workingDirectory)}`,
+    `cd ${shellEscapePosix(remoteWorkingDirectory)}`,
     command,
     'tako_exit=$?',
     `printf '${CWD_MARKER}%s\\n' "$PWD"`,
@@ -130,13 +141,15 @@ function buildRemoteSpec(target: Extract<WorkspaceTarget, { kind: 'ssh' }>, comm
 
   return {
     command: 'ssh',
-    args: buildSshCommandArgs({ host: target.host, connection: target.connection }, ['bash', '-lc', remoteScript]),
-    workingDirectory,
-    encoding: 'utf8' as const
+    args: buildSshCommandArgs({ host: target.host, connection: target.connection }, ['bash', '-s', '--']),
+    workingDirectory: APP_ROOT,
+    sessionCwd: remoteWorkingDirectory,
+    encoding: 'utf8' as const,
+    stdinContent: remoteScript
   }
 }
 
-function buildShellSpec(target: WorkspaceTarget, command: string, cwd?: string | null) {
+function buildShellSpec(target: WorkspaceTarget, command: string, cwd?: string | null): ShellLaunchSpec {
   if (target.kind === 'local') {
     return process.platform === 'win32'
       ? buildLocalWindowsSpec(target, command, cwd)
@@ -193,21 +206,28 @@ export async function startShellRun(options: ShellRunRequestBody & { onEvent?: (
   }
 
   const spec = buildShellSpec(options.target, trimmedCommand, options.cwd)
+  const sshPassword = options.target.kind === 'ssh' ? options.target.connection?.password?.trim() ?? '' : ''
+  const askPass = sshPassword ? await createSshAskPassEnv(sshPassword) : null
   const child = spawn(spec.command, spec.args, {
     cwd: spec.workingDirectory,
     env: {
-      ...process.env,
+      ...(askPass?.env ?? process.env),
       FORCE_COLOR: '0'
     },
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['pipe', 'pipe', 'pipe']
   })
+
+  child.stdin.on('error', () => {
+    // Some processes close stdin immediately after reading the bootstrap script.
+  })
+  child.stdin.end(spec.stdinContent ?? '')
 
   const promise = new Promise<ShellExecResult>((resolve, reject) => {
     let stdoutBuffer = ''
     let stderrBuffer = ''
     let stdoutText = ''
     let stderrText = ''
-    const state = { cwd: spec.workingDirectory }
+    const state = { cwd: spec.sessionCwd }
     const stdoutDecoder = createBufferDecoder(spec.encoding)
     const stderrDecoder = createBufferDecoder(spec.encoding)
 
@@ -265,6 +285,8 @@ export async function startShellRun(options: ShellRunRequestBody & { onEvent?: (
         stderr: cleanedStderr
       })
     })
+  }).finally(async () => {
+    await askPass?.cleanup()
   })
 
   return {

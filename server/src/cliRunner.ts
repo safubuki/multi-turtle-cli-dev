@@ -689,7 +689,7 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
         host: options.target.host,
         connection: options.target.connection
       },
-      ['bash', '-lc', remoteCommand]
+      ['bash', '-lc', shellEscapePosix(remoteCommand)]
     ),
     stdinPrompt: options.provider === 'copilot' ? null : options.provider === 'gemini' ? null : providerPrompt
   }

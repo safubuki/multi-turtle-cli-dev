@@ -17,16 +17,19 @@ import {
   browseLocalDirectory,
   createLocalDirectory,
   createRemoteDirectory,
+  deleteSshKey,
   fetchBootstrap,
   fetchLocalBrowseRoots,
   fetchRemoteWorkspaces,
   generateSshKey,
   inspectSshHost,
   installSshKey,
+  openTargetInFileManager,
   openTargetInCommandPrompt,
   openWorkspaceInVsCode,
   pickLocalWorkspace,
   pickSaveFilePath,
+  removeKnownHost,
   runPaneStream,
   runShellStream,
   stopPaneRun,
@@ -538,12 +541,15 @@ function appendSessionRecord(history: PaneSessionRecord[], record: PaneSessionRe
 
 function buildSshConnectionFromPane(pane: PaneState, sshHosts: SshHost[] = []): SshConnectionOptions {
   const matchedHost = sshHosts.find((item) => item.alias === pane.sshHost.trim())
+  const selectedLocalKeyPath = pane.sshLocalKeys.some((item) => item.privateKeyPath === pane.sshSelectedKeyPath.trim())
+    ? pane.sshSelectedKeyPath.trim()
+    : ''
 
   return {
     username: pane.sshUser.trim() || matchedHost?.user || undefined,
     port: pane.sshPort.trim() || matchedHost?.port || undefined,
     password: pane.sshPassword.trim() || undefined,
-    identityFile: pane.sshIdentityFile.trim() || matchedHost?.identityFile || undefined,
+    identityFile: selectedLocalKeyPath || pane.sshIdentityFile.trim() || matchedHost?.identityFile || undefined,
     proxyJump: matchedHost?.proxyJump || undefined,
     proxyCommand: matchedHost?.proxyCommand || undefined,
     extraArgs: undefined
@@ -640,6 +646,8 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     sshLocalKeys: [],
     sshSelectedKeyPath: '',
     sshPublicKeyText: '',
+    sshKeyName: 'id_ed25519',
+    sshKeyComment: 'tako-cli-dev-tool',
     sshDiagnostics: [],
     sshActionState: 'idle',
     sshActionMessage: null,
@@ -1011,6 +1019,8 @@ function normalizePane(
     sshLocalKeys: Array.isArray(rawPane.sshLocalKeys) ? rawPane.sshLocalKeys : [],
     sshSelectedKeyPath: typeof rawPane.sshSelectedKeyPath === 'string' ? rawPane.sshSelectedKeyPath : '',
     sshPublicKeyText: typeof rawPane.sshPublicKeyText === 'string' ? rawPane.sshPublicKeyText : '',
+    sshKeyName: typeof rawPane.sshKeyName === 'string' && rawPane.sshKeyName.trim() ? rawPane.sshKeyName : 'id_ed25519',
+    sshKeyComment: typeof rawPane.sshKeyComment === 'string' ? rawPane.sshKeyComment : 'tako-cli-dev-tool',
     sshDiagnostics: Array.isArray(rawPane.sshDiagnostics)
       ? rawPane.sshDiagnostics.filter((item): item is string => typeof item === 'string')
       : [],
@@ -2611,6 +2621,38 @@ function App() {
     }
   }
 
+  const handleOpenFileManager = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane || pane.workspaceMode !== 'local') {
+      return
+    }
+
+    const targetPath = pane.localBrowserPath.trim() || pane.localWorkspacePath.trim()
+    if (!targetPath) {
+      return
+    }
+
+    try {
+      await openTargetInFileManager({
+        kind: 'local',
+        path: targetPath,
+        label: targetPath,
+        resourceType: 'folder'
+      })
+      updatePane(paneId, {
+        status: 'idle',
+        statusText: 'Explorer を起動しました',
+        lastError: null
+      })
+    } catch (error) {
+      updatePane(paneId, {
+        status: 'error',
+        statusText: 'Explorer の起動に失敗しました',
+        lastError: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
   const handleOpenCommandPrompt = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
     if (!pane) {
@@ -2950,12 +2992,16 @@ function App() {
 
       const workspacePayload = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null
       const inspectionPayload = inspectionResult.status === 'fulfilled' ? inspectionResult.value : null
+      const failedPartLabels = [
+        workspaceResult.status === 'rejected' ? 'ワークスペース一覧' : null,
+        inspectionResult.status === 'rejected' ? '接続診断 / CLI確認' : null
+      ].filter((item): item is string => Boolean(item))
       const partialErrors = [
         workspaceResult.status === 'rejected'
           ? `ワークスペース一覧の取得に失敗しました: ${workspaceResult.reason instanceof Error ? workspaceResult.reason.message : String(workspaceResult.reason)}`
           : null,
         inspectionResult.status === 'rejected'
-          ? `接続診断の取得に失敗しました: ${inspectionResult.reason instanceof Error ? inspectionResult.reason.message : String(inspectionResult.reason)}`
+          ? `接続診断 / CLI確認の取得に失敗しました: ${inspectionResult.reason instanceof Error ? inspectionResult.reason.message : String(inspectionResult.reason)}`
           : null,
         browseFallbackWarning
       ].filter((item): item is string => Boolean(item))
@@ -2994,12 +3040,14 @@ function App() {
             model: nextModel,
             sshUser: item.sshUser || inspectionPayload?.suggestedUser || '',
             sshPort: item.sshPort || inspectionPayload?.suggestedPort || '',
-            sshIdentityFile: item.sshIdentityFile || inspectionPayload?.suggestedIdentityFile || '',
+            sshIdentityFile: selectedKey?.privateKeyPath || item.sshIdentityFile || inspectionPayload?.suggestedIdentityFile || '',
             sshProxyJump: item.sshProxyJump || inspectionPayload?.suggestedProxyJump || '',
             sshProxyCommand: item.sshProxyCommand || inspectionPayload?.suggestedProxyCommand || '',
             sshLocalKeys: inspectionPayload?.localKeys ?? item.sshLocalKeys,
             sshSelectedKeyPath: selectedKey?.privateKeyPath ?? '',
             sshPublicKeyText: selectedKey?.publicKey ?? item.sshPublicKeyText,
+            sshKeyName: selectedKey?.name ?? item.sshKeyName,
+            sshKeyComment: selectedKey?.comment ?? item.sshKeyComment,
             sshDiagnostics: mergedDiagnostics,
             sshLocalPath: item.sshLocalPath || localWorkspacesRef.current[0]?.path || '',
             sshRemotePath: item.sshRemotePath || nextRemoteWorkspacePath || browsePayload.path,
@@ -3013,13 +3061,13 @@ function App() {
             remoteBrowserEntries: browsePayload.entries,
             remoteWorkspacePath: nextRemoteWorkspacePath,
             status: hasPartialFailure || noRemoteProviderDetected ? 'attention' : 'idle',
-            statusText: hasPartialFailure ? 'SSH に接続しましたが一部取得に失敗しました' : noRemoteProviderDetected ? 'SSH 接続済み / CLI 未検出' : 'SSH を更新しました',
+            statusText: hasPartialFailure ? `SSH に接続しましたが ${failedPartLabels.join(' / ')} の取得に失敗しました` : noRemoteProviderDetected ? 'SSH 接続済み / CLI 未検出' : 'SSH を更新しました',
             runningSince: null,
             lastActivityAt: updatedAt,
             lastFinishedAt: updatedAt,
             lastError: hasPartialFailure ? partialErrors.join('\n') : null,
             sshActionState: hasPartialFailure ? 'error' : 'success',
-            sshActionMessage: hasPartialFailure ? `${host} への接続は成功しましたが、一部の情報取得に失敗しました` : noRemoteProviderDetected ? `${host} に接続しました。CLI を確認してください` : `${host} の接続情報を更新しました`
+            sshActionMessage: hasPartialFailure ? `${host} への接続は成功しましたが、${failedPartLabels.join(' / ')} の取得に失敗しました` : noRemoteProviderDetected ? `${host} に接続しました。CLI を確認してください` : `${host} の接続情報を更新しました`
           }
         })
       )
@@ -3156,6 +3204,13 @@ function App() {
   }
 
   const handleGenerateSshKey = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane) {
+      return
+    }
+
+    const keyName = pane.sshKeyName.trim() || 'id_ed25519'
+    const keyComment = pane.sshKeyComment.trim() || 'tako-cli-dev-tool'
     const startedAt = Date.now()
     updatePane(paneId, {
       status: 'running',
@@ -3168,24 +3223,29 @@ function App() {
     })
 
     try {
-      const result = await generateSshKey('id_ed25519', 'tako-cli-dev-tool', '')
+      const result = await generateSshKey(keyName, keyComment, '')
       const finishedAt = Date.now()
       mutatePane(paneId, (pane) => ({
         ...pane,
         sshLocalKeys: [result.key, ...pane.sshLocalKeys.filter((item) => item.privateKeyPath !== result.key.privateKeyPath)],
         sshSelectedKeyPath: result.key.privateKeyPath,
-        sshIdentityFile: pane.sshIdentityFile || result.key.privateKeyPath,
+        sshIdentityFile: result.key.privateKeyPath,
         sshPublicKeyText: result.key.publicKey,
-        sshDiagnostics: [...pane.sshDiagnostics.filter((item) => !item.startsWith('\u30ed\u30fc\u30ab\u30eb\u9375:')), `\u30ed\u30fc\u30ab\u30eb\u9375: ${result.key.privateKeyPath}`],
+        sshKeyName: result.key.name,
+        sshKeyComment: result.key.comment,
+        sshDiagnostics: [
+          ...pane.sshDiagnostics.filter((item) => !item.startsWith('\u30ed\u30fc\u30ab\u30eb\u9375:') && !item.startsWith('ローカルの ~/.ssh に利用可能な鍵がありません')),
+          `\u30ed\u30fc\u30ab\u30eb\u9375: ${result.key.privateKeyPath}`
+        ],
         sshActionState: 'success',
-        sshActionMessage: `SSH 鍵を生成しました: ${result.key.privateKeyPath}`,
+        sshActionMessage: result.created ? `SSH 鍵を生成しました: ${result.key.privateKeyPath}` : `既存の SSH 鍵を選択しました: ${result.key.privateKeyPath}`,
         status: 'completed',
-        statusText: 'SSH 鍵を生成しました',
+        statusText: result.created ? 'SSH 鍵を生成しました' : '既存の SSH 鍵を選択しました',
         runningSince: null,
         lastActivityAt: finishedAt,
         lastFinishedAt: finishedAt,
         lastError: null,
-        streamEntries: appendStreamEntry(pane.streamEntries, 'system', `SSH 鍵を生成しました: ${result.key.privateKeyPath}`, finishedAt)
+        streamEntries: appendStreamEntry(pane.streamEntries, 'system', result.created ? `SSH 鍵を生成しました: ${result.key.privateKeyPath}` : `既存の SSH 鍵を選択しました: ${result.key.privateKeyPath}`, finishedAt)
       }))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -3199,6 +3259,144 @@ function App() {
         lastError: message,
         sshActionState: 'error',
         sshActionMessage: `SSH 鍵の生成に失敗しました: ${message}`
+      })
+    }
+  }
+
+  const handleDeleteSshKey = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    const selectedKey = pane?.sshLocalKeys.find((item) => item.privateKeyPath === pane.sshSelectedKeyPath) ?? null
+    if (!pane || !selectedKey) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '削除する SSH 鍵を選択してください',
+        lastError: '選択中のローカル SSH 鍵がありません。',
+        sshActionState: 'error',
+        sshActionMessage: '削除する SSH 鍵を選択してください。'
+      })
+      return
+    }
+
+    if (!window.confirm(`次の SSH 鍵を削除しますか？\n${selectedKey.privateKeyPath}`)) {
+      return
+    }
+
+    const startedAt = Date.now()
+    updatePane(paneId, {
+      status: 'running',
+      statusText: 'SSH 鍵を削除中です',
+      runningSince: startedAt,
+      lastActivityAt: startedAt,
+      lastError: null,
+      sshActionState: 'running',
+      sshActionMessage: `SSH 鍵を削除しています: ${selectedKey.privateKeyPath}`
+    })
+
+    try {
+      const result = await deleteSshKey(selectedKey.privateKeyPath)
+      const finishedAt = Date.now()
+      mutatePane(paneId, (currentPane) => {
+        const nextSelectedKey = result.remainingKeys.find((item) => item.privateKeyPath === currentPane.sshSelectedKeyPath) ?? result.remainingKeys[0] ?? null
+        const nextIdentityFile = currentPane.sshIdentityFile === selectedKey.privateKeyPath
+          ? nextSelectedKey?.privateKeyPath ?? ''
+          : currentPane.sshIdentityFile
+        const nextDiagnostics = [
+          ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('\u30ed\u30fc\u30ab\u30eb\u9375:') && !item.startsWith('ローカルの ~/.ssh に利用可能な鍵がありません')),
+          ...(nextSelectedKey ? [`\u30ed\u30fc\u30ab\u30eb\u9375: ${nextSelectedKey.privateKeyPath}`] : ['ローカルの ~/.ssh に利用可能な鍵がありません。必要ならここから生成してください。'])
+        ]
+
+        return {
+          ...currentPane,
+          sshLocalKeys: result.remainingKeys,
+          sshSelectedKeyPath: nextSelectedKey?.privateKeyPath ?? '',
+          sshIdentityFile: nextIdentityFile,
+          sshPublicKeyText: nextSelectedKey?.publicKey ?? '',
+          sshKeyName: nextSelectedKey?.name ?? 'id_ed25519',
+          sshKeyComment: nextSelectedKey?.comment ?? 'tako-cli-dev-tool',
+          sshDiagnostics: nextDiagnostics,
+          sshActionState: 'success',
+          sshActionMessage: result.deleted ? `SSH 鍵を削除しました: ${selectedKey.privateKeyPath}` : `SSH 鍵は既に削除されていました: ${selectedKey.privateKeyPath}`,
+          status: 'completed',
+          statusText: result.deleted ? 'SSH 鍵を削除しました' : 'SSH 鍵は既に削除済みでした',
+          runningSince: null,
+          lastActivityAt: finishedAt,
+          lastFinishedAt: finishedAt,
+          lastError: null,
+          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', result.deleted ? `SSH 鍵を削除しました: ${selectedKey.privateKeyPath}` : `SSH 鍵は既に削除済みでした: ${selectedKey.privateKeyPath}`, finishedAt)
+        }
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const failedAt = Date.now()
+      updatePane(paneId, {
+        status: 'error',
+        statusText: 'SSH 鍵の削除に失敗しました',
+        runningSince: null,
+        lastActivityAt: failedAt,
+        lastFinishedAt: failedAt,
+        lastError: message,
+        sshActionState: 'error',
+        sshActionMessage: `SSH 鍵の削除に失敗しました: ${message}`
+      })
+    }
+  }
+
+  const handleRemoveKnownHost = async (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane || !pane.sshHost.trim()) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: 'SSH ホストを入力してください',
+        lastError: 'known_hosts から削除するホストが未設定です。',
+        sshActionState: 'error',
+        sshActionMessage: 'known_hosts から削除するホストを入力してください。'
+      })
+      return
+    }
+
+    const host = pane.sshHost.trim()
+    const startedAt = Date.now()
+    updatePane(paneId, {
+      status: 'running',
+      statusText: 'known_hosts を整理中です',
+      runningSince: startedAt,
+      lastActivityAt: startedAt,
+      lastError: null,
+      sshActionState: 'running',
+      sshActionMessage: `${host} の known_hosts を整理しています...`
+    })
+
+    try {
+      const result = await removeKnownHost(host, buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? []))
+      const finishedAt = Date.now()
+      mutatePane(paneId, (currentPane) => ({
+        ...currentPane,
+        sshDiagnostics: [
+          `known_hosts を整理しました: ${result.removedHosts.length > 0 ? result.removedHosts.join(', ') : host}`,
+          ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('known_hosts を整理しました:'))
+        ],
+        sshActionState: 'success',
+        sshActionMessage: result.removedHosts.length > 0 ? `${host} の known_hosts を整理しました` : `${host} の known_hosts 該当エントリは見つかりませんでした`,
+        status: 'completed',
+        statusText: result.removedHosts.length > 0 ? 'known_hosts を整理しました' : 'known_hosts の該当エントリはありませんでした',
+        runningSince: null,
+        lastActivityAt: finishedAt,
+        lastFinishedAt: finishedAt,
+        lastError: null,
+        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', result.removedHosts.length > 0 ? `known_hosts を整理しました: ${result.removedHosts.join(', ')}` : `known_hosts の該当エントリはありませんでした: ${host}`, finishedAt)
+      }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const failedAt = Date.now()
+      updatePane(paneId, {
+        status: 'error',
+        statusText: 'known_hosts の整理に失敗しました',
+        runningSince: null,
+        lastActivityAt: failedAt,
+        lastFinishedAt: failedAt,
+        lastError: message,
+        sshActionState: 'error',
+        sshActionMessage: `known_hosts の整理に失敗しました: ${message}`
       })
     }
   }
@@ -3598,6 +3796,7 @@ function App() {
                   onLoadRemote={(paneId) => void handleLoadRemote(paneId)}
                   onBrowseRemote={(paneId, path) => void handleBrowseRemote(paneId, path)}
                   onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
+                  onOpenFileManager={(paneId) => void handleOpenFileManager(paneId)}
                   onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}
                   onOpenCommandPrompt={(paneId) => void handleOpenCommandPrompt(paneId)}
                   onRunShell={(paneId) => void handleRunShell(paneId)}
@@ -3609,7 +3808,9 @@ function App() {
                   onRemoveLocalWorkspace={handleRemoveLocalWorkspace}
                   onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
                   onGenerateSshKey={(paneId) => void handleGenerateSshKey(paneId)}
+                  onDeleteSshKey={(paneId) => void handleDeleteSshKey(paneId)}
                   onInstallSshPublicKey={(paneId) => void handleInstallSshPublicKey(paneId)}
+                  onRemoveKnownHost={(paneId) => void handleRemoveKnownHost(paneId)}
                   onTransferSshPath={(paneId, direction, options) => void handleTransferSshPath(paneId, direction, options)}
                   shareTargets={panes.filter((item) => item.id !== pane.id).map((item) => ({ id: item.id, title: item.title }))}
                 />

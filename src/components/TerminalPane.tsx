@@ -58,6 +58,7 @@ interface TerminalPaneProps {
   onLoadRemote: (paneId: string) => void
   onBrowseRemote: (paneId: string, path?: string) => void
   onCreateRemoteDirectory: (paneId: string) => void
+  onOpenFileManager: (paneId: string) => void
   onOpenWorkspace: (paneId: string) => void
   onOpenCommandPrompt: (paneId: string) => void
   onRunShell: (paneId: string) => void
@@ -69,7 +70,9 @@ interface TerminalPaneProps {
   onRemoveLocalWorkspace: (paneId: string) => void
   onBrowseLocal: (paneId: string, path: string) => void
   onGenerateSshKey: (paneId: string) => void
+  onDeleteSshKey: (paneId: string) => void
   onInstallSshPublicKey: (paneId: string) => void
+  onRemoveKnownHost: (paneId: string) => void
   onTransferSshPath: (paneId: string, direction: 'upload' | 'download', options?: TransferOptions) => void
   shareTargets: Array<{ id: string; title: string }>
   onSelectSession: (paneId: string, sessionKey: string | null) => void
@@ -111,6 +114,7 @@ const UI = {
   versionMismatchNote: '\u53e4\u3044\u7248\u3092\u4f7f\u3044\u7d9a\u3051\u308b\u3068\u3001CLI \u672c\u4f53\u3067\u5229\u7528\u3067\u304d\u308b\u6700\u65b0\u30e2\u30c7\u30eb\u304c\u3053\u306e\u4e00\u89a7\u306b\u51fa\u306a\u3044\u306a\u3069\u3001\u30e2\u30c7\u30eb\u4e0d\u4e00\u81f4\u304c\u8d77\u304d\u3048\u307e\u3059\u3002',
   versionCheckError: 'npm latest \u306e\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
   deletePane: '\u30da\u30a4\u30f3\u3092\u524a\u9664',
+  openExplorer: 'Explorer\u3067\u958b\u304f',
   openVsCode: 'VSCode\u3067\u958b\u304f',
   output: 'AI\u7d50\u679c\u51fa\u529b',
   outputEmpty: '\u307e\u3060\u51fa\u529b\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
@@ -151,9 +155,12 @@ const UI = {
   publicKey: '\u516c\u958b\u9375',
   selectedKey: '\u4f7f\u7528\u3059\u308b\u9375',
   keyName: '\u9375\u540d',
+  keyFileName: '\u9375\u30d5\u30a1\u30a4\u30eb\u540d',
+  keyComment: '\u30b3\u30e1\u30f3\u30c8',
   generateKey: '\u9375\u3092\u751f\u6210',
+  deleteKey: '\u9078\u629e\u4e2d\u306e\u9375\u3092\u524a\u9664',
   installKey: '\u516c\u958b\u9375\u3092\u767b\u9332',
-  sshDirectConnectionNote: '\u81ea\u5b85 Wi-Fi \u3084\u540c\u4e00 LAN \u306e\u76f4\u63a5\u63a5\u7d9a\u3067\u306f\u3001\u901a\u5e38\u306f User / Port / Password \u307e\u305f\u306f Identity File \u306e\u8a2d\u5b9a\u3060\u3051\u3067\u5341\u5206\u3067\u3059\u3002\u8e0f\u307f\u53f0\u3084\u793e\u5185\u30d7\u30ed\u30ad\u30b7\u304c\u5fc5\u8981\u306a\u5834\u5408\u306f SSH config \u5074\u3067\u7ba1\u7406\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
+  removeKnownHost: 'known_hosts \u3092\u6574\u7406',
   diagnostics: '\u63a5\u7d9a\u8a3a\u65ad / CLI\u78ba\u8a8d',
   diagnosticsOk: 'OK',
   diagnosticsNg: 'NG',
@@ -314,6 +321,7 @@ export function TerminalPane({
   onLoadRemote,
   onBrowseRemote,
   onCreateRemoteDirectory,
+  onOpenFileManager,
   onOpenWorkspace,
   onRunShell,
   onOpenPath,
@@ -323,7 +331,9 @@ export function TerminalPane({
   onRemoveLocalWorkspace,
   onBrowseLocal,
   onGenerateSshKey,
+  onDeleteSshKey,
   onInstallSshPublicKey,
+  onRemoveKnownHost,
   onTransferSshPath,
   shareTargets,
   onSelectSession
@@ -695,6 +705,7 @@ export function TerminalPane({
             <div className="pane-action-row launch-row">
               <button type="button" className="secondary-button pane-session-button" disabled={isBusy} onClick={() => onStartNewSession(pane.id)}><RefreshCcw size={16} />{UI.newSession}</button>
               <button type="button" className="secondary-button pane-vscode-button" disabled={isBusy} onClick={() => onDuplicate(pane.id)}><Copy size={16} />{UI.duplicatePane}</button>
+              <button type="button" className="secondary-button pane-vscode-button" disabled={pane.workspaceMode !== 'local' || !pane.localWorkspacePath} onClick={() => onOpenFileManager(pane.id)}><Folder size={16} />{UI.openExplorer}</button>
               <button type="button" className="secondary-button pane-vscode-button" disabled={pane.workspaceMode === 'local' ? !pane.localWorkspacePath : !pane.sshHost || !pane.remoteWorkspacePath} onClick={() => onOpenWorkspace(pane.id)}><FolderOpen size={16} />{UI.openVsCode}</button>
             </div>
           </div>
@@ -991,18 +1002,35 @@ export function TerminalPane({
                           <span>{UI.selectedKey}</span>
                           <select value={pane.sshSelectedKeyPath} onChange={(event) => {
                             const selected = pane.sshLocalKeys.find((item) => item.privateKeyPath === event.target.value) ?? null
-                            onUpdate(pane.id, { sshSelectedKeyPath: event.target.value, sshIdentityFile: event.target.value, sshPublicKeyText: selected?.publicKey ?? pane.sshPublicKeyText })
+                            onUpdate(pane.id, {
+                              sshSelectedKeyPath: event.target.value,
+                              sshIdentityFile: event.target.value,
+                              sshPublicKeyText: selected?.publicKey ?? pane.sshPublicKeyText,
+                              sshKeyName: selected?.name ?? pane.sshKeyName,
+                              sshKeyComment: selected?.comment ?? pane.sshKeyComment
+                            })
                           }}>
                             {pane.sshLocalKeys.map((key) => <option key={key.privateKeyPath} value={key.privateKeyPath}>{key.name}</option>)}
                           </select>
                         </label>
                       )}
                     </div>
-                    <p className="ssh-help-note">{UI.sshDirectConnectionNote}</p>
+                    <div className="pane-meta-grid compact-grid ssh-config-grid compact-ssh-grid">
+                      <label>
+                        <span>{UI.keyFileName}</span>
+                        <input value={pane.sshKeyName} onChange={(event) => onUpdate(pane.id, { sshKeyName: event.target.value })} placeholder="id_ed25519-raspi" />
+                      </label>
+                      <label>
+                        <span>{UI.keyComment}</span>
+                        <input value={pane.sshKeyComment} onChange={(event) => onUpdate(pane.id, { sshKeyComment: event.target.value })} placeholder="user@device" />
+                      </label>
+                    </div>
 
                     <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions">
                       <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}>{UI.generateKey}</button>
+                      <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshSelectedKeyPath} onClick={() => onDeleteSshKey(pane.id)}>{UI.deleteKey}</button>
                       <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}>{UI.installKey}</button>
+                      <button type="button" className="secondary-button" disabled={pane.sshActionState === 'running' || !pane.sshHost.trim()} onClick={() => onRemoveKnownHost(pane.id)}>{UI.removeKnownHost}</button>
                     </div>
 
                     {pane.sshActionMessage && (
