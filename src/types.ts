@@ -229,6 +229,7 @@ export interface PaneState {
   sshDiagnostics: string[]
   sshActionState: 'idle' | 'running' | 'success' | 'error'
   sshActionMessage: string | null
+  sshPasswordPulseAt: number
   sshLocalPath: string
   sshRemotePath: string
   remoteWorkspacePath: string

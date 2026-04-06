@@ -176,6 +176,7 @@ const UI = {
   diagnosticsOk: 'OK',
   diagnosticsNg: 'NG',
   diagnosticsPending: '\u672a\u78ba\u8a8d',
+  cliAvailability: 'CLI\u5229\u7528\u72b6\u6cc1',
   remoteCliStatus: 'SSH \u63a5\u7d9a\u5148 CLI',
   remoteCliPending: '\u30ea\u30e2\u30fc\u30c8\u63a5\u7d9a\u5f8c\u306b\u8868\u793a\u3057\u307e\u3059\u3002',
   cliAvailable: '\u5229\u7528\u53ef',
@@ -325,6 +326,36 @@ function getRemoteParentPath(currentPath: string, workspaceRoot: string): string
   return parent === root || parent.startsWith(`${root}/`) ? parent : root
 }
 
+function formatRemoteHostLabel(host: string, username: string): string {
+  if (!host) {
+    return 'ssh'
+  }
+
+  if (!username || host.includes('@')) {
+    return host
+  }
+
+  return `${username}@${host}`
+}
+
+function formatRemoteShellPath(currentPath: string, homeDirectory: string | null): string {
+  const normalizedCurrent = normalizePosixPath(currentPath || '~')
+  if (!homeDirectory) {
+    return normalizedCurrent
+  }
+
+  const normalizedHome = normalizePosixPath(homeDirectory)
+  if (normalizedCurrent === normalizedHome) {
+    return '~'
+  }
+
+  if (normalizedCurrent.startsWith(`${normalizedHome}/`)) {
+    return `~${normalizedCurrent.slice(normalizedHome.length)}`
+  }
+
+  return normalizedCurrent
+}
+
 function readDraggedLocalPath(event: ReactDragEvent<HTMLElement>): string {
   return event.dataTransfer.getData(LOCAL_DRAG_MIME).trim()
 }
@@ -383,6 +414,7 @@ export function TerminalPane({
   const [isShellExpanded, setIsShellExpanded] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isVersionAccordionOpen, setIsVersionAccordionOpen] = useState(false)
+  const [isPasswordPulseActive, setIsPasswordPulseActive] = useState(false)
   const [remoteDropTarget, setRemoteDropTarget] = useState<string | null>(null)
   const menuRef = useRef<HTMLDetailsElement | null>(null)
   const promptRef = useRef<HTMLTextAreaElement | null>(null)
@@ -433,6 +465,27 @@ export function TerminalPane({
   }, [pane.shellOutput, pane.shellCommand, isShellExpanded])
 
   useEffect(() => {
+    if (!pane.sshPasswordPulseAt) {
+      return
+    }
+
+    setIsPasswordPulseActive(true)
+    const timer = window.setTimeout(() => {
+      setIsPasswordPulseActive(false)
+    }, 1500)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [pane.sshPasswordPulseAt])
+
+  useEffect(() => {
+    if (pane.sshPassword.trim()) {
+      setIsPasswordPulseActive(false)
+    }
+  }, [pane.sshPassword])
+
+  useEffect(() => {
     if (pane.shellRunning) {
       return
     }
@@ -456,10 +509,11 @@ export function TerminalPane({
   const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
+  const matchedSshHost = sshHosts.find((item) => item.alias === pane.sshHost.trim()) ?? null
   const currentShellPath = pane.workspaceMode === 'local' ? (pane.localShellPath || pane.localWorkspacePath) : (pane.remoteShellPath || pane.remoteWorkspacePath)
   const shellPromptLabel = pane.workspaceMode === 'local'
     ? `${currentShellPath || '~'}>`
-    : `${pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim() || 'ssh'}:${currentShellPath || '~'}$`
+    : `${formatRemoteHostLabel(pane.sshHost.trim(), pane.sshUser.trim() || matchedSshHost?.user || '')}:${formatRemoteShellPath(currentShellPath || pane.remoteHomeDirectory || '~', pane.remoteHomeDirectory)}$`
   const canRunShell = pane.shellCommand.trim().length > 0 && (pane.workspaceMode === 'local' ? currentShellPath.trim().length > 0 : Boolean(pane.sshHost.trim() && currentShellPath.trim()))
   const localParentPath = useMemo(() => getLocalParentPath(pane.localBrowserPath || pane.localWorkspacePath, pane.localWorkspacePath), [pane.localBrowserPath, pane.localWorkspacePath])
   const isAtLocalWorkspaceTop = normalizeWindowsPath(pane.localBrowserPath || pane.localWorkspacePath) === normalizeWindowsPath(pane.localWorkspacePath)
@@ -562,13 +616,18 @@ export function TerminalPane({
     : providerVersionStatus === 'current'
       ? `${versionInfo?.installedVersion ?? UI.versionUnknown}`
       : `${versionInfo?.installedVersion ?? UI.versionUnknown} / ${UI.versionStatusUnknown}`
-  const matchedSshHost = sshHosts.find((item) => item.alias === pane.sshHost.trim()) ?? null
   const effectiveIdentityFile = pane.sshSelectedKeyPath.trim() || pane.sshIdentityFile.trim() || matchedSshHost?.identityFile || ''
   const sshKeyLabel = getShortPathLabel(effectiveIdentityFile)
+  const localCliStates = REMOTE_PROVIDER_ORDER.map((provider) => ({
+    provider,
+    installed: Boolean(catalogs[provider]?.available)
+  }))
   const remoteCliStates = REMOTE_PROVIDER_ORDER.map((provider) => ({
     provider,
     installed: pane.remoteAvailableProviders.includes(provider)
   }))
+  const currentCliStates = pane.workspaceMode === 'local' ? localCliStates : remoteCliStates
+  const currentCliEnvironmentLabel = pane.workspaceMode === 'local' ? 'ローカル' : 'リモート'
   const hasRemoteConfiguration = Boolean(
     pane.sshHost.trim() ||
     pane.sshUser.trim() ||
@@ -580,6 +639,12 @@ export function TerminalPane({
   )
   const localSettingsStatus = catalog?.available ? 'ok' : 'ng'
   const remoteSettingsStatus = isRemoteConnected && pane.remoteAvailableProviders.includes(pane.provider) ? 'ok' : 'ng'
+  const localWorkspaceStatus = pane.localWorkspacePath.trim() ? 'ok' : 'pending'
+  const remoteWorkspaceStatus = pane.sshHost.trim() && pane.remoteWorkspacePath.trim() ? 'ok' : 'pending'
+  const currentWorkspaceStatus = pane.workspaceMode === 'local' ? localWorkspaceStatus : remoteWorkspaceStatus
+  const currentWorkspaceStatusLabel = pane.workspaceMode === 'local'
+    ? `ローカル ${currentWorkspaceStatus === 'ok' ? 'OK' : '未設定'}`
+    : `リモート ${currentWorkspaceStatus === 'ok' ? 'OK' : '未設定'}`
   const connectionSettingsStatus = pane.sshHost.trim() ? 'ok' : 'pending'
   const connectionSettingsLabel = connectionSettingsStatus === 'ok' ? UI.connectionConfigured : UI.connectionUnconfigured
   const sshDiagnosticsStatus = !isRemoteConnected && pane.sshDiagnostics.length === 0
@@ -928,6 +993,21 @@ export function TerminalPane({
                     )}
                   </select>
                 </label>
+                <div className="settings-action-field full-span settings-cli-availability">
+                  <div className="settings-cli-availability-head">
+                    <span className="settings-cli-availability-label">{UI.cliAvailability}</span>
+                    <span className={`settings-env-chip ${pane.workspaceMode === 'local' ? localSettingsStatus : isRemoteConnected ? 'ok' : 'pending'}`}>{currentCliEnvironmentLabel}</span>
+                  </div>
+                  <div className="cli-provider-grid" aria-label={UI.cliAvailability}>
+                    {currentCliStates.map(({ provider, installed }) => (
+                      <div key={`${pane.id}-${pane.workspaceMode}-${provider}`} className={`cli-provider-card ${installed ? 'available' : 'unavailable'}`}>
+                        <span className="cli-provider-icon" aria-hidden="true">{installed ? <CheckCircle2 size={15} /> : <X size={15} />}</span>
+                        <span className="cli-provider-label">{catalogs[provider].label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {pane.workspaceMode === 'ssh' && !isRemoteConnected ? <p className="field-support-note">{UI.remoteCliPending}</p> : null}
+                </div>
                 <div className="settings-action-field full-span">
                   <span>{UI.updateCliField}</span>
                   <details className={`pane-accordion provider-version-accordion ${providerVersionStatus}`} open={isVersionAccordionOpen} onToggle={(event) => setIsVersionAccordionOpen((event.currentTarget as HTMLDetailsElement).open)}>
@@ -982,7 +1062,12 @@ export function TerminalPane({
           </details>
           <details className="pane-accordion workspace-accordion" open={pane.workspaceOpen} onToggle={(event) => onUpdate(pane.id, { workspaceOpen: (event.currentTarget as HTMLDetailsElement).open })}>
             <summary className="accordion-summary">
-              <span className="accordion-label"><FolderOpen size={15} />{UI.workspace}</span>
+              <span className="accordion-label accordion-label-with-statuses">
+                <span className="accordion-label-main"><FolderOpen size={15} />{UI.workspace}</span>
+                <span className="settings-env-statuses">
+                  <span className={`settings-env-chip ${currentWorkspaceStatus}`}>{currentWorkspaceStatusLabel}</span>
+                </span>
+              </span>
               <span className="accordion-meta">
                 <span className="accordion-value">{workspaceLabel}</span>
                 <span className={`accordion-caret ${pane.workspaceOpen ? 'is-open' : ''}`}><ChevronDown size={14} /></span>
@@ -1069,9 +1154,9 @@ export function TerminalPane({
                             <input value={pane.sshPort} onChange={(event) => onUpdate(pane.id, { sshPort: event.target.value })} placeholder="22" />
                           </label>
                           <p className="field-support-note ssh-inline-note ssh-inline-note-nowrap">{UI.userHint}</p>
-                          <label className="full-span">
+                          <label className={`full-span ssh-password-field ${isPasswordPulseActive ? 'is-attention' : ''}`}>
                             <span>Password</span>
-                            <input type="password" value={pane.sshPassword} onChange={(event) => onUpdate(pane.id, { sshPassword: event.target.value })} placeholder="optional" />
+                            <input type="password" aria-invalid={isPasswordPulseActive} value={pane.sshPassword} onChange={(event) => onUpdate(pane.id, { sshPassword: event.target.value, sshPasswordPulseAt: 0 })} placeholder="optional" />
                             <small className="field-support-note">{UI.passwordHint}</small>
                           </label>
                         </div>
@@ -1149,21 +1234,6 @@ export function TerminalPane({
                           </span>
                         </summary>
                         <div className="ssh-mini-body">
-                          <div className="settings-availability-panel">
-                            <div className="section-headline compact-headline">
-                              <strong>{UI.remoteCliStatus}</strong>
-                              {!isRemoteConnected ? <span>{UI.remoteCliPending}</span> : null}
-                            </div>
-                            {isRemoteConnected ? (
-                              <div className="badge-row">
-                                {remoteCliStates.map(({ provider, installed }) => (
-                                  <span key={`${pane.id}-${provider}`} className={installed ? 'availability-badge' : 'availability-badge muted'}>
-                                    {`${catalogs[provider].label}: ${installed ? UI.cliAvailable : UI.cliMissing}`}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : <p className="panel-placeholder compact-error">{UI.remoteCliPending}</p>}
-                          </div>
                           {pane.sshDiagnostics.length > 0 ? <div className="diagnostic-list">{pane.sshDiagnostics.map((item, index) => <div key={`${pane.id}-diag-${index}`} className="diagnostic-item">{item}</div>)}</div> : <p className="panel-placeholder compact-error">{UI.remoteCliPending}</p>}
                         </div>
                       </details>

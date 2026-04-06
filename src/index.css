@@ -866,6 +866,74 @@ label > span {
   font-size: 0.88rem;
 }
 
+.settings-cli-availability {
+  gap: 10px;
+}
+
+.settings-cli-availability-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-cli-availability-label {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.cli-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cli-provider-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cli-provider-card.available {
+  border-color: rgba(124, 214, 164, 0.28);
+  background: rgba(59, 118, 83, 0.2);
+  color: #d7f6e4;
+}
+
+.cli-provider-card.unavailable {
+  border-color: rgba(121, 157, 144, 0.16);
+  background: rgba(39, 52, 57, 0.24);
+  color: #99aaa4;
+}
+
+.cli-provider-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cli-provider-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+@media (max-width: 860px) {
+  .cli-provider-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .provider-version-card {
   display: grid;
   gap: 10px;
@@ -1727,6 +1795,12 @@ textarea {
   color: #cfddd8;
 }
 
+.settings-env-chip.pending {
+  border-color: rgba(121, 157, 144, 0.2);
+  background: rgba(39, 52, 57, 0.3);
+  color: #b9c8c2;
+}
+
 .accordion-meta {
   min-width: 0;
   display: inline-flex;
@@ -2051,6 +2125,7 @@ textarea {
 .shell-prompt {
   flex: 0 0 auto;
   margin: 0;
+  margin-right: 1ch;
   padding-top: 0;
   color: #c7f6ec;
   font-family: 'Cascadia Mono', 'Consolas', 'SFMono-Regular', monospace;
@@ -2414,6 +2489,29 @@ textarea {
   white-space: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+.ssh-password-field input {
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.ssh-password-field.is-attention input {
+  border-color: rgba(255, 127, 127, 0.52);
+  box-shadow: 0 0 0 1px rgba(255, 127, 127, 0.16), 0 0 0 10px rgba(255, 127, 127, 0.04);
+  animation: ssh-password-pulse 0.72s ease 2;
+}
+
+@keyframes ssh-password-pulse {
+  0%,
+  100% {
+    border-color: rgba(255, 127, 127, 0.24);
+    box-shadow: 0 0 0 0 rgba(255, 127, 127, 0);
+  }
+
+  50% {
+    border-color: rgba(255, 127, 127, 0.62);
+    box-shadow: 0 0 0 1px rgba(255, 127, 127, 0.22), 0 0 0 12px rgba(255, 127, 127, 0.08);
+  }
 }
 
 .ssh-support-note {

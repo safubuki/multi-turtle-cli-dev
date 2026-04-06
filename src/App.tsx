@@ -651,6 +651,7 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     sshDiagnostics: [],
     sshActionState: 'idle',
     sshActionMessage: null,
+    sshPasswordPulseAt: 0,
     sshLocalPath: firstWorkspace?.path ?? '',
     sshRemotePath: '',
     remoteWorkspacePath: '',
@@ -1026,6 +1027,7 @@ function normalizePane(
       : [],
     sshActionState: rawPane.sshActionState === 'running' || rawPane.sshActionState === 'success' || rawPane.sshActionState === 'error' ? rawPane.sshActionState : 'idle',
     sshActionMessage: typeof rawPane.sshActionMessage === 'string' ? rawPane.sshActionMessage : null,
+    sshPasswordPulseAt: 0,
     sshLocalPath: typeof rawPane.sshLocalPath === 'string' ? rawPane.sshLocalPath : localWorkspacePath,
     sshRemotePath: typeof rawPane.sshRemotePath === 'string' ? rawPane.sshRemotePath : '',
     remoteWorkspacePath: typeof rawPane.remoteWorkspacePath === 'string' ? rawPane.remoteWorkspacePath : '',
@@ -2115,6 +2117,7 @@ function App() {
       sessionScopeKey: null,
       sshActionState: 'idle',
       sshActionMessage: null,
+      sshPasswordPulseAt: 0,
       lastRunAt: null,
       runningSince: null,
       lastActivityAt: null,
@@ -3409,7 +3412,21 @@ function App() {
         statusText: '\u63a5\u7d9a\u5148\u3068\u516c\u958b\u9375\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
         lastError: 'SSH \u516c\u958b\u9375\u306e\u767b\u9332\u306b\u5fc5\u8981\u306a\u60c5\u5831\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002',
         sshActionState: 'error',
-        sshActionMessage: '接続先と公開鍵を確認してください。'
+        sshActionMessage: '接続先と公開鍵を確認してください。',
+        sshPasswordPulseAt: 0
+      })
+      return
+    }
+
+    if (!pane.sshPassword.trim()) {
+      const pulseAt = Date.now()
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: 'パスワードを入力してください',
+        lastError: '公開鍵を接続先に登録する場合はパスワードを設定してください。',
+        sshActionState: 'error',
+        sshActionMessage: '公開鍵を接続先に登録する場合はパスワードを設定してください',
+        sshPasswordPulseAt: pulseAt
       })
       return
     }
@@ -3422,7 +3439,8 @@ function App() {
       lastActivityAt: startedAt,
       lastError: null,
       sshActionState: 'running',
-      sshActionMessage: `公開鍵を ${pane.sshHost.trim()} の接続先へ登録中です...`
+      sshActionMessage: `公開鍵を ${pane.sshHost.trim()} の接続先へ登録中です...`,
+      sshPasswordPulseAt: 0
     })
 
     try {
@@ -3439,6 +3457,7 @@ function App() {
         lastActivityAt: finishedAt,
         lastFinishedAt: finishedAt,
         lastError: null,
+        sshPasswordPulseAt: 0,
         streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', `公開鍵を接続先へ登録しました: ${pane.sshHost.trim()}`, finishedAt)
       }))
     } catch (error) {
@@ -3452,7 +3471,8 @@ function App() {
         lastFinishedAt: failedAt,
         lastError: message,
         sshActionState: 'error',
-        sshActionMessage: `公開鍵の登録に失敗しました: ${message}`
+        sshActionMessage: `公開鍵の登録に失敗しました: ${message}`,
+        sshPasswordPulseAt: 0
       })
     }
   }
