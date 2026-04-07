@@ -1371,11 +1371,22 @@ textarea {
 .activity-entry header,
 .history-entry header {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 8px;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.run-log-entry-header-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.run-log-copy-button {
+  flex: 0 0 auto;
 }
 
 .activity-entry p,
@@ -2662,6 +2673,10 @@ textarea {
   gap: 8px;
 }
 
+.browser-toolbar-actions .browser-refresh-button {
+  flex: 0 0 auto;
+}
+
 .wide-toolbar-actions {
   max-width: 48%;
 }
@@ -3367,20 +3382,36 @@ textarea {
   align-content: start;
 }
 
-.run-logs-modal-grid {
+.run-logs-modal-toolbar {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.run-logs-tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-logs-tab-button {
+  min-width: 144px;
+  justify-content: space-between;
   gap: 12px;
+}
+
+.run-logs-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.run-logs-panel {
   min-height: 0;
 }
 
-.run-logs-modal .activity-panel,
-.run-logs-modal .history-panel {
-  min-height: 0;
-}
-
-.run-logs-modal .activity-feed,
-.run-logs-modal .history-feed {
+.run-logs-panel .activity-feed,
+.run-logs-panel .history-feed {
   max-height: 54vh;
 }
 
@@ -3395,7 +3426,12 @@ textarea {
 }
 
 @media (max-width: 900px) {
-  .run-logs-modal-grid {
-    grid-template-columns: 1fr;
+  .run-logs-tab-button {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+  }
+
+  .run-logs-action-row {
+    justify-content: flex-start;
   }
 }

@@ -540,6 +540,29 @@ function appendSessionRecord(history: PaneSessionRecord[], record: PaneSessionRe
   return [record, ...history].slice(0, MAX_SESSION_HISTORY)
 }
 
+function extractGeminiQuotaResetWindow(message: string): string | null {
+  const match = message.match(/quota will reset after\s+([^.!\n]+)/i)
+  return match?.[1]?.trim() || null
+}
+
+function getProviderIssueSummary(provider: ProviderId, message: string): { displayMessage: string; status: PaneStatus; statusText: string } | null {
+  if (
+    provider === 'gemini' &&
+    /exhausted your capacity on this model|quota will reset after|resource_exhausted|too many requests/i.test(message)
+  ) {
+    const resetWindow = extractGeminiQuotaResetWindow(message)
+    return {
+      displayMessage: resetWindow
+        ? `Gemini の利用上限に達しました。${resetWindow} 後に再実行するか、別モデルや別 CLI に切り替えてください。`
+        : 'Gemini の利用上限に達しました。少し待って再実行するか、別モデルや別 CLI に切り替えてください。',
+      status: 'attention',
+      statusText: 'Gemini の利用上限に達しました'
+    }
+  }
+
+  return null
+}
+
 function normalizeSshHostKey(host: string): string {
   return host.trim().toLowerCase()
 }
@@ -1181,6 +1204,7 @@ function App() {
   const streamErroredRef = useRef<Set<string>>(new Set())
   const shellControllersRef = useRef<Record<string, AbortController>>({})
   const shellStopRequestedRef = useRef<Set<string>>(new Set())
+  const workspaceRefreshTimersRef = useRef<Record<string, number>>({})
   const matrixTileRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const paneCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const matrixTileRectsRef = useRef<Map<string, DOMRect>>(new Map())
@@ -1199,6 +1223,9 @@ function App() {
 
   useEffect(() => {
     return () => {
+      for (const timer of Object.values(workspaceRefreshTimersRef.current)) {
+        window.clearTimeout(timer)
+      }
       for (const controller of Object.values(controllersRef.current)) {
         controller.abort()
       }
@@ -1435,6 +1462,39 @@ function App() {
       streamEntries: appendStreamEntry(pane.streamEntries, 'system', text, eventAt),
       lastActivityAt: eventAt
     }))
+  }
+
+  const scheduleWorkspaceContentsRefresh = (paneId: string, delay = 240) => {
+    const existingTimer = workspaceRefreshTimersRef.current[paneId]
+    if (existingTimer) {
+      window.clearTimeout(existingTimer)
+    }
+
+    workspaceRefreshTimersRef.current[paneId] = window.setTimeout(() => {
+      delete workspaceRefreshTimersRef.current[paneId]
+
+      const pane = panesRef.current.find((item) => item.id === paneId)
+      if (!pane) {
+        return
+      }
+
+      if (pane.workspaceMode === 'local') {
+        const targetPath = pane.localBrowserPath.trim() || pane.localWorkspacePath.trim()
+        if (targetPath) {
+          void handleBrowseLocal(paneId, targetPath)
+        }
+        return
+      }
+
+      const targetPath = pane.remoteBrowserPath.trim() || pane.remoteWorkspacePath.trim()
+      if (pane.sshHost.trim() && targetPath) {
+        void handleBrowseRemote(paneId, targetPath)
+      }
+    }, delay)
+  }
+
+  const handleRefreshWorkspaceContents = (paneId: string) => {
+    scheduleWorkspaceContentsRefresh(paneId, 0)
   }
 
   const scrollToPane = (paneId: string) => {
@@ -1800,12 +1860,19 @@ function App() {
     if (event.type === 'status' || event.type === 'tool' || event.type === 'stderr') {
       const kind = event.type === 'status' ? 'status' : event.type === 'tool' ? 'tool' : 'stderr'
       const normalizedText = sanitizeTerminalText(event.text).trim()
-      mutatePane(paneId, (pane) => ({
-        ...pane,
-        lastActivityAt: eventAt,
-        streamEntries: appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt),
-        lastError: event.type === 'stderr' ? normalizedText : pane.lastError
-      }))
+      mutatePane(paneId, (pane) => {
+        const issueSummary = event.type === 'stderr' ? getProviderIssueSummary(pane.provider, normalizedText) : null
+
+        return {
+          ...pane,
+          lastActivityAt: eventAt,
+          streamEntries:
+            issueSummary && !pane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
+              ? appendStreamEntry(appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt), 'system', issueSummary.displayMessage, eventAt)
+              : appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt),
+          lastError: event.type === 'stderr' ? issueSummary?.displayMessage ?? normalizedText : pane.lastError
+        }
+      })
       return
     }
 
@@ -1861,6 +1928,7 @@ function App() {
       } else if (autoShareTargetIds.length > 0) {
         setPendingShareSelection(paneId, assistantEntry.text, { mode: 'direct', targetPaneIds: autoShareTargetIds })
       }
+      scheduleWorkspaceContentsRefresh(paneId)
       return
     }
 
@@ -1868,25 +1936,27 @@ function App() {
       const message = sanitizeTerminalText(event.message).trim()
       streamErroredRef.current.add(paneId)
       mutatePane(paneId, (pane) => {
+        const issueSummary = getProviderIssueSummary(pane.provider, message)
         const systemEntry: PaneLogEntry = {
           id: createId('log'),
           role: 'system',
-          text: message,
+          text: issueSummary?.displayMessage ?? message,
           createdAt: eventAt
         }
 
         return {
           ...pane,
           logs: appendLogEntry(pane.logs, systemEntry),
-          status: 'error',
-          statusText: statusLabel('error'),
+          status: issueSummary?.status ?? 'error',
+          statusText: issueSummary?.statusText ?? statusLabel('error'),
           runningSince: null,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
-          lastError: message,
+          lastError: issueSummary?.displayMessage ?? message,
           streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', message, eventAt)
         }
       })
+      scheduleWorkspaceContentsRefresh(paneId)
     }
   }
 
@@ -2017,25 +2087,33 @@ function App() {
       if (!stopped && !streamErrored) {
         const failedAt = Date.now()
         mutatePane(paneId, (currentPane) => {
+          const issueSummary = getProviderIssueSummary(currentPane.provider, message)
+          const displayMessage = issueSummary?.displayMessage ?? message
           const systemEntry: PaneLogEntry = {
             id: createId('log'),
             role: 'system',
-            text: message,
+            text: displayMessage,
             createdAt: failedAt
           }
+
+          const nextStreamEntries = appendStreamEntry(currentPane.streamEntries, 'stderr', message, failedAt)
 
           return {
             ...currentPane,
             logs: appendLogEntry(currentPane.logs, systemEntry),
-            status: 'error',
-            statusText: statusLabel('error'),
+            status: issueSummary?.status ?? 'error',
+            statusText: issueSummary?.statusText ?? statusLabel('error'),
             runningSince: null,
             lastActivityAt: failedAt,
             lastFinishedAt: failedAt,
-            lastError: message,
-            streamEntries: appendStreamEntry(currentPane.streamEntries, 'stderr', message, failedAt)
+            lastError: displayMessage,
+            streamEntries:
+              issueSummary && !currentPane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
+                ? appendStreamEntry(nextStreamEntries, 'system', issueSummary.displayMessage, failedAt)
+                : nextStreamEntries
           }
         })
+        scheduleWorkspaceContentsRefresh(paneId)
       }
 
       if (stopped) {
@@ -2304,6 +2382,54 @@ function App() {
 
   const handleCopyProviderCommand = async (paneId: string, text: string, successMessage: string) => {
     await copyPaneText(paneId, text, successMessage)
+  }
+
+  const handleCopyText = async (paneId: string, text: string, successMessage: string) => {
+    await copyPaneText(paneId, text, successMessage)
+  }
+
+  const handleClearSelectedSessionHistory = (paneId: string, sessionKey: string | null) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane) {
+      return
+    }
+
+    const confirmMessage = sessionKey ? '選択中のセッション履歴をクリアしますか？' : '現在のセッション履歴をクリアしますか？'
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    mutatePane(paneId, (currentPane) => {
+      if (sessionKey) {
+        return {
+          ...currentPane,
+          sessionHistory: currentPane.sessionHistory.filter((session) => session.key !== sessionKey),
+          selectedSessionKey: currentPane.selectedSessionKey === sessionKey ? null : currentPane.selectedSessionKey
+        }
+      }
+
+      return resetActiveSessionFields(currentPane)
+    })
+  }
+
+  const handleClearAllSessionHistory = (paneId: string) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane) {
+      return
+    }
+
+    if (!hasSessionContent(pane) && pane.sessionHistory.length === 0) {
+      return
+    }
+
+    if (!window.confirm('このペインの会話履歴とストリーム履歴をすべてクリアしますか？')) {
+      return
+    }
+
+    mutatePane(paneId, (currentPane) => ({
+      ...resetActiveSessionFields(currentPane),
+      sessionHistory: []
+    }))
   }
 
   const handleBrowseLocal = async (paneId: string, targetPath: string) => {
@@ -3933,13 +4059,17 @@ function App() {
                   }
                   onCopyOutput={(paneId) => void handleCopyOutput(paneId)}
                   onCopyProviderCommand={(paneId, text, successMessage) => void handleCopyProviderCommand(paneId, text, successMessage)}
+                  onCopyText={(paneId, text, successMessage) => void handleCopyText(paneId, text, successMessage)}
                   onDuplicate={handleDuplicatePane}
                   onStartNewSession={handleStartNewSession}
                   onResetSession={handleResetSession}
                   onSelectSession={handleSelectSession}
+                  onClearSelectedSessionHistory={handleClearSelectedSessionHistory}
+                  onClearAllSessionHistory={handleClearAllSessionHistory}
                   onDelete={handleDeletePane}
                   onLoadRemote={(paneId) => void handleLoadRemote(paneId)}
                   onBrowseRemote={(paneId, path) => void handleBrowseRemote(paneId, path)}
+                  onRefreshWorkspaceContents={handleRefreshWorkspaceContents}
                   onCreateRemoteDirectory={(paneId) => void handleCreateRemoteDirectory(paneId)}
                   onOpenFileManager={(paneId) => void handleOpenFileManager(paneId)}
                   onOpenWorkspace={(paneId) => void handleOpenWorkspace(paneId)}

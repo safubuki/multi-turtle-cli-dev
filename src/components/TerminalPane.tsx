@@ -7,7 +7,8 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
-  Copy,  FileText,
+  Copy,
+  FileText,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -25,7 +26,7 @@ import {
   Wifi,
   X
 } from 'lucide-react'
-import type { LocalWorkspace, PaneState, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
+import type { LocalWorkspace, PaneLogEntry, PaneState, PaneStreamEntry, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
 
 interface TransferOptions {
   localPath?: string
@@ -52,12 +53,14 @@ interface TerminalPaneProps {
   onShareToPane: (sourcePaneId: string, targetPaneId: string) => void
   onCopyOutput: (paneId: string) => void
   onCopyProviderCommand: (paneId: string, text: string, successMessage: string) => void
+  onCopyText: (paneId: string, text: string, successMessage: string) => void
   onDuplicate: (paneId: string) => void
   onStartNewSession: (paneId: string) => void
   onResetSession: (paneId: string) => void
   onDelete: (paneId: string) => void
   onLoadRemote: (paneId: string) => void
   onBrowseRemote: (paneId: string, path?: string) => void
+  onRefreshWorkspaceContents: (paneId: string) => void
   onCreateRemoteDirectory: (paneId: string) => void
   onOpenFileManager: (paneId: string) => void
   onOpenWorkspace: (paneId: string) => void
@@ -77,6 +80,8 @@ interface TerminalPaneProps {
   onTransferSshPath: (paneId: string, direction: 'upload' | 'download', options?: TransferOptions) => void
   shareTargets: Array<{ id: string; title: string }>
   onSelectSession: (paneId: string, sessionKey: string | null) => void
+  onClearSelectedSessionHistory: (paneId: string, sessionKey: string | null) => void
+  onClearAllSessionHistory: (paneId: string) => void
 }
 
 const UI = {
@@ -201,6 +206,12 @@ const UI = {
   selectedCount: '\u4ef6\u9078\u629e',
   runLogs: '\u5b9f\u884c\u30ed\u30b0',
   runLogsEmpty: '\u307e\u3060\u5b9f\u884c\u30ed\u30b0\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
+  refreshContents: '\u5185\u5bb9\u3092\u66f4\u65b0',
+  copyEntry: '\u3053\u306e\u9805\u76ee\u3092\u30b3\u30d4\u30fc',
+  copyConversationAll: '\u4f1a\u8a71\u5c65\u6b74\u3092\u4e00\u62ec\u30b3\u30d4\u30fc',
+  copyStreamAll: '\u30b9\u30c8\u30ea\u30fc\u30e0\u3092\u4e00\u62ec\u30b3\u30d4\u30fc',
+  clearSelectedSessionHistory: '\u9078\u629e\u4e2d\u3092\u30af\u30ea\u30a2',
+  clearAllSessionHistory: '\u5168\u5c65\u6b74\u3092\u30af\u30ea\u30a2',
   session: '\u30bb\u30c3\u30b7\u30e7\u30f3',
   sessions: '\u30bb\u30c3\u30b7\u30e7\u30f3',
   stream: '\u30b9\u30c8\u30ea\u30fc\u30e0',
@@ -263,6 +274,18 @@ function getOutputText(pane: PaneState): string {
   }
 
   return ''
+}
+
+function getConversationEntryLabel(entry: PaneLogEntry, provider: ProviderId): string {
+  return entry.role === 'assistant' ? provider : entry.role
+}
+
+function formatConversationEntryForCopy(entry: PaneLogEntry, provider: ProviderId): string {
+  return `[${formatClock(entry.createdAt)}] ${getConversationEntryLabel(entry, provider)}\n${entry.text}`
+}
+
+function formatStreamEntryForCopy(entry: PaneStreamEntry): string {
+  return `[${formatClock(entry.createdAt)}] ${entry.kind}\n${entry.text}`
 }
 
 function appendInlineShellOutput(existing: string, prompt: string): string {
@@ -396,11 +419,13 @@ export function TerminalPane({
   onShareToPane,
   onCopyOutput,
   onCopyProviderCommand,
+  onCopyText,
   onDuplicate,
   onStartNewSession,
   onDelete,
   onLoadRemote,
   onBrowseRemote,
+  onRefreshWorkspaceContents,
   onCreateRemoteDirectory,
   onOpenFileManager,
   onOpenWorkspace,
@@ -417,10 +442,13 @@ export function TerminalPane({
   onRemoveKnownHost,
   onTransferSshPath,
   shareTargets,
-  onSelectSession
+  onSelectSession,
+  onClearSelectedSessionHistory,
+  onClearAllSessionHistory
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
   const [isRunLogsExpanded, setIsRunLogsExpanded] = useState(false)
+  const [runLogsTab, setRunLogsTab] = useState<'conversation' | 'stream'>('conversation')
   const [isShellExpanded, setIsShellExpanded] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isVersionAccordionOpen, setIsVersionAccordionOpen] = useState(false)
@@ -547,6 +575,11 @@ export function TerminalPane({
     ...pane.sessionHistory.map((session) => ({ key: session.key, label: session.label }))
   ]
   const hasSessionRecords = sessionOptions.length > 0
+  const hasVisibleConversation = visibleSession.logs.length > 0
+  const hasVisibleStream = visibleSession.streamEntries.length > 0
+  const hasVisibleSessionContent = hasVisibleConversation || hasVisibleStream
+  const conversationCopyText = visibleSession.logs.map((entry) => formatConversationEntryForCopy(entry, pane.provider)).join('\n\n').trim()
+  const streamCopyText = visibleSession.streamEntries.map((entry) => formatStreamEntryForCopy(entry)).join('\n\n').trim()
   const incomingShareSources = useMemo(() => {
     const sourceMap = new Map<string, { id: string; title: string; count: number }>()
 
@@ -711,6 +744,11 @@ export function TerminalPane({
     })
   }
 
+  const handleOpenRunLogs = () => {
+    setRunLogsTab('conversation')
+    setIsRunLogsExpanded(true)
+  }
+
   const handleShellKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.ctrlKey && event.key.toLowerCase() === 'c' && !pane.shellRunning) {
       event.preventDefault()
@@ -864,7 +902,7 @@ export function TerminalPane({
                   <p className="menu-help">{UI.shareHint}</p>
                 </div>
               </details>
-              <button type="button" className="icon-button" disabled={!hasSessionRecords} onClick={() => setIsRunLogsExpanded(true)} title={UI.runLogs}><History size={16} /></button>
+              <button type="button" className="icon-button" disabled={!hasSessionRecords} onClick={handleOpenRunLogs} title={UI.runLogs}><History size={16} /></button>
               <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
             </div>
 
@@ -1139,6 +1177,7 @@ export function TerminalPane({
                       <div className="browser-toolbar-actions">
                         {!isAtLocalWorkspaceTop && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, pane.localWorkspacePath)}><Home size={14} />{UI.workspaceTop}</button>}
                         {localParentPath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, localParentPath)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>}
+                        <button type="button" className="icon-button compact-icon-button browser-refresh-button" disabled={!pane.localWorkspacePath || pane.localBrowserLoading} onClick={() => onRefreshWorkspaceContents(pane.id)} title={UI.refreshContents} aria-label={UI.refreshContents}><RefreshCcw size={14} /></button>
                       </div>
                     </div>
                     <div className="browser-simple-list browser-list-shell">
@@ -1291,6 +1330,7 @@ export function TerminalPane({
                       <div className="browser-toolbar-actions">
                         {!isAtRemoteWorkspaceTop && pane.remoteWorkspacePath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseRemote(pane.id, pane.remoteWorkspacePath)}><Home size={14} />{UI.workspaceTop}</button>}
                         {remoteParentPath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseRemote(pane.id, remoteParentPath)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>}
+                        <button type="button" className="icon-button compact-icon-button browser-refresh-button" disabled={!remoteBaseDropPath || pane.remoteBrowserLoading} onClick={() => onRefreshWorkspaceContents(pane.id)} title={UI.refreshContents} aria-label={UI.refreshContents}><RefreshCcw size={14} /></button>
                         <button type="button" className="ghost-button compact-ghost" disabled={!remoteBaseDropPath} onClick={() => onCreateRemoteDirectory(pane.id)}><FolderPlus size={14} />{UI.createFolder}</button>
                         <button type="button" className="ghost-button compact-ghost" disabled={!remoteBaseDropPath} onClick={() => remoteBaseDropPath && onTransferSshPath(pane.id, 'download', { remotePath: remoteBaseDropPath, remoteLabel: currentRemoteLabel, isDirectory: true })}>{UI.downloadCurrent}</button>
                       </div>
@@ -1379,44 +1419,72 @@ export function TerminalPane({
             <div className="output-modal-body run-logs-modal-body">
               {hasSessionRecords ? (
                 <>
-                  {sessionOptions.length > 1 && (
-                    <label className="session-selector">
-                      <span>{UI.session}</span>
-                      <select value={selectedArchivedSession?.key ?? '__current__'} onChange={(event) => onSelectSession(pane.id, event.target.value === '__current__' ? null : event.target.value)}>
-                        {sessionOptions.map((session) => <option key={session.key} value={session.key}>{session.label}</option>)}
-                      </select>
-                    </label>
-                  )}
-                  <div className="session-log-meta"><strong>{visibleSession.label}</strong><span>{formatClock(visibleSession.updatedAt)}</span></div>
-                  <div className="run-logs-modal-grid">
-                    {visibleSession.streamEntries.length > 0 && (
-                      <div className="activity-panel">
-                        <div className="section-headline compact-headline"><strong>{UI.stream}</strong><span>{visibleSession.streamEntries.length}</span></div>
-                        <div className="activity-feed">
-                          {visibleSession.streamEntries.map((entry) => (
-                            <article key={entry.id} className={`activity-entry ${entry.kind}`}>
-                              <header><strong>{entry.kind}</strong><span>{formatClock(entry.createdAt)}</span></header>
-                              <p>{entry.text}</p>
-                            </article>
-                          ))}
-                        </div>
-                      </div>
+                  <div className="run-logs-modal-toolbar">
+                    {sessionOptions.length > 1 && (
+                      <label className="session-selector">
+                        <span>{UI.session}</span>
+                        <select value={selectedArchivedSession?.key ?? '__current__'} onChange={(event) => onSelectSession(pane.id, event.target.value === '__current__' ? null : event.target.value)}>
+                          {sessionOptions.map((session) => <option key={session.key} value={session.key}>{session.label}</option>)}
+                        </select>
+                      </label>
                     )}
-                    {visibleSession.logs.length > 0 && (
-                      <div className="history-panel">
+                    <div className="run-logs-tab-row" role="tablist" aria-label={UI.runLogs}>
+                      <button type="button" className={runLogsTab === 'conversation' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('conversation')}>
+                        <span>{UI.conversation}</span>
+                        <span>{visibleSession.logs.length}</span>
+                      </button>
+                      <button type="button" className={runLogsTab === 'stream' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('stream')}>
+                        <span>{UI.stream}</span>
+                        <span>{visibleSession.streamEntries.length}</span>
+                      </button>
+                    </div>
+                    <div className="run-logs-action-row">
+                      <button type="button" className="secondary-button" disabled={!conversationCopyText} onClick={() => onCopyText(pane.id, conversationCopyText, '会話履歴をクリップボードにコピーしました')}><Copy size={15} />{UI.copyConversationAll}</button>
+                      <button type="button" className="secondary-button" disabled={!streamCopyText} onClick={() => onCopyText(pane.id, streamCopyText, 'ストリームをクリップボードにコピーしました')}><Copy size={15} />{UI.copyStreamAll}</button>
+                      <button type="button" className="secondary-button" disabled={isBusy || !hasVisibleSessionContent} onClick={() => onClearSelectedSessionHistory(pane.id, visibleSession.key)}><Trash2 size={15} />{UI.clearSelectedSessionHistory}</button>
+                      <button type="button" className="danger-button" disabled={isBusy || !hasSessionRecords} onClick={() => onClearAllSessionHistory(pane.id)}><Trash2 size={15} />{UI.clearAllSessionHistory}</button>
+                    </div>
+                  </div>
+                  <div className="session-log-meta"><strong>{visibleSession.label}</strong><span>{formatClock(visibleSession.updatedAt)}</span></div>
+                  {runLogsTab === 'conversation' ? (
+                    hasVisibleConversation ? (
+                      <div className="history-panel run-logs-panel">
                         <div className="section-headline compact-headline"><strong>{UI.conversation}</strong><span>{visibleSession.logs.length}</span></div>
                         <div className="history-feed">
                           {visibleSession.logs.map((entry) => (
                             <article key={entry.id} className={`history-entry ${entry.role}`}>
-                              <header><strong>{entry.role === 'assistant' ? pane.provider : entry.role}</strong><span>{formatClock(entry.createdAt)}</span></header>
+                              <header>
+                                <div className="run-log-entry-header-main">
+                                  <strong>{getConversationEntryLabel(entry, pane.provider)}</strong>
+                                  <span>{formatClock(entry.createdAt)}</span>
+                                </div>
+                                <button type="button" className="icon-button compact-icon-button run-log-copy-button" onClick={() => onCopyText(pane.id, formatConversationEntryForCopy(entry, pane.provider), '会話履歴の項目をコピーしました')} title={UI.copyEntry} aria-label={UI.copyEntry}><Copy size={14} /></button>
+                              </header>
                               <p>{entry.text}</p>
                             </article>
                           ))}
                         </div>
                       </div>
-                    )}
-                    {visibleSession.streamEntries.length === 0 && visibleSession.logs.length === 0 && <p className="panel-placeholder run-logs-empty">{UI.runLogsEmpty}</p>}
-                  </div>
+                    ) : <p className="panel-placeholder run-logs-empty">{UI.runLogsEmpty}</p>
+                  ) : hasVisibleStream ? (
+                    <div className="activity-panel run-logs-panel">
+                      <div className="section-headline compact-headline"><strong>{UI.stream}</strong><span>{visibleSession.streamEntries.length}</span></div>
+                      <div className="activity-feed">
+                        {visibleSession.streamEntries.map((entry) => (
+                          <article key={entry.id} className={`activity-entry ${entry.kind}`}>
+                            <header>
+                              <div className="run-log-entry-header-main">
+                                <strong>{entry.kind}</strong>
+                                <span>{formatClock(entry.createdAt)}</span>
+                              </div>
+                              <button type="button" className="icon-button compact-icon-button run-log-copy-button" onClick={() => onCopyText(pane.id, formatStreamEntryForCopy(entry), 'ストリーム項目をコピーしました')} title={UI.copyEntry} aria-label={UI.copyEntry}><Copy size={14} /></button>
+                            </header>
+                            <p>{entry.text}</p>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  ) : <p className="panel-placeholder run-logs-empty">{UI.runLogsEmpty}</p>}
                 </>
               ) : <p className="panel-placeholder run-logs-empty">{UI.runLogsEmpty}</p>}
             </div>
