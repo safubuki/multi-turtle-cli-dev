@@ -135,9 +135,12 @@ const UI = {
   outputForRequest: '\u5bfe\u5fdc\u3059\u308b\u4f9d\u983c',
   workspaceUnset: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u672a\u8a2d\u5b9a',
   promptPlaceholder: '\u3084\u308a\u305f\u3044\u3053\u3068\u3092\u5165\u529b\u3057\u307e\u3059\u3002Ctrl+Enter \u3067\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002',
-  stalledHint: '\u51fa\u529b\u304c\u6b62\u307e\u3063\u3066\u3044\u307e\u3059\u3002\u78ba\u8a8d\u304b\u518d\u5b9f\u884c\u3092\u691c\u8a0e\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
+  stalledHint: '\u5fdc\u7b54\u5f85\u3061\u304c\u9577\u304f\u306a\u3063\u3066\u3044\u307e\u3059\u3002CLI \u306b\u3088\u3063\u3066\u306f\u6570\u5206\u304b\u304b\u308b\u3053\u3068\u304c\u3042\u308b\u305f\u3081\u3001\u5fc5\u8981\u306a\u3089\u505c\u6b62\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002',
   runningHint: 'CLI \u3092\u5b9f\u884c\u4e2d\u3067\u3059\u3002',
   updatingHint: 'AI \u3092\u66f4\u65b0\u4e2d\u3067\u3059\u3002',
+  stopSending: '\u505c\u6b62\u8981\u6c42\u3092\u9001\u4fe1\u4e2d\u3067\u3059\u3002',
+  stopSendingButton: '\u505c\u6b62\u8981\u6c42\u4e2d',
+  stopRetry: '\u505c\u6b62\u518d\u9001',
   stop: '\u505c\u6b62',
   run: '\u5b9f\u884c',
   settings: 'CLI/AI\u30e2\u30c7\u30eb\u9078\u629e/\u8a2d\u5b9a',
@@ -812,6 +815,13 @@ export function TerminalPane({
   const requestLabel = isRunInProgress ? UI.currentRequest : UI.latestRequest
   const requestPreview = hasCurrentRequest ? summarizePromptPreview(currentRequestText) : ''
   const isWaitingForFreshOutput = isRunInProgress && !hasOutput
+  const canOfferStop = isRunInProgress || pane.stopRequestAvailable || pane.stopRequested
+  const runningHintText = pane.stopRequested
+    ? UI.stopSending
+    : isStalled
+      ? UI.stalledHint
+      : UI.runningHint
+  const stopButtonLabel = pane.stopRequested ? UI.stopSendingButton : isRunInProgress ? UI.stop : UI.stopRetry
   const matchedSshHost = sshHosts.find((item) => item.alias === pane.sshHost.trim()) ?? null
   const currentShellPath = pane.workspaceMode === 'local' ? (pane.localShellPath || pane.localWorkspacePath) : (pane.remoteShellPath || pane.remoteWorkspacePath)
   const shellPromptLabel = pane.workspaceMode === 'local'
@@ -1227,7 +1237,6 @@ export function TerminalPane({
             <div>
               <h3>{UI.output}</h3>
               {hasOutput && pane.lastActivityAt ? <p>{`\u6700\u7d42\u66f4\u65b0 ${formatClock(pane.lastActivityAt)}`}</p> : null}
-              {hasCurrentRequest ? <p>{`${UI.outputForRequest}: ${requestPreview}`}</p> : null}
             </div>
             <div className="output-panel-actions">
               {outgoingShareTargets.length > 0 && (
@@ -1310,8 +1319,8 @@ export function TerminalPane({
           />
           <div className="composer-footer">
             <div className="composer-hint">
-              {isRunInProgress ? (
-                <><LoaderCircle size={16} className="spin" /><span>{isStalled ? UI.stalledHint : UI.runningHint}</span></>
+              {isRunInProgress || pane.stopRequested ? (
+                <><LoaderCircle size={16} className="spin" /><span>{runningHintText}</span></>
               ) : isProviderUpdating ? (
                 <><LoaderCircle size={16} className="spin" /><span>{UI.updatingHint}</span></>
               ) : hasRunningStatus ? (
@@ -1323,8 +1332,8 @@ export function TerminalPane({
               )}
             </div>
             <div className="composer-actions">
-              {isRunInProgress ? (
-                <button type="button" className="danger-button stable-run-button" onClick={() => onStop(pane.id)}><Square size={16} />{UI.stop}</button>
+              {canOfferStop ? (
+                <button type="button" className="danger-button stable-run-button" disabled={pane.stopRequested} onClick={() => onStop(pane.id)}><Square size={16} />{stopButtonLabel}</button>
               ) : (
                 <button type="button" className="primary-button stable-run-button" disabled={!canRun || isBusy} onClick={handleRunRequest}><Play size={16} />{UI.run}</button>
               )}

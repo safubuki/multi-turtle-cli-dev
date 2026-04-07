@@ -259,6 +259,8 @@ export interface PaneState {
   pendingShareTargetIds: string[]
   currentRequestText: string | null
   currentRequestAt: number | null
+  stopRequested: boolean
+  stopRequestAvailable: boolean
   lastRunAt: number | null
   runningSince: number | null
   lastActivityAt: number | null

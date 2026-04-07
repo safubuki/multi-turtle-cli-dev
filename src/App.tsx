@@ -931,6 +931,8 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     pendingShareTargetIds: [],
     currentRequestText: null,
     currentRequestAt: null,
+    stopRequested: false,
+    stopRequestAvailable: false,
     lastRunAt: null,
     runningSince: null,
     lastActivityAt: null,
@@ -1062,6 +1064,8 @@ function resetActiveSessionFields(pane: PaneState): PaneState {
     sessionScopeKey: null,
     currentRequestText: null,
     currentRequestAt: null,
+    stopRequested: false,
+    stopRequestAvailable: false,
     lastRunAt: null,
     runningSince: null,
     lastActivityAt: null,
@@ -1361,6 +1365,8 @@ function normalizePane(
       : [],
     currentRequestText: typeof rawPane.currentRequestText === 'string' && rawPane.currentRequestText.trim() ? rawPane.currentRequestText : null,
     currentRequestAt: typeof rawPane.currentRequestAt === 'number' ? rawPane.currentRequestAt : null,
+    stopRequested: false,
+    stopRequestAvailable: false,
     lastRunAt: typeof rawPane.lastRunAt === 'number' ? rawPane.lastRunAt : null,
     runningSince: null,
     lastActivityAt: typeof rawPane.lastActivityAt === 'number' ? rawPane.lastActivityAt : null,
@@ -1793,7 +1799,10 @@ function App() {
       provider,
       model: nextModel?.id ?? '',
       reasoningEffort: nextModel?.defaultReasoningEffort ?? 'medium',
-      codexFastMode: 'off'
+      codexFastMode: 'off',
+      sessionId: null,
+      sessionScopeKey: null,
+      selectedSessionKey: null
     })
   }
 
@@ -1823,7 +1832,10 @@ function App() {
 
     updatePane(paneId, {
       model: normalizedModel,
-      reasoningEffort
+      reasoningEffort,
+      sessionId: null,
+      sessionScopeKey: null,
+      selectedSessionKey: null
     })
   }
 
@@ -2118,6 +2130,8 @@ function App() {
           statusText: statusLabel(event.statusHint),
           runInProgress: false,
           runningSince: null,
+          stopRequested: false,
+          stopRequestAvailable: false,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
           lastError: event.statusHint === 'error' ? '\u51e6\u7406\u304c\u30a8\u30e9\u30fc\u3067\u7d42\u4e86\u3057\u307e\u3057\u305f' : null,
@@ -2161,6 +2175,8 @@ function App() {
           statusText: issueSummary?.statusText ?? statusLabel('error'),
           runInProgress: false,
           runningSince: null,
+          stopRequested: false,
+          stopRequestAvailable: false,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
           lastError: issueSummary?.displayMessage ?? message,
@@ -2272,6 +2288,8 @@ function App() {
       sessionScopeKey: currentSessionScopeKey,
       currentRequestText: prompt,
       currentRequestAt: startedAt,
+      stopRequested: false,
+      stopRequestAvailable: true,
       attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
       streamEntries: appendStreamEntry([], 'system', `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
@@ -2303,7 +2321,8 @@ function App() {
         const failedAt = Date.now()
         mutatePane(paneId, (currentPane) => {
           const issueSummary = getProviderIssueSummary(currentPane.provider, message)
-          const displayMessage = issueSummary?.displayMessage ?? message
+          const fallbackAttentionMessage = 'ストリーム接続が途中で切れました。サーバー側で実行が残っている可能性があるため、必要なら停止再送を試してください。'
+          const displayMessage = issueSummary?.displayMessage ?? fallbackAttentionMessage
           const systemEntry: PaneLogEntry = {
             id: createId('log'),
             role: 'system',
@@ -2316,10 +2335,12 @@ function App() {
           return {
             ...currentPane,
             logs: appendLogEntry(currentPane.logs, systemEntry),
-            status: issueSummary?.status ?? 'error',
-            statusText: issueSummary?.statusText ?? statusLabel('error'),
+            status: issueSummary?.status ?? 'attention',
+            statusText: issueSummary?.statusText ?? 'ストリーム接続が途切れました',
             runInProgress: false,
             runningSince: null,
+            stopRequested: false,
+            stopRequestAvailable: true,
             lastActivityAt: failedAt,
             lastFinishedAt: failedAt,
             lastError: displayMessage,
@@ -2340,6 +2361,8 @@ function App() {
           statusText: '\u505c\u6b62\u3057\u307e\u3057\u305f',
           runInProgress: false,
           runningSince: null,
+          stopRequested: false,
+          stopRequestAvailable: false,
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
@@ -2353,25 +2376,63 @@ function App() {
   }
 
   const handleStop = async (paneId: string) => {
-    stopRequestedRef.current.add(paneId)
-    controllersRef.current[paneId]?.abort()
+    const hasLocalController = Boolean(controllersRef.current[paneId])
+
+    if (hasLocalController) {
+      stopRequestedRef.current.add(paneId)
+    }
 
     mutatePane(paneId, (pane) => ({
       ...pane,
-      status: 'attention',
-      statusText: '\u505c\u6b62\u3057\u307e\u3057\u305f',
-      runInProgress: false,
-      runningSince: null
+      stopRequested: true,
+      stopRequestAvailable: true,
+      statusText: '\u505c\u6b62\u8981\u6c42\u3092\u9001\u4fe1\u4e2d'
     }))
 
     try {
-      await stopPaneRun(paneId)
+      const result = await stopPaneRun(paneId)
+
+      if (hasLocalController) {
+        controllersRef.current[paneId]?.abort()
+        return
+      }
+
+      const completedAt = Date.now()
+      mutatePane(paneId, (pane) => ({
+        ...pane,
+        status: result.stopped ? 'attention' : 'attention',
+        statusText: result.stopped ? '\u505c\u6b62\u3057\u307e\u3057\u305f' : '\u505c\u6b62\u5bfe\u8c61\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f',
+        runInProgress: false,
+        runningSince: null,
+        stopRequested: false,
+        stopRequestAvailable: false,
+        lastActivityAt: completedAt,
+        lastFinishedAt: result.stopped ? completedAt : pane.lastFinishedAt,
+        lastError: result.stopped ? null : '\u30b5\u30fc\u30d0\u30fc\u5074\u3067\u505c\u6b62\u3067\u304d\u308b\u5b9f\u884c\u306f\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002',
+        streamEntries: appendStreamEntry(
+          pane.streamEntries,
+          'system',
+          result.stopped
+            ? '\u30b5\u30fc\u30d0\u30fc\u5074\u306e\u5b9f\u884c\u306b\u505c\u6b62\u8981\u6c42\u3092\u9001\u4fe1\u3057\u3001\u505c\u6b62\u3057\u307e\u3057\u305f'
+            : '\u30b5\u30fc\u30d0\u30fc\u5074\u3067\u505c\u6b62\u3067\u304d\u308b\u5b9f\u884c\u306f\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f',
+          completedAt
+        )
+      }))
     } catch (error) {
-      updatePane(paneId, {
-        status: 'error',
-        statusText: '\u505c\u6b62\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
-      })
+      const message = error instanceof Error ? error.message : String(error)
+      const failedAt = Date.now()
+      mutatePane(paneId, (pane) =>
+        applyBackgroundActionFailure(
+          {
+            ...pane,
+            stopRequested: false,
+            stopRequestAvailable: pane.runInProgress || pane.stopRequestAvailable
+          },
+          '\u505c\u6b62\u8981\u6c42\u306e\u9001\u4fe1\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+          message,
+          failedAt
+        )
+      )
     }
   }
 
@@ -2535,6 +2596,8 @@ function App() {
       sessionScopeKey: null,
       currentRequestText: null,
       currentRequestAt: null,
+      stopRequested: false,
+      stopRequestAvailable: false,
       sshActionState: 'idle',
       sshActionMessage: null,
       sshPasswordPulseAt: 0,
