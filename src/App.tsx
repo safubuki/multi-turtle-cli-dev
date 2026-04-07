@@ -560,6 +560,14 @@ function getProviderIssueSummary(provider: ProviderId, message: string): { displ
     }
   }
 
+  if (provider === 'codex' && /rejected:\s*blocked by policy|blocked by policy/i.test(message)) {
+    return {
+      displayMessage: 'Codex が生成したツール実行が安全ポリシーにより拒否されました。TAKO 自体の故障ではなく、CLI 側が PowerShell / シェル操作を危険と判断したケースです。処理を小さく分けるか、プロセス停止や起動を伴う大きなコマンドを避けると通りやすくなります。',
+      status: 'attention',
+      statusText: 'Codex のツール実行がポリシーで拒否されました'
+    }
+  }
+
   return null
 }
 

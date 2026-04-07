@@ -1389,8 +1389,8 @@ textarea {
   flex: 0 0 auto;
 }
 
-.activity-entry p,
-.history-entry p {
+.activity-entry .linkified-text,
+.history-entry .linkified-text {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1742,14 +1742,33 @@ textarea {
   background: rgba(7, 12, 15, 0.72);
 }
 
-.output-panel .output-surface pre,
-.output-modal-body pre {
+.output-panel .output-surface .linkified-text-mono,
+.output-modal-body .linkified-text-mono {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: 'Cascadia Code', 'Consolas', 'SFMono-Regular', monospace;
   font-size: 0.88rem;
   line-height: 1.55;
+}
+
+.linkified-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.linkified-link {
+  color: #8ce9dd;
+  text-decoration: underline;
+  text-decoration-color: rgba(140, 233, 221, 0.55);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.linkified-link:hover {
+  color: #d8fffa;
+  text-decoration-color: currentColor;
 }
 
 .output-panel .panel-placeholder,
@@ -3390,13 +3409,49 @@ textarea {
 .run-logs-tab-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
+  align-items: flex-end;
+  padding-top: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .run-logs-tab-button {
-  min-width: 144px;
+  min-width: 168px;
   justify-content: space-between;
   gap: 12px;
+  min-height: 48px;
+  margin-bottom: -1px;
+  padding: 12px 18px 10px;
+  border-radius: 16px 16px 0 0;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(26, 34, 40, 0.9), rgba(13, 20, 24, 0.96));
+}
+
+.run-logs-tab-button:hover {
+  transform: none;
+  filter: brightness(1.05);
+}
+
+.run-logs-tab-button.active {
+  background: linear-gradient(180deg, rgba(84, 210, 194, 0.16), rgba(11, 18, 21, 0.98));
+  border-color: rgba(84, 210, 194, 0.32);
+  border-bottom-color: rgba(11, 18, 21, 0.98);
+  color: #d8fffa;
+}
+
+.run-logs-tab-button > span:last-child {
+  min-width: 28px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.82rem;
+}
+
+.run-logs-tab-button.active > span:last-child {
+  background: rgba(84, 210, 194, 0.16);
+  color: #d8fffa;
 }
 
 .run-logs-action-row {

@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+﻿import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
 import {
   AlertTriangle,
   ArrowDownLeft,
@@ -286,6 +286,108 @@ function formatConversationEntryForCopy(entry: PaneLogEntry, provider: ProviderI
 
 function formatStreamEntryForCopy(entry: PaneStreamEntry): string {
   return `[${formatClock(entry.createdAt)}] ${entry.kind}\n${entry.text}`
+}
+
+function splitTrailingUrlPunctuation(value: string): { url: string; trailing: string } {
+  let url = value
+  let trailing = ''
+
+  while (url.length > 0) {
+    const lastChar = url[url.length - 1] ?? ''
+    if (!'),.;!?'.includes(lastChar)) {
+      break
+    }
+
+    url = url.slice(0, -1)
+    trailing = `${lastChar}${trailing}`
+  }
+
+  return { url, trailing }
+}
+
+function isSafeExternalUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function renderTextWithLinks(text: string, keyPrefix: string): ReactNode[] {
+  const lines = text.split('\n')
+  const nodes: ReactNode[] = []
+
+  for (const [lineIndex, line] of lines.entries()) {
+    let lastIndex = 0
+
+    for (const match of line.matchAll(/https?:\/\/[^\s<>"']+/g)) {
+      const rawUrl = match[0]
+      const startIndex = match.index ?? 0
+
+      if (startIndex > lastIndex) {
+        nodes.push(
+          <span key={`${keyPrefix}-text-${lineIndex}-${lastIndex}`}>
+            {line.slice(lastIndex, startIndex)}
+          </span>
+        )
+      }
+
+      const { url, trailing } = splitTrailingUrlPunctuation(rawUrl)
+
+      if (url && isSafeExternalUrl(url)) {
+        nodes.push(
+          <a
+            key={`${keyPrefix}-url-${lineIndex}-${startIndex}`}
+            className="linkified-link"
+            href={url}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            {url}
+          </a>
+        )
+      } else {
+        nodes.push(
+          <span key={`${keyPrefix}-raw-${lineIndex}-${startIndex}`}>
+            {rawUrl}
+          </span>
+        )
+      }
+
+      if (trailing) {
+        nodes.push(
+          <span key={`${keyPrefix}-trail-${lineIndex}-${startIndex}`}>
+            {trailing}
+          </span>
+        )
+      }
+
+      lastIndex = startIndex + rawUrl.length
+    }
+
+    if (lastIndex < line.length) {
+      nodes.push(
+        <span key={`${keyPrefix}-tail-${lineIndex}-${lastIndex}`}>
+          {line.slice(lastIndex)}
+        </span>
+      )
+    }
+
+    if (lineIndex < lines.length - 1) {
+      nodes.push(<br key={`${keyPrefix}-br-${lineIndex}`} />)
+    }
+  }
+
+  return nodes.length > 0 ? nodes : [<span key={`${keyPrefix}-empty`}>{text}</span>]
+}
+
+function LinkifiedText({ text, keyPrefix, variant = 'body' }: { text: string; keyPrefix: string; variant?: 'body' | 'mono' }) {
+  return (
+    <div className={variant === 'mono' ? 'linkified-text linkified-text-mono' : 'linkified-text'}>
+      {renderTextWithLinks(text, keyPrefix)}
+    </div>
+  )
 }
 
 function appendInlineShellOutput(existing: string, prompt: string): string {
@@ -581,6 +683,11 @@ export function TerminalPane({
   const hasVisibleSessionContent = hasVisibleConversation || hasVisibleStream
   const conversationCopyText = visibleSession.logs.map((entry) => formatConversationEntryForCopy(entry, pane.provider)).join('\n\n').trim()
   const streamCopyText = visibleSession.streamEntries.map((entry) => formatStreamEntryForCopy(entry)).join('\n\n').trim()
+  const activeRunLogsCopyText = runLogsTab === 'conversation' ? conversationCopyText : streamCopyText
+  const activeRunLogsCopyLabel = runLogsTab === 'conversation' ? UI.copyConversationAll : UI.copyStreamAll
+  const activeRunLogsCopyMessage = runLogsTab === 'conversation'
+    ? '会話履歴をクリップボードにコピーしました'
+    : 'ストリームをクリップボードにコピーしました'
   const incomingShareSources = useMemo(() => {
     const sourceMap = new Map<string, { id: string; title: string; count: number }>()
 
@@ -963,7 +1070,7 @@ export function TerminalPane({
             </div>
           </div>
           <div className="output-surface console-output" aria-label="output-console">
-            {hasOutput ? <pre>{outputText}</pre> : <p className="panel-placeholder">{UI.outputPlaceholder}</p>}
+            {hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} variant="mono" /> : <p className="panel-placeholder">{UI.outputPlaceholder}</p>}
           </div>
         </section>
 
@@ -1410,7 +1517,7 @@ export function TerminalPane({
               <div><h3>{UI.output}</h3><p>{pane.title}</p></div>
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(false)} title="close"><X size={16} /></button>
             </div>
-            <div className="output-modal-body">{hasOutput ? <pre>{outputText}</pre> : null}</div>
+            <div className="output-modal-body">{hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output-modal`} variant="mono" /> : null}</div>
             <div className="output-modal-footer"><button type="button" className="secondary-button" disabled={!outputText} onClick={() => onCopyOutput(pane.id)}><Copy size={16} />{UI.copyOutput}</button></div>
           </div>
         </div>
@@ -1436,18 +1543,17 @@ export function TerminalPane({
                       </label>
                     )}
                     <div className="run-logs-tab-row" role="tablist" aria-label={UI.runLogs}>
-                      <button type="button" className={runLogsTab === 'conversation' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('conversation')}>
+                      <button type="button" role="tab" aria-selected={runLogsTab === 'conversation'} className={runLogsTab === 'conversation' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('conversation')}>
                         <span>{UI.conversation}</span>
                         <span>{visibleSession.logs.length}</span>
                       </button>
-                      <button type="button" className={runLogsTab === 'stream' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('stream')}>
+                      <button type="button" role="tab" aria-selected={runLogsTab === 'stream'} className={runLogsTab === 'stream' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('stream')}>
                         <span>{UI.stream}</span>
                         <span>{visibleSession.streamEntries.length}</span>
                       </button>
                     </div>
                     <div className="run-logs-action-row">
-                      <button type="button" className="secondary-button" disabled={!conversationCopyText} onClick={() => onCopyText(pane.id, conversationCopyText, '会話履歴をクリップボードにコピーしました')}><Copy size={15} />{UI.copyConversationAll}</button>
-                      <button type="button" className="secondary-button" disabled={!streamCopyText} onClick={() => onCopyText(pane.id, streamCopyText, 'ストリームをクリップボードにコピーしました')}><Copy size={15} />{UI.copyStreamAll}</button>
+                      <button type="button" className="secondary-button" disabled={!activeRunLogsCopyText} onClick={() => onCopyText(pane.id, activeRunLogsCopyText, activeRunLogsCopyMessage)}><Copy size={15} />{activeRunLogsCopyLabel}</button>
                       <button type="button" className="secondary-button" disabled={isBusy || !hasVisibleSessionContent} onClick={() => onClearSelectedSessionHistory(pane.id, visibleSession.key)}><Trash2 size={15} />{UI.clearSelectedSessionHistory}</button>
                       <button type="button" className="danger-button" disabled={isBusy || !hasSessionRecords} onClick={() => onClearAllSessionHistory(pane.id)}><Trash2 size={15} />{UI.clearAllSessionHistory}</button>
                     </div>
@@ -1467,7 +1573,7 @@ export function TerminalPane({
                                 </div>
                                 <button type="button" className="icon-button compact-icon-button run-log-copy-button" onClick={() => onCopyText(pane.id, formatConversationEntryForCopy(entry, pane.provider), '会話履歴の項目をコピーしました')} title={UI.copyEntry} aria-label={UI.copyEntry}><Copy size={14} /></button>
                               </header>
-                              <p>{entry.text}</p>
+                              <LinkifiedText text={entry.text} keyPrefix={`${entry.id}-conversation`} />
                             </article>
                           ))}
                         </div>
@@ -1486,7 +1592,7 @@ export function TerminalPane({
                               </div>
                               <button type="button" className="icon-button compact-icon-button run-log-copy-button" onClick={() => onCopyText(pane.id, formatStreamEntryForCopy(entry), 'ストリーム項目をコピーしました')} title={UI.copyEntry} aria-label={UI.copyEntry}><Copy size={14} /></button>
                             </header>
-                            <p>{entry.text}</p>
+                              <LinkifiedText text={entry.text} keyPrefix={`${entry.id}-stream`} />
                           </article>
                         ))}
                       </div>
