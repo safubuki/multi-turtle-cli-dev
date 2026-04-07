@@ -1803,6 +1803,80 @@ textarea {
   background: rgba(7, 12, 15, 0.72);
 }
 
+.output-surface.is-streaming {
+  border-color: rgba(84, 210, 194, 0.14);
+}
+
+.output-loading-state {
+  display: grid;
+  gap: 10px;
+  min-height: 100%;
+  align-content: center;
+}
+
+.output-loading-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #d9f7f2;
+}
+
+.output-loading-head strong {
+  font-size: 0.94rem;
+}
+
+.output-loading-request,
+.output-loading-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.output-loading-bars {
+  display: grid;
+  gap: 8px;
+}
+
+.output-loading-bars span {
+  display: block;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(84, 210, 194, 0.28), rgba(255, 255, 255, 0.08));
+  background-size: 180% 100%;
+  animation: output-loading-shift 1.3s ease-in-out infinite;
+}
+
+.output-loading-bars span:nth-child(1) {
+  width: 82%;
+}
+
+.output-loading-bars span:nth-child(2) {
+  width: 94%;
+  animation-delay: 0.08s;
+}
+
+.output-loading-bars span:nth-child(3) {
+  width: 68%;
+  animation-delay: 0.16s;
+}
+
+@keyframes output-loading-shift {
+  0% {
+    background-position: 100% 50%;
+    opacity: 0.58;
+  }
+
+  50% {
+    background-position: 0% 50%;
+    opacity: 1;
+  }
+
+  100% {
+    background-position: -100% 50%;
+    opacity: 0.58;
+  }
+}
+
 .output-panel .output-surface .linkified-text-mono,
 .output-modal-body .linkified-text-mono {
   margin: 0;
@@ -1854,6 +1928,47 @@ textarea {
 .minimal-composer textarea {
   min-height: 118px;
   border-radius: 16px;
+}
+
+.request-context-card {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.request-context-card.is-live {
+  border-color: rgba(84, 210, 194, 0.18);
+  background: rgba(84, 210, 194, 0.08);
+}
+
+.request-context-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.request-context-head strong {
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+}
+
+.request-context-head span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.request-context-body {
+  margin: 0;
+  color: #dce7e2;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .composer-footer {

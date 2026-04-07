@@ -125,8 +125,14 @@ const UI = {
   output: 'AI\u7d50\u679c\u51fa\u529b',
   outputEmpty: '\u307e\u3060\u51fa\u529b\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   outputPlaceholder: '\u3053\u3053\u306b\u5b9f\u884c\u7d50\u679c\u3068\u6700\u65b0\u306e\u5fdc\u7b54\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
+  outputGenerating: '\u56de\u7b54\u3092\u751f\u6210\u4e2d\u3067\u3059',
+  outputGeneratingHint: '\u524d\u56de\u306e\u56de\u7b54\u306f\u5207\u308a\u66ff\u3048\u6e08\u307f\u3067\u3059\u3002\u65b0\u3057\u3044\u7d50\u679c\u3092\u3053\u3053\u306b\u8868\u793a\u3057\u307e\u3059\u3002',
   outputExpand: '\u51fa\u529b\u3092\u62e1\u5927',
   instruction: 'AI\u6307\u793a\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09',
+  currentRequest: '\u73fe\u5728\u51e6\u7406\u4e2d\u306e\u4f9d\u983c',
+  latestRequest: '\u4eca\u56de\u306e\u4f9d\u983c',
+  requestSentAt: '\u9001\u4fe1',
+  outputForRequest: '\u5bfe\u5fdc\u3059\u308b\u4f9d\u983c',
   workspaceUnset: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u672a\u8a2d\u5b9a',
   promptPlaceholder: '\u3084\u308a\u305f\u3044\u3053\u3068\u3092\u5165\u529b\u3057\u307e\u3059\u3002Ctrl+Enter \u3067\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002',
   stalledHint: '\u51fa\u529b\u304c\u6b62\u307e\u3063\u3066\u3044\u307e\u3059\u3002\u78ba\u8a8d\u304b\u518d\u5b9f\u884c\u3092\u691c\u8a0e\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
@@ -274,6 +280,15 @@ function getOutputText(pane: PaneState): string {
   }
 
   return ''
+}
+
+function summarizePromptPreview(text: string, maxLength = 150): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxLength) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, maxLength).trimEnd()}...`
 }
 
 function getConversationEntryLabel(entry: PaneLogEntry, provider: ProviderId): string {
@@ -792,6 +807,11 @@ export function TerminalPane({
   const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
+  const currentRequestText = pane.currentRequestText?.trim() ?? ''
+  const hasCurrentRequest = currentRequestText.length > 0
+  const requestLabel = isRunInProgress ? UI.currentRequest : UI.latestRequest
+  const requestPreview = hasCurrentRequest ? summarizePromptPreview(currentRequestText) : ''
+  const isWaitingForFreshOutput = isRunInProgress && !hasOutput
   const matchedSshHost = sshHosts.find((item) => item.alias === pane.sshHost.trim()) ?? null
   const currentShellPath = pane.workspaceMode === 'local' ? (pane.localShellPath || pane.localWorkspacePath) : (pane.remoteShellPath || pane.remoteWorkspacePath)
   const shellPromptLabel = pane.workspaceMode === 'local'
@@ -1207,6 +1227,7 @@ export function TerminalPane({
             <div>
               <h3>{UI.output}</h3>
               {hasOutput && pane.lastActivityAt ? <p>{`\u6700\u7d42\u66f4\u65b0 ${formatClock(pane.lastActivityAt)}`}</p> : null}
+              {hasCurrentRequest ? <p>{`${UI.outputForRequest}: ${requestPreview}`}</p> : null}
             </div>
             <div className="output-panel-actions">
               {outgoingShareTargets.length > 0 && (
@@ -1236,8 +1257,26 @@ export function TerminalPane({
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(true)} title={UI.outputExpand}><Maximize2 size={16} /></button>
             </div>
           </div>
-          <div className="output-surface console-output" aria-label="output-console">
-            {hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} variant="mono" onOpenFile={handleOpenLinkedPath} /> : <p className="panel-placeholder">{UI.outputPlaceholder}</p>}
+          <div className={`output-surface console-output ${isRunInProgress ? 'is-streaming' : ''}`} aria-label="output-console">
+            {hasOutput ? (
+              <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} variant="mono" onOpenFile={handleOpenLinkedPath} />
+            ) : isWaitingForFreshOutput ? (
+              <div className="output-loading-state" aria-live="polite">
+                <div className="output-loading-head">
+                  <LoaderCircle size={16} className="spin" />
+                  <strong>{UI.outputGenerating}</strong>
+                </div>
+                {hasCurrentRequest ? <p className="output-loading-request">{`${UI.outputForRequest}: ${requestPreview}`}</p> : null}
+                <p className="output-loading-copy">{UI.outputGeneratingHint}</p>
+                <div className="output-loading-bars" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </div>
+            ) : (
+              <p className="panel-placeholder">{UI.outputPlaceholder}</p>
+            )}
           </div>
         </section>
 
@@ -1248,6 +1287,15 @@ export function TerminalPane({
               <p>{pane.workspaceMode === 'local' ? pane.localWorkspacePath || UI.workspaceUnset : pane.remoteWorkspacePath || UI.sshUnset}</p>
             </div>
           </div>
+          {hasCurrentRequest ? (
+            <div className={`request-context-card ${isRunInProgress ? 'is-live' : ''}`}>
+              <div className="request-context-head">
+                <strong>{requestLabel}</strong>
+                {pane.currentRequestAt ? <span>{`${UI.requestSentAt} ${formatClock(pane.currentRequestAt)}`}</span> : null}
+              </div>
+              <p className="request-context-body">{pane.currentRequestText}</p>
+            </div>
+          ) : null}
           <textarea
             ref={promptRef}
             value={pane.prompt}

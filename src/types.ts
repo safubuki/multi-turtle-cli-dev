@@ -257,6 +257,8 @@ export interface PaneState {
   autoShareTargetIds: string[]
   pendingShareGlobal: boolean
   pendingShareTargetIds: string[]
+  currentRequestText: string | null
+  currentRequestAt: number | null
   lastRunAt: number | null
   runningSince: number | null
   lastActivityAt: number | null
