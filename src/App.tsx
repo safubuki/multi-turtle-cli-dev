@@ -684,6 +684,17 @@ function getProviderIssueSummary(provider: ProviderId, message: string): { displ
     }
   }
 
+  if (
+    provider === 'gemini' &&
+    /tool execution denied by policy|you are in plan mode and cannot modify source code|may only use write_file or replace to save plans/i.test(message)
+  ) {
+    return {
+      displayMessage: 'Gemini CLI が Plan Mode に入り、ソースコード変更が拒否されました。現状の設定では調査計画までは進めても、実ファイル編集に移れないことがあります。編集を確実に進めるなら Codex CLI を使うか、Gemini 側で Plan Mode に落ちない実行設定が必要です。',
+      status: 'attention',
+      statusText: 'Gemini が Plan Mode で停止しました'
+    }
+  }
+
   if (provider === 'codex' && /rejected:\s*blocked by policy|blocked by policy/i.test(message)) {
     return {
       displayMessage: 'Codex が生成したツール実行が安全ポリシーにより拒否されました。TAKO 自体の故障ではなく、CLI 側が PowerShell / シェル操作を危険と判断したケースです。処理を小さく分けるか、プロセス停止や起動を伴う大きなコマンドを避けると通りやすくなります。',

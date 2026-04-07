@@ -258,6 +258,68 @@ function normalizeCopilotToolErrorMessage(message: string): string {
   return message
 }
 
+function appendStderrText(state: ParsedRunState, onEvent: RunOptions['onEvent'], text: string): void {
+  emitIfText(onEvent, 'stderr', text)
+  state.stderrText += `${text}\n`
+}
+
+function extractGeminiMessageContent(content: unknown): { text: string; thought: string } {
+  if (typeof content === 'string') {
+    return {
+      text: content,
+      thought: ''
+    }
+  }
+
+  const items = Array.isArray(content)
+    ? content
+    : content && typeof content === 'object'
+      ? [content]
+      : []
+
+  const textParts: string[] = []
+  const thoughtParts: string[] = []
+
+  for (const item of items) {
+    if (typeof item === 'string') {
+      textParts.push(item)
+      continue
+    }
+
+    if (!item || typeof item !== 'object') {
+      continue
+    }
+
+    const part = item as { type?: unknown; text?: unknown; thought?: unknown }
+    const partType = typeof part.type === 'string' ? part.type : null
+    const text = typeof part.text === 'string' ? part.text : null
+    const thought = typeof part.thought === 'string' ? part.thought : null
+
+    if (partType === 'thought') {
+      if (thought) {
+        thoughtParts.push(thought)
+      } else if (text) {
+        thoughtParts.push(text)
+      }
+      continue
+    }
+
+    if (text) {
+      textParts.push(text)
+      continue
+    }
+
+    if (thought) {
+      thoughtParts.push(thought)
+    }
+  }
+
+  return {
+    text: textParts.join(''),
+    thought: thoughtParts.join('\n')
+  }
+}
+
 function pushAssistantText(state: ParsedRunState, onEvent: RunOptions['onEvent'], text: string): void {
   if (!text) {
     return
@@ -420,34 +482,41 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
     return
   }
 
-  if (eventType === 'message' && parsed.role === 'assistant') {
-    if (typeof parsed.content === 'string') {
-      pushAssistantText(state, onEvent, parsed.content)
+  if (eventType === 'message') {
+    const role = typeof parsed.role === 'string' ? parsed.role : null
+    const { text, thought } = extractGeminiMessageContent(parsed.content)
+
+    if (role === 'assistant' || role === 'agent' || role === 'model') {
+      if (thought) {
+        emitIfText(onEvent, 'status', thought)
+      }
+
+      if (text) {
+        pushAssistantText(state, onEvent, text)
+      }
+
       return
     }
 
-    if (Array.isArray(parsed.content)) {
-      const text = parsed.content
-        .flatMap((item) => {
-          if (typeof item === 'string') {
-            return [item]
-          }
+    if (typeof parsed.messageType === 'string' && parsed.messageType === 'error' && (text || thought)) {
+      appendStderrText(state, onEvent, text || thought)
+      return
+    }
 
-          if (item && typeof item === 'object' && typeof (item as { text?: unknown }).text === 'string') {
-            return [(item as { text: string }).text]
-          }
-
-          return []
-        })
-        .join('')
-
-      pushAssistantText(state, onEvent, text)
+    if (text || thought) {
+      emitIfText(onEvent, 'status', text || thought)
       return
     }
   }
 
   if (eventType === 'tool_use' && typeof parsed.tool_name === 'string') {
     emitIfText(onEvent, 'tool', parsed.tool_name)
+    return
+  }
+
+  if (eventType === 'tool_request') {
+    const toolLabel = typeof parsed.name === 'string' ? parsed.name : 'tool'
+    emitIfText(onEvent, 'tool', `${toolLabel}: started`)
     return
   }
 
@@ -460,10 +529,39 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
     return
   }
 
+  if (eventType === 'tool_response') {
+    const toolLabel = typeof parsed.name === 'string' ? parsed.name : 'tool'
+    const hasErrorFlag = typeof parsed.isError === 'boolean'
+    emitIfText(
+      onEvent,
+      'tool',
+      hasErrorFlag ? `${toolLabel}: ${parsed.isError ? 'failed' : 'completed'}` : toolLabel
+    )
+
+    if (parsed.isError) {
+      const { text, thought } = extractGeminiMessageContent(parsed.content)
+      if (text || thought) {
+        appendStderrText(state, onEvent, text || thought)
+      }
+    }
+    return
+  }
+
   if (eventType === 'error') {
     const message = typeof parsed.message === 'string' ? parsed.message : JSON.stringify(parsed)
-    emitIfText(onEvent, 'stderr', message)
-    state.stderrText += `${message}\n`
+    appendStderrText(state, onEvent, message)
+    return
+  }
+
+  if (eventType === 'agent_end') {
+    const summary = getNestedString(parsed, ['data', 'message'])
+    if (summary) {
+      emitIfText(onEvent, 'status', summary)
+    }
+    return
+  }
+
+  if (eventType === 'agent_start' || eventType === 'session_update' || eventType === 'usage') {
     return
   }
 
@@ -479,6 +577,10 @@ function classifyStatus(response: string, stderrText: string): CliExecResult['st
   const normalizedStderr = stderrText.toLowerCase()
 
   if (/approval|approve|continue\?|yes\/no|which one|choose|select|confirm|confirmation required|need your input/.test(normalizedResponse)) {
+    return 'attention'
+  }
+
+  if (/tool execution denied by policy|you are in plan mode and cannot modify source code|may only use write_file or replace to save plans/.test(normalizedStderr)) {
     return 'attention'
   }
 
