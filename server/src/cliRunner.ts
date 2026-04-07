@@ -234,6 +234,30 @@ function getNestedString(value: unknown, pathSegments: string[]): string | null 
   return typeof current === 'string' && current.trim().length > 0 ? current : null
 }
 
+function getNestedBoolean(value: unknown, pathSegments: string[]): boolean | null {
+  let current: unknown = value
+
+  for (const segment of pathSegments) {
+    if (!current || typeof current !== 'object') {
+      return null
+    }
+
+    current = (current as Record<string, unknown>)[segment]
+  }
+
+  return typeof current === 'boolean' ? current : null
+}
+
+function normalizeCopilotToolErrorMessage(message: string): string {
+  const normalized = message.toLowerCase()
+
+  if (normalized.includes('powershell 6+ (pwsh) is not available') || normalized.includes('pwsh.exe --version')) {
+    return 'PowerShell 7 (pwsh) が見つからないため、Copilot CLI のツール実行に失敗しました。pwsh をインストールするか、pwsh 前提の操作を避けてください。'
+  }
+
+  return message
+}
+
 function pushAssistantText(state: ParsedRunState, onEvent: RunOptions['onEvent'], text: string): void {
   if (!text) {
     return
@@ -340,6 +364,25 @@ function handleCopilotLine(state: ParsedRunState, onEvent: RunOptions['onEvent']
     return
   }
 
+  if (eventType === 'tool.execution_complete') {
+    const toolLabel = getNestedString(parsed, ['data', 'tool']) ?? getNestedString(parsed, ['tool']) ?? 'tool'
+    const success = getNestedBoolean(parsed, ['data', 'success'])
+    const errorMessage = getNestedString(parsed, ['data', 'error', 'message'])
+
+    emitIfText(onEvent, 'tool', success === false ? `${toolLabel}: failed` : `${toolLabel}: completed`)
+
+    if (success === false && errorMessage) {
+      emitIfText(onEvent, 'stderr', normalizeCopilotToolErrorMessage(errorMessage))
+    }
+    return
+  }
+
+  if (eventType === 'tool.execution_start' || eventType === 'tool.execution_started') {
+    const toolLabel = getNestedString(parsed, ['data', 'tool']) ?? getNestedString(parsed, ['tool']) ?? 'tool'
+    emitIfText(onEvent, 'tool', `${toolLabel}: started`)
+    return
+  }
+
   const toolName = getNestedString(parsed, ['data', 'tool']) ?? getNestedString(parsed, ['tool'])
   if (toolName) {
     emitIfText(onEvent, 'tool', toolName)
@@ -349,6 +392,11 @@ function handleCopilotLine(state: ParsedRunState, onEvent: RunOptions['onEvent']
   const message = getNestedString(parsed, ['message']) ?? getNestedString(parsed, ['data', 'message'])
   if (message) {
     emitIfText(onEvent, 'status', message)
+    return
+  }
+
+  if (eventType) {
+    emitIfText(onEvent, 'status', eventType)
   }
 }
 
@@ -427,15 +475,15 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
 }
 
 function classifyStatus(response: string, stderrText: string): CliExecResult['statusHint'] {
-  const combined = `${response}
-${stderrText}`.toLowerCase()
+  const normalizedResponse = response.toLowerCase()
+  const normalizedStderr = stderrText.toLowerCase()
 
-  if (/permission denied|fatal:|traceback|exception|failed|error:|not found|enoent/.test(combined) && !/no error/.test(combined)) {
-    return 'error'
+  if (/approval|approve|continue\?|yes\/no|which one|choose|select|confirm|confirmation required|need your input/.test(normalizedResponse)) {
+    return 'attention'
   }
 
-  if (/approval|approve|continue\?|yes\/no|which one|choose|select|confirm|confirmation required|need your input/.test(combined)) {
-    return 'attention'
+  if (!normalizedResponse.trim() && /permission denied|fatal:|traceback|exception|failed|error:|not found|enoent/.test(normalizedStderr) && !/no error/.test(normalizedStderr)) {
+    return 'error'
   }
 
   return 'completed'
@@ -877,17 +925,17 @@ function createActiveRun(
         }
       }
 
+      const response = (state.finalText ?? state.assistantText).trim() || capturedOutput || remoteCapturedOutput.trim()
       if (stopped) {
         reject(new Error('CLI run stopped'))
         return
       }
 
-      if (code !== 0) {
+      if (!response && code !== 0) {
         reject(new Error(state.stderrText.trim() || `CLI exited with code ${code}`))
         return
       }
 
-      const response = (state.finalText ?? state.assistantText).trim() || capturedOutput || remoteCapturedOutput.trim()
       if (!response) {
         reject(new Error(state.stderrText.trim() || 'CLI returned empty output'))
         return

@@ -52,8 +52,8 @@ interface TerminalPaneProps {
   onShare: (paneId: string) => void
   onShareToPane: (sourcePaneId: string, targetPaneId: string) => void
   onCopyOutput: (paneId: string) => void
-  onCopyProviderCommand: (paneId: string, text: string, successMessage: string) => void
-  onCopyText: (paneId: string, text: string, successMessage: string) => void
+  onCopyProviderCommand: (paneId: string, text: string, successMessage: string) => Promise<boolean>
+  onCopyText: (paneId: string, text: string, successMessage: string) => Promise<boolean>
   onDuplicate: (paneId: string) => void
   onStartNewSession: (paneId: string) => void
   onResetSession: (paneId: string) => void
@@ -291,10 +291,11 @@ function formatStreamEntryForCopy(entry: PaneStreamEntry): string {
 function splitTrailingUrlPunctuation(value: string): { url: string; trailing: string } {
   let url = value
   let trailing = ''
+  const trailingChars = new Set([',', '.', ';', '!', '?', ')', ']', '}', '>', '`', '、', '。', '，', '．', '）', '］', '｝', '」', '』', '】'])
 
   while (url.length > 0) {
     const lastChar = url[url.length - 1] ?? ''
-    if (!'),.;!?'.includes(lastChar)) {
+    if (!trailingChars.has(lastChar)) {
       break
     }
 
@@ -303,6 +304,20 @@ function splitTrailingUrlPunctuation(value: string): { url: string; trailing: st
   }
 
   return { url, trailing }
+}
+
+function normalizeLinkTarget(value: string): string {
+  const trimmed = value.trim().replace(/^file:\/\/\/?/i, '')
+
+  try {
+    return decodeURIComponent(trimmed)
+  } catch {
+    return trimmed
+  }
+}
+
+function stripFileLineFragment(value: string): string {
+  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '')
 }
 
 function isSafeExternalUrl(value: string): boolean {
@@ -314,15 +329,74 @@ function isSafeExternalUrl(value: string): boolean {
   }
 }
 
-function renderTextWithLinks(text: string, keyPrefix: string): ReactNode[] {
+function isLikelyFileLinkTarget(value: string): boolean {
+  const normalized = normalizeLinkTarget(stripFileLineFragment(value))
+  if (!normalized || isSafeExternalUrl(normalized)) {
+    return false
+  }
+
+  return (
+    /^[A-Za-z]:[\\/]/.test(normalized) ||
+    normalized.startsWith('\\\\') ||
+    normalized.startsWith('/') ||
+    normalized.startsWith('./') ||
+    normalized.startsWith('../') ||
+    normalized.startsWith('.\\') ||
+    normalized.startsWith('..\\') ||
+    /^[^?#]+\.[A-Za-z0-9]+(?:#.*)?$/.test(normalized)
+  )
+}
+
+function acquireBodyScrollLock(): () => void {
+  if (typeof document === 'undefined') {
+    return () => undefined
+  }
+
+  const body = document.body
+  const root = document.documentElement
+  const countAttr = 'data-modal-lock-count'
+  const prevBodyOverflowAttr = 'data-prev-body-overflow'
+  const prevRootOverflowAttr = 'data-prev-root-overflow'
+  const currentCount = Number(body.getAttribute(countAttr) ?? '0')
+
+  if (currentCount === 0) {
+    body.setAttribute(prevBodyOverflowAttr, body.style.overflow)
+    root.setAttribute(prevRootOverflowAttr, root.style.overflow)
+    body.style.overflow = 'hidden'
+    root.style.overflow = 'hidden'
+  }
+
+  body.setAttribute(countAttr, String(currentCount + 1))
+
+  return () => {
+    const nextCount = Number(body.getAttribute(countAttr) ?? '1') - 1
+    if (nextCount <= 0) {
+      body.style.overflow = body.getAttribute(prevBodyOverflowAttr) ?? ''
+      root.style.overflow = root.getAttribute(prevRootOverflowAttr) ?? ''
+      body.removeAttribute(countAttr)
+      body.removeAttribute(prevBodyOverflowAttr)
+      root.removeAttribute(prevRootOverflowAttr)
+      return
+    }
+
+    body.setAttribute(countAttr, String(nextCount))
+  }
+}
+
+function renderTextWithLinks(
+  text: string,
+  keyPrefix: string,
+  onOpenFile?: (path: string) => void
+): ReactNode[] {
   const lines = text.split('\n')
   const nodes: ReactNode[] = []
+  const tokenPattern = /\[([^\]]+)\]\(([^)]+)\)|https?:\/\/[^\s<>"']+/g
 
   for (const [lineIndex, line] of lines.entries()) {
     let lastIndex = 0
 
-    for (const match of line.matchAll(/https?:\/\/[^\s<>"']+/g)) {
-      const rawUrl = match[0]
+    for (const match of line.matchAll(tokenPattern)) {
+      const token = match[0]
       const startIndex = match.index ?? 0
 
       if (startIndex > lastIndex) {
@@ -333,37 +407,77 @@ function renderTextWithLinks(text: string, keyPrefix: string): ReactNode[] {
         )
       }
 
-      const { url, trailing } = splitTrailingUrlPunctuation(rawUrl)
+      const markdownLabel = match[1]
+      const markdownTarget = match[2]
 
-      if (url && isSafeExternalUrl(url)) {
-        nodes.push(
-          <a
-            key={`${keyPrefix}-url-${lineIndex}-${startIndex}`}
-            className="linkified-link"
-            href={url}
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            {url}
-          </a>
-        )
+      if (markdownLabel && markdownTarget) {
+        const normalizedTarget = normalizeLinkTarget(markdownTarget)
+        const fileTarget = stripFileLineFragment(normalizedTarget)
+
+        if (isSafeExternalUrl(normalizedTarget)) {
+          nodes.push(
+            <a
+              key={`${keyPrefix}-md-url-${lineIndex}-${startIndex}`}
+              className="linkified-link"
+              href={normalizedTarget}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {markdownLabel}
+            </a>
+          )
+        } else if (isLikelyFileLinkTarget(normalizedTarget) && onOpenFile) {
+          nodes.push(
+            <button
+              key={`${keyPrefix}-md-file-${lineIndex}-${startIndex}`}
+              type="button"
+              className="linkified-link linkified-inline-button"
+              onClick={() => onOpenFile(fileTarget)}
+            >
+              {markdownLabel}
+            </button>
+          )
+        } else {
+          nodes.push(
+            <span key={`${keyPrefix}-md-plain-${lineIndex}-${startIndex}`}>
+              {markdownLabel}
+            </span>
+          )
+        }
       } else {
-        nodes.push(
-          <span key={`${keyPrefix}-raw-${lineIndex}-${startIndex}`}>
-            {rawUrl}
-          </span>
-        )
+        const rawUrl = token
+        const { url, trailing } = splitTrailingUrlPunctuation(rawUrl)
+
+        if (url && isSafeExternalUrl(url)) {
+          nodes.push(
+            <a
+              key={`${keyPrefix}-url-${lineIndex}-${startIndex}`}
+              className="linkified-link"
+              href={url}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {url}
+            </a>
+          )
+        } else {
+          nodes.push(
+            <span key={`${keyPrefix}-raw-${lineIndex}-${startIndex}`}>
+              {rawUrl}
+            </span>
+          )
+        }
+
+        if (trailing) {
+          nodes.push(
+            <span key={`${keyPrefix}-trail-${lineIndex}-${startIndex}`}>
+              {trailing}
+            </span>
+          )
+        }
       }
 
-      if (trailing) {
-        nodes.push(
-          <span key={`${keyPrefix}-trail-${lineIndex}-${startIndex}`}>
-            {trailing}
-          </span>
-        )
-      }
-
-      lastIndex = startIndex + rawUrl.length
+      lastIndex = startIndex + token.length
     }
 
     if (lastIndex < line.length) {
@@ -382,10 +496,20 @@ function renderTextWithLinks(text: string, keyPrefix: string): ReactNode[] {
   return nodes.length > 0 ? nodes : [<span key={`${keyPrefix}-empty`}>{text}</span>]
 }
 
-function LinkifiedText({ text, keyPrefix, variant = 'body' }: { text: string; keyPrefix: string; variant?: 'body' | 'mono' }) {
+function LinkifiedText({
+  text,
+  keyPrefix,
+  variant = 'body',
+  onOpenFile
+}: {
+  text: string
+  keyPrefix: string
+  variant?: 'body' | 'mono'
+  onOpenFile?: (path: string) => void
+}) {
   return (
     <div className={variant === 'mono' ? 'linkified-text linkified-text-mono' : 'linkified-text'}>
-      {renderTextWithLinks(text, keyPrefix)}
+      {renderTextWithLinks(text, keyPrefix, onOpenFile)}
     </div>
   )
 }
@@ -562,6 +686,24 @@ export function TerminalPane({
   const shellModalInputRef = useRef<HTMLInputElement | null>(null)
   const shellConsoleRef = useRef<HTMLDivElement | null>(null)
   const shellModalConsoleRef = useRef<HTMLDivElement | null>(null)
+  const copyFeedbackTimerRef = useRef<number | null>(null)
+  const [copiedControlKey, setCopiedControlKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copyFeedbackTimerRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isOutputExpanded && !isRunLogsExpanded && !isShellExpanded) {
+      return
+    }
+
+    return acquireBodyScrollLock()
+  }, [isOutputExpanded, isRunLogsExpanded, isShellExpanded])
 
   useEffect(() => {
     if (!isMenuOpen) {
@@ -646,7 +788,7 @@ export function TerminalPane({
   const isProviderUpdating = pane.status === 'updating'
   const isRunInProgress = pane.runInProgress
   const isBusy = isRunInProgress || hasRunningStatus || isProviderUpdating
-  const isStalled = isRunInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > 45_000
+  const isStalled = isRunInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > 120_000
   const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
@@ -681,8 +823,10 @@ export function TerminalPane({
   const hasVisibleConversation = visibleSession.logs.length > 0
   const hasVisibleStream = visibleSession.streamEntries.length > 0
   const hasVisibleSessionContent = hasVisibleConversation || hasVisibleStream
-  const conversationCopyText = visibleSession.logs.map((entry) => formatConversationEntryForCopy(entry, pane.provider)).join('\n\n').trim()
-  const streamCopyText = visibleSession.streamEntries.map((entry) => formatStreamEntryForCopy(entry)).join('\n\n').trim()
+  const visibleConversationEntries = useMemo(() => [...visibleSession.logs].reverse(), [visibleSession.logs])
+  const visibleStreamEntries = useMemo(() => [...visibleSession.streamEntries].reverse(), [visibleSession.streamEntries])
+  const conversationCopyText = visibleConversationEntries.map((entry) => formatConversationEntryForCopy(entry, pane.provider)).join('\n\n').trim()
+  const streamCopyText = visibleStreamEntries.map((entry) => formatStreamEntryForCopy(entry)).join('\n\n').trim()
   const activeRunLogsCopyText = runLogsTab === 'conversation' ? conversationCopyText : streamCopyText
   const activeRunLogsCopyLabel = runLogsTab === 'conversation' ? UI.copyConversationAll : UI.copyStreamAll
   const activeRunLogsCopyMessage = runLogsTab === 'conversation'
@@ -856,9 +1000,32 @@ export function TerminalPane({
     })
   }
 
+  const handleOpenLinkedPath = (targetPath: string) => {
+    onOpenPath(pane.id, targetPath, 'file')
+  }
+
   const handleOpenRunLogs = () => {
     setRunLogsTab('conversation')
     setIsRunLogsExpanded(true)
+  }
+
+  const flashCopiedControl = (controlKey: string) => {
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current)
+    }
+
+    setCopiedControlKey(controlKey)
+    copyFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopiedControlKey((current) => (current === controlKey ? null : current))
+      copyFeedbackTimerRef.current = null
+    }, 950)
+  }
+
+  const handleCopyWithFeedback = async (controlKey: string, text: string, successMessage: string) => {
+    const copied = await onCopyText(pane.id, text, successMessage)
+    if (copied) {
+      flashCopiedControl(controlKey)
+    }
   }
 
   const handleShellKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1070,7 +1237,7 @@ export function TerminalPane({
             </div>
           </div>
           <div className="output-surface console-output" aria-label="output-console">
-            {hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} variant="mono" /> : <p className="panel-placeholder">{UI.outputPlaceholder}</p>}
+            {hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} variant="mono" onOpenFile={handleOpenLinkedPath} /> : <p className="panel-placeholder">{UI.outputPlaceholder}</p>}
           </div>
         </section>
 
@@ -1517,7 +1684,7 @@ export function TerminalPane({
               <div><h3>{UI.output}</h3><p>{pane.title}</p></div>
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(false)} title="close"><X size={16} /></button>
             </div>
-            <div className="output-modal-body">{hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output-modal`} variant="mono" /> : null}</div>
+            <div className="output-modal-body">{hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output-modal`} variant="mono" onOpenFile={handleOpenLinkedPath} /> : null}</div>
             <div className="output-modal-footer"><button type="button" className="secondary-button" disabled={!outputText} onClick={() => onCopyOutput(pane.id)}><Copy size={16} />{UI.copyOutput}</button></div>
           </div>
         </div>
@@ -1553,7 +1720,15 @@ export function TerminalPane({
                       </button>
                     </div>
                     <div className="run-logs-action-row">
-                      <button type="button" className="secondary-button" disabled={!activeRunLogsCopyText} onClick={() => onCopyText(pane.id, activeRunLogsCopyText, activeRunLogsCopyMessage)}><Copy size={15} />{activeRunLogsCopyLabel}</button>
+                      <button
+                        type="button"
+                        className={copiedControlKey === `run-logs-${runLogsTab}` ? 'secondary-button is-copied' : 'secondary-button'}
+                        disabled={!activeRunLogsCopyText}
+                        onClick={() => void handleCopyWithFeedback(`run-logs-${runLogsTab}`, activeRunLogsCopyText, activeRunLogsCopyMessage)}
+                      >
+                        {copiedControlKey === `run-logs-${runLogsTab}` ? <CheckCircle2 size={15} /> : <Copy size={15} />}
+                        {copiedControlKey === `run-logs-${runLogsTab}` ? 'コピー済み' : activeRunLogsCopyLabel}
+                      </button>
                       <button type="button" className="secondary-button" disabled={isBusy || !hasVisibleSessionContent} onClick={() => onClearSelectedSessionHistory(pane.id, visibleSession.key)}><Trash2 size={15} />{UI.clearSelectedSessionHistory}</button>
                       <button type="button" className="danger-button" disabled={isBusy || !hasSessionRecords} onClick={() => onClearAllSessionHistory(pane.id)}><Trash2 size={15} />{UI.clearAllSessionHistory}</button>
                     </div>
@@ -1564,16 +1739,24 @@ export function TerminalPane({
                       <div className="history-panel run-logs-panel">
                         <div className="section-headline compact-headline"><strong>{UI.conversation}</strong><span>{visibleSession.logs.length}</span></div>
                         <div className="history-feed">
-                          {visibleSession.logs.map((entry) => (
+                          {visibleConversationEntries.map((entry) => (
                             <article key={entry.id} className={`history-entry ${entry.role}`}>
                               <header>
                                 <div className="run-log-entry-header-main">
                                   <strong>{getConversationEntryLabel(entry, pane.provider)}</strong>
                                   <span>{formatClock(entry.createdAt)}</span>
                                 </div>
-                                <button type="button" className="icon-button compact-icon-button run-log-copy-button" onClick={() => onCopyText(pane.id, formatConversationEntryForCopy(entry, pane.provider), '会話履歴の項目をコピーしました')} title={UI.copyEntry} aria-label={UI.copyEntry}><Copy size={14} /></button>
+                                <button
+                                  type="button"
+                                  className={copiedControlKey === `conversation-${entry.id}` ? 'icon-button compact-icon-button run-log-copy-button is-copied' : 'icon-button compact-icon-button run-log-copy-button'}
+                                  onClick={() => void handleCopyWithFeedback(`conversation-${entry.id}`, formatConversationEntryForCopy(entry, pane.provider), '会話履歴の項目をコピーしました')}
+                                  title={UI.copyEntry}
+                                  aria-label={UI.copyEntry}
+                                >
+                                  {copiedControlKey === `conversation-${entry.id}` ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                                </button>
                               </header>
-                              <LinkifiedText text={entry.text} keyPrefix={`${entry.id}-conversation`} />
+                              <LinkifiedText text={entry.text} keyPrefix={`${entry.id}-conversation`} onOpenFile={handleOpenLinkedPath} />
                             </article>
                           ))}
                         </div>
@@ -1582,17 +1765,25 @@ export function TerminalPane({
                   ) : hasVisibleStream ? (
                     <div className="activity-panel run-logs-panel">
                       <div className="section-headline compact-headline"><strong>{UI.stream}</strong><span>{visibleSession.streamEntries.length}</span></div>
-                      <div className="activity-feed">
-                        {visibleSession.streamEntries.map((entry) => (
+                        <div className="activity-feed">
+                          {visibleStreamEntries.map((entry) => (
                           <article key={entry.id} className={`activity-entry ${entry.kind}`}>
                             <header>
                               <div className="run-log-entry-header-main">
                                 <strong>{entry.kind}</strong>
                                 <span>{formatClock(entry.createdAt)}</span>
                               </div>
-                              <button type="button" className="icon-button compact-icon-button run-log-copy-button" onClick={() => onCopyText(pane.id, formatStreamEntryForCopy(entry), 'ストリーム項目をコピーしました')} title={UI.copyEntry} aria-label={UI.copyEntry}><Copy size={14} /></button>
+                              <button
+                                type="button"
+                                className={copiedControlKey === `stream-${entry.id}` ? 'icon-button compact-icon-button run-log-copy-button is-copied' : 'icon-button compact-icon-button run-log-copy-button'}
+                                onClick={() => void handleCopyWithFeedback(`stream-${entry.id}`, formatStreamEntryForCopy(entry), 'ストリーム項目をコピーしました')}
+                                title={UI.copyEntry}
+                                aria-label={UI.copyEntry}
+                              >
+                                {copiedControlKey === `stream-${entry.id}` ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                              </button>
                             </header>
-                              <LinkifiedText text={entry.text} keyPrefix={`${entry.id}-stream`} />
+                              <LinkifiedText text={entry.text} keyPrefix={`${entry.id}-stream`} onOpenFile={handleOpenLinkedPath} />
                           </article>
                         ))}
                       </div>

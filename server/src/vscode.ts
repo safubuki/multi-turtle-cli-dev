@@ -89,6 +89,10 @@ function buildLocalFolderUri(localPath: string): string {
   return pathToFileURL(path.resolve(localPath)).toString()
 }
 
+function buildLocalFileUri(localPath: string): string {
+  return pathToFileURL(path.resolve(localPath)).toString()
+}
+
 function buildRemoteFileUri(host: string, remotePath: string): string {
   const normalized = remotePath.replace(/\\/g, '/')
   const pathname = normalized.startsWith('/') ? normalized : `/${normalized}`
@@ -240,13 +244,18 @@ function tryLaunchViaPowerShellStartProcess(filePath: string, args: string[], cw
 
 export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
   const resourceType = target.resourceType ?? 'folder'
+  const workspacePath = target.workspacePath?.trim()
   const args =
     target.kind === 'local'
       ? resourceType === 'file'
-        ? [path.resolve(target.path)]
+        ? workspacePath
+          ? ['--reuse-window', '--folder-uri', buildLocalFolderUri(workspacePath), '--file-uri', buildLocalFileUri(target.path)]
+          : ['--file-uri', buildLocalFileUri(target.path)]
         : ['--folder-uri', buildLocalFolderUri(target.path)]
       : resourceType === 'file'
-        ? ['--file-uri', buildRemoteFileUri(target.host, target.path)]
+        ? workspacePath
+          ? ['--reuse-window', '--folder-uri', buildRemoteFolderUri(target.host, workspacePath), '--file-uri', buildRemoteFileUri(target.host, target.path)]
+          : ['--file-uri', buildRemoteFileUri(target.host, target.path)]
         : ['--folder-uri', buildRemoteFolderUri(target.host, target.path)]
 
   let lastError: unknown = null

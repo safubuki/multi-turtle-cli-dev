@@ -89,7 +89,7 @@ const MAX_SESSION_HISTORY = 18
 const MAX_LIVE_OUTPUT = 64_000
 const MAX_SHELL_OUTPUT = 48_000
 const MAX_SHARED_CONTEXT = 16
-const STALL_MS = 45_000
+const STALL_MS = 120_000
 const BOOTSTRAP_RETRY_DELAY_MS = 500
 const BOOTSTRAP_MAX_ATTEMPTS = 12
 const TITLE_IMAGE_URL = new URL('../assets/title.png', import.meta.url).href
@@ -355,6 +355,134 @@ function normalizeComparablePath(value: string): string {
   return normalized
 }
 
+function normalizeLinkedPathTarget(value: string): string {
+  const trimmed = value.trim().replace(/^file:\/\/\/?/i, '')
+
+  try {
+    return decodeURIComponent(trimmed)
+  } catch {
+    return trimmed
+  }
+}
+
+function stripLinkedPathFragment(value: string): string {
+  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '')
+}
+
+function isAbsoluteLocalPath(value: string): boolean {
+  const normalized = value.replace(/\//g, '\\')
+  return /^[A-Za-z]:\\/.test(normalized) || normalized.startsWith('\\\\')
+}
+
+function resolvePathSegments(baseSegments: string[], targetSegments: string[], minDepth = 0): string[] {
+  const resolved = [...baseSegments]
+
+  for (const segment of targetSegments) {
+    if (!segment || segment === '.') {
+      continue
+    }
+
+    if (segment === '..') {
+      if (resolved.length > minDepth) {
+        resolved.pop()
+      }
+      continue
+    }
+
+    resolved.push(segment)
+  }
+
+  return resolved
+}
+
+function resolveLinkedLocalPath(targetPath: string, workspaceRoot: string): string {
+  const normalizedTarget = stripLinkedPathFragment(normalizeLinkedPathTarget(targetPath)).replace(/\//g, '\\')
+  if (!normalizedTarget) {
+    return ''
+  }
+
+  if (isAbsoluteLocalPath(normalizedTarget)) {
+    return normalizedTarget
+  }
+
+  const normalizedWorkspaceRoot = workspaceRoot.trim().replace(/\//g, '\\')
+  if (!normalizedWorkspaceRoot) {
+    return normalizedTarget
+  }
+
+  const driveMatch = normalizedWorkspaceRoot.match(/^[A-Za-z]:/)
+  if (normalizedTarget.startsWith('\\') && driveMatch) {
+    return `${driveMatch[0]}${normalizedTarget}`
+  }
+
+  const baseSegments = normalizedWorkspaceRoot.split('\\').filter(Boolean)
+  const targetSegments = normalizedTarget.split('\\').filter(Boolean)
+  const resolvedSegments = resolvePathSegments(baseSegments, targetSegments, /^[A-Za-z]:$/.test(baseSegments[0] ?? '') ? 1 : 0)
+
+  if (/^[A-Za-z]:$/.test(resolvedSegments[0] ?? '')) {
+    return `${resolvedSegments[0]}\\${resolvedSegments.slice(1).join('\\')}`
+  }
+
+  return resolvedSegments.join('\\')
+}
+
+function resolveLinkedRemotePath(targetPath: string, workspaceRoot: string): string {
+  const normalizedTarget = stripLinkedPathFragment(normalizeLinkedPathTarget(targetPath)).replace(/\\/g, '/')
+  if (!normalizedTarget) {
+    return ''
+  }
+
+  if (normalizedTarget.startsWith('/')) {
+    return normalizedTarget
+  }
+
+  const normalizedWorkspaceRoot = workspaceRoot.trim().replace(/\\/g, '/')
+  if (!normalizedWorkspaceRoot) {
+    return normalizedTarget
+  }
+
+  const baseSegments = normalizedWorkspaceRoot.split('/').filter(Boolean)
+  const targetSegments = normalizedTarget.split('/').filter(Boolean)
+  const resolvedSegments = resolvePathSegments(baseSegments, targetSegments)
+  return `/${resolvedSegments.join('/')}`
+}
+
+function acquireBodyScrollLock(): () => void {
+  if (typeof document === 'undefined') {
+    return () => undefined
+  }
+
+  const body = document.body
+  const root = document.documentElement
+  const countAttr = 'data-modal-lock-count'
+  const prevBodyOverflowAttr = 'data-prev-body-overflow'
+  const prevRootOverflowAttr = 'data-prev-root-overflow'
+  const currentCount = Number(body.getAttribute(countAttr) ?? '0')
+
+  if (currentCount === 0) {
+    body.setAttribute(prevBodyOverflowAttr, body.style.overflow)
+    root.setAttribute(prevRootOverflowAttr, root.style.overflow)
+    body.style.overflow = 'hidden'
+    root.style.overflow = 'hidden'
+  }
+
+  body.setAttribute(countAttr, String(currentCount + 1))
+
+  return () => {
+    const nextCount = Number(body.getAttribute(countAttr) ?? '1') - 1
+    if (nextCount <= 0) {
+      body.style.overflow = body.getAttribute(prevBodyOverflowAttr) ?? ''
+      root.style.overflow = root.getAttribute(prevRootOverflowAttr) ?? ''
+      body.removeAttribute(countAttr)
+      body.removeAttribute(prevBodyOverflowAttr)
+      root.removeAttribute(prevRootOverflowAttr)
+      return
+    }
+
+    body.setAttribute(countAttr, String(nextCount))
+  }
+}
+
 function clampLocalPathToWorkspace(targetPath: string, workspaceRoot: string): string {
   const normalizedTarget = normalizeComparablePath(targetPath)
   const normalizedRoot = normalizeComparablePath(workspaceRoot)
@@ -399,10 +527,6 @@ function isProviderId(value: unknown): value is ProviderId {
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
-}
-
-function isAbortLikeMessage(message: string): boolean {
-  return /stopped|stop requested|terminated|aborted|cancel|signal/i.test(message)
 }
 
 function normalizeLocalWorkspace(rawWorkspace: Partial<LocalWorkspace> | null | undefined): LocalWorkspace | null {
@@ -687,7 +811,8 @@ function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[],
       kind: 'local',
       path: pane.localWorkspacePath,
       label: workspace?.label ?? pane.localWorkspacePath,
-      resourceType: 'folder'
+      resourceType: 'folder',
+      workspacePath: pane.localWorkspacePath
     }
   }
 
@@ -703,6 +828,7 @@ function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[],
     path: pane.remoteWorkspacePath.trim(),
     label: buildSshLabel(pane.sshHost.trim(), pane.remoteWorkspacePath.trim(), connection),
     resourceType: 'folder',
+    workspacePath: pane.remoteWorkspacePath.trim(),
     connection
   }
 }
@@ -1378,6 +1504,14 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!workspacePicker) {
+      return
+    }
+
+    return acquireBodyScrollLock()
+  }, [workspacePicker])
+
   const catalogs = bootstrap?.providers ?? EMPTY_CATALOGS
   const isBootstrapping = loading && !bootstrap
   const paneOrderKey = useMemo(() => panes.map((pane) => pane.id).join('|'), [panes])
@@ -1880,12 +2014,16 @@ function App() {
 
   const handleStreamEvent = (paneId: string, event: RunStreamEvent) => {
     const eventAt = Date.now()
+    const shouldKeepRunning = Boolean(controllersRef.current[paneId]) && !stopRequestedRef.current.has(paneId)
 
     if (event.type === 'assistant-delta') {
       startTransition(() => {
         mutatePane(paneId, (pane) => ({
           ...pane,
+          status: shouldKeepRunning ? 'running' : pane.status,
           liveOutput: appendLiveOutputChunk(pane.liveOutput, event.text),
+          runInProgress: shouldKeepRunning ? true : pane.runInProgress,
+          runningSince: shouldKeepRunning ? pane.runningSince ?? eventAt : pane.runningSince,
           lastActivityAt: eventAt,
           statusText: '\u5fdc\u7b54\u3092\u751f\u6210\u4e2d'
         }))
@@ -1896,9 +2034,13 @@ function App() {
     if (event.type === 'session') {
       mutatePane(paneId, (pane) => ({
         ...pane,
+        status: shouldKeepRunning ? 'running' : pane.status,
         sessionId: event.sessionId,
         sessionScopeKey: buildPaneSessionScopeKey(pane),
+        runInProgress: shouldKeepRunning ? true : pane.runInProgress,
+        runningSince: shouldKeepRunning ? pane.runningSince ?? eventAt : pane.runningSince,
         lastActivityAt: eventAt,
+        statusText: shouldKeepRunning ? '\u5b9f\u884c\u4e2d' : pane.statusText,
         streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb: ${event.sessionId}`, eventAt)
       }))
       return
@@ -1912,12 +2054,15 @@ function App() {
 
         return {
           ...pane,
+          status: shouldKeepRunning ? 'running' : pane.status,
           lastActivityAt: eventAt,
+          runInProgress: shouldKeepRunning ? true : pane.runInProgress,
+          runningSince: shouldKeepRunning ? pane.runningSince ?? eventAt : pane.runningSince,
+          statusText: shouldKeepRunning ? '\u5b9f\u884c\u4e2d' : pane.statusText,
           streamEntries:
             issueSummary && !pane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
               ? appendStreamEntry(appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt), 'system', issueSummary.displayMessage, eventAt)
-              : appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt),
-          lastError: event.type === 'stderr' ? issueSummary?.displayMessage ?? normalizedText : pane.lastError
+              : appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt)
         }
       })
       return
@@ -2131,7 +2276,7 @@ function App() {
       )
     } catch (error) {
       const message = sanitizeTerminalText(error instanceof Error ? error.message : String(error)).trim()
-      const stopped = controller.signal.aborted || stopRequestedRef.current.has(paneId) || isAbortLikeMessage(message)
+      const stopped = controller.signal.aborted || stopRequestedRef.current.has(paneId)
       const streamErrored = streamErroredRef.current.delete(paneId)
 
       if (!stopped && !streamErrored) {
@@ -2407,25 +2552,21 @@ function App() {
     }))
   }
 
-  const copyPaneText = async (paneId: string, text: string | null, successMessage: string) => {
+  const copyPaneText = async (paneId: string, text: string | null, _successMessage: string): Promise<boolean> => {
     if (!text?.trim()) {
-      return
+      return false
     }
 
     try {
       await writeClipboardText(text)
-      const copiedAt = Date.now()
-      mutatePane(paneId, (currentPane) => ({
-        ...currentPane,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', successMessage, copiedAt),
-        lastActivityAt: copiedAt
-      }))
+      return true
     } catch (error) {
       updatePane(paneId, {
         status: 'error',
         statusText: '\u30b3\u30d4\u30fc\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
         lastError: error instanceof Error ? error.message : String(error)
       })
+      return false
     }
   }
 
@@ -2435,11 +2576,11 @@ function App() {
   }
 
   const handleCopyProviderCommand = async (paneId: string, text: string, successMessage: string) => {
-    await copyPaneText(paneId, text, successMessage)
+    return copyPaneText(paneId, text, successMessage)
   }
 
   const handleCopyText = async (paneId: string, text: string, successMessage: string) => {
-    await copyPaneText(paneId, text, successMessage)
+    return copyPaneText(paneId, text, successMessage)
   }
 
   const handleClearSelectedSessionHistory = (paneId: string, sessionKey: string | null) => {
@@ -3162,20 +3303,31 @@ function App() {
       return
     }
 
+    const resolvedPath =
+      pane.workspaceMode === 'local'
+        ? resolveLinkedLocalPath(path, pane.localWorkspacePath.trim())
+        : resolveLinkedRemotePath(path, pane.remoteWorkspacePath.trim())
+
+    if (!resolvedPath) {
+      return
+    }
+
     const target: WorkspaceTarget =
       pane.workspaceMode === 'local'
         ? {
             kind: 'local',
-            path: path.trim(),
-            label: path.trim(),
-            resourceType
+            path: resolvedPath,
+            label: resolvedPath,
+            resourceType,
+            workspacePath: pane.localWorkspacePath.trim()
           }
         : {
             kind: 'ssh',
             host: pane.sshHost.trim(),
-            path: path.trim(),
-            label: buildSshLabel(pane.sshHost.trim(), path.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)),
+            path: resolvedPath,
+            label: buildSshLabel(pane.sshHost.trim(), resolvedPath, buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)),
             resourceType,
+            workspacePath: pane.remoteWorkspacePath.trim(),
             connection: buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
           }
 
@@ -4097,8 +4249,8 @@ function App() {
                     shareFromPane(sourcePaneId, undefined, { scope: 'direct', targetPaneId })
                   }
                   onCopyOutput={(paneId) => void handleCopyOutput(paneId)}
-                  onCopyProviderCommand={(paneId, text, successMessage) => void handleCopyProviderCommand(paneId, text, successMessage)}
-                  onCopyText={(paneId, text, successMessage) => void handleCopyText(paneId, text, successMessage)}
+                  onCopyProviderCommand={(paneId, text, successMessage) => handleCopyProviderCommand(paneId, text, successMessage)}
+                  onCopyText={(paneId, text, successMessage) => handleCopyText(paneId, text, successMessage)}
                   onDuplicate={handleDuplicatePane}
                   onStartNewSession={handleStartNewSession}
                   onResetSession={handleResetSession}

@@ -106,6 +106,7 @@ export type WorkspaceTarget =
       path: string
       label: string
       resourceType?: 'folder' | 'file'
+      workspacePath?: string
     }
   | {
       kind: 'ssh'
@@ -113,6 +114,7 @@ export type WorkspaceTarget =
       path: string
       label: string
       resourceType?: 'folder' | 'file'
+      workspacePath?: string
       connection?: SshConnectionOptions
     }
 
