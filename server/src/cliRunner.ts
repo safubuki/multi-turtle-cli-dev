@@ -103,6 +103,7 @@ function isCodexSandboxStartupFailure(message: string): boolean {
   const normalized = message.toLowerCase()
   return normalized.includes('bwrap:') ||
     normalized.includes('bubblewrap') ||
+    (normalized.includes('windows sandbox') && normalized.includes('createprocessasuserw failed')) ||
     normalized.includes('failed rtm_newaddr') ||
     (normalized.includes('loopback') && normalized.includes('operation not permitted')) ||
     (normalized.includes('sandbox') && normalized.includes('operation not permitted'))

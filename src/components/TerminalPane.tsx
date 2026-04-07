@@ -540,10 +540,11 @@ export function TerminalPane({
   const availableRemoteProviders = isRemoteConnected ? pane.remoteAvailableProviders : (['codex', 'copilot', 'gemini'] as ProviderId[])
   const selectedLocalWorkspace = localWorkspaces.find((workspace) => workspace.path === pane.localWorkspacePath)
   const canRemoveLocalWorkspace = selectedLocalWorkspace?.source === 'manual'
+  const hasRunningStatus = pane.status === 'running'
   const isProviderUpdating = pane.status === 'updating'
-  const isRunInProgress = pane.status === 'running'
-  const isBusy = isRunInProgress || isProviderUpdating
-  const isStalled = pane.status === 'running' && pane.lastActivityAt !== null && now - pane.lastActivityAt > 45_000
+  const isRunInProgress = pane.runInProgress
+  const isBusy = isRunInProgress || hasRunningStatus || isProviderUpdating
+  const isStalled = isRunInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > 45_000
   const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
@@ -738,6 +739,10 @@ export function TerminalPane({
   }
 
   const handleRunRequest = () => {
+    if (!canRun || isBusy) {
+      return
+    }
+
     onRun(pane.id)
     window.requestAnimationFrame(() => {
       promptRef.current?.focus()
@@ -920,7 +925,7 @@ export function TerminalPane({
           <span className="tiny-badge">{currentModel?.name ?? pane.model}</span>
           <span className="tiny-badge">{pane.workspaceMode === 'local' ? UI.localPc : UI.remotePc}</span>
           <span className="tiny-badge">{workspaceLabel}</span>
-          <span className={isStalled ? 'tiny-badge warning' : 'tiny-badge'}>{isRunInProgress ? `\u5b9f\u884c ${formatElapsed(pane.runningSince, now)}` : isProviderUpdating ? `\u66f4\u65b0 ${formatElapsed(pane.runningSince, now)}` : `\u6700\u7d42 ${formatClock(pane.lastRunAt)}`}</span>
+          <span className={isStalled ? 'tiny-badge warning' : 'tiny-badge'}>{isRunInProgress ? `\u5b9f\u884c ${formatElapsed(pane.runningSince, now)}` : isProviderUpdating ? `\u66f4\u65b0 ${formatElapsed(pane.runningSince, now)}` : hasRunningStatus ? `\u51e6\u7406 ${formatElapsed(pane.runningSince, now)}` : `\u6700\u7d42 ${formatClock(pane.lastRunAt)}`}</span>
         </div>
 
         <section className="primary-panel output-panel">
@@ -987,6 +992,8 @@ export function TerminalPane({
                 <><LoaderCircle size={16} className="spin" /><span>{isStalled ? UI.stalledHint : UI.runningHint}</span></>
               ) : isProviderUpdating ? (
                 <><LoaderCircle size={16} className="spin" /><span>{UI.updatingHint}</span></>
+              ) : hasRunningStatus ? (
+                <><LoaderCircle size={16} className="spin" /><span>{pane.statusText}</span></>
               ) : pane.lastError ? (
                 <><AlertTriangle size={16} /><span>{pane.lastError}</span></>
               ) : (
@@ -997,7 +1004,7 @@ export function TerminalPane({
               {isRunInProgress ? (
                 <button type="button" className="danger-button stable-run-button" onClick={() => onStop(pane.id)}><Square size={16} />{UI.stop}</button>
               ) : (
-                <button type="button" className="primary-button stable-run-button" disabled={!canRun || isProviderUpdating} onClick={handleRunRequest}><Play size={16} />{UI.run}</button>
+                <button type="button" className="primary-button stable-run-button" disabled={!canRun || isBusy} onClick={handleRunRequest}><Play size={16} />{UI.run}</button>
               )}
             </div>
           </div>

@@ -727,6 +727,7 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     codexFastMode: 'off',
     status: 'idle',
     statusText: statusLabel('idle'),
+    runInProgress: false,
     shellCommand: '',
     shellOutput: '',
     shellHistory: [],
@@ -905,6 +906,7 @@ function resetActiveSessionFields(pane: PaneState): PaneState {
     prompt: '',
     status: 'idle',
     statusText: statusLabel('idle'),
+    runInProgress: false,
     logs: [],
     streamEntries: [],
     selectedSessionKey: null,
@@ -930,6 +932,42 @@ function readJsonStorage<T>(key: string, fallback: T): T {
     return raw ? (JSON.parse(raw) as T) : fallback
   } catch {
     return fallback
+  }
+}
+
+function isPaneBusyForExecution(pane: Pick<PaneState, 'status' | 'runInProgress'>): boolean {
+  return pane.runInProgress || pane.status === 'running' || pane.status === 'updating'
+}
+
+function applyBackgroundActionSuccess(pane: PaneState, statusText: string, eventAt: number): PaneState {
+  if (isPaneBusyForExecution(pane)) {
+    return {
+      ...pane,
+      streamEntries: appendStreamEntry(pane.streamEntries, 'system', statusText, eventAt)
+    }
+  }
+
+  return {
+    ...pane,
+    status: 'idle',
+    statusText,
+    lastError: null
+  }
+}
+
+function applyBackgroundActionFailure(pane: PaneState, statusText: string, errorMessage: string, eventAt: number): PaneState {
+  if (isPaneBusyForExecution(pane)) {
+    return {
+      ...pane,
+      streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', `${statusText}: ${errorMessage}`, eventAt)
+    }
+  }
+
+  return {
+    ...pane,
+    status: 'error',
+    statusText,
+    lastError: errorMessage
   }
 }
 
@@ -1095,6 +1133,7 @@ function normalizePane(
     codexFastMode: rawPane.codexFastMode === 'fast' ? 'fast' : 'off',
     status: restoredStatus,
     statusText,
+    runInProgress: false,
     shellCommand: typeof rawPane.shellCommand === 'string' ? rawPane.shellCommand : '',
     shellOutput: typeof rawPane.shellOutput === 'string' ? clipText(rawPane.shellOutput, MAX_SHELL_OUTPUT) : '',
     shellHistory: Array.isArray(rawPane.shellHistory)
@@ -1359,7 +1398,7 @@ function App() {
     }
 
     for (const pane of panes) {
-      if (pane.status === 'running' || pane.status === 'updating') {
+      if (isPaneBusyForExecution(pane)) {
         result.running += 1
       } else if (pane.status === 'completed') {
         result.completed += 1
@@ -1369,7 +1408,7 @@ function App() {
         result.error += 1
       }
 
-      if (pane.status === 'running' && pane.lastActivityAt !== null && now - pane.lastActivityAt > STALL_MS) {
+      if (pane.runInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > STALL_MS) {
         result.stalled += 1
       }
     }
@@ -1907,6 +1946,7 @@ function App() {
           logs: appendLogEntry(pane.logs, assistantEntry),
           status: event.statusHint,
           statusText: statusLabel(event.statusHint),
+          runInProgress: false,
           runningSince: null,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
@@ -1949,6 +1989,7 @@ function App() {
           logs: appendLogEntry(pane.logs, systemEntry),
           status: issueSummary?.status ?? 'error',
           statusText: issueSummary?.statusText ?? statusLabel('error'),
+          runInProgress: false,
           runningSince: null,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
@@ -1962,7 +2003,7 @@ function App() {
 
   const handleRun = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || pane.status === 'running') {
+    if (!pane || isPaneBusyForExecution(pane) || controllersRef.current[paneId]) {
       return
     }
 
@@ -2049,6 +2090,7 @@ function App() {
       logs: appendLogEntry(currentPane.logs, userEntry),
       status: 'running',
       statusText: '\u5b9f\u884c\u4e2d',
+      runInProgress: true,
       lastRunAt: startedAt,
       runningSince: startedAt,
       lastActivityAt: startedAt,
@@ -2103,6 +2145,7 @@ function App() {
             logs: appendLogEntry(currentPane.logs, systemEntry),
             status: issueSummary?.status ?? 'error',
             statusText: issueSummary?.statusText ?? statusLabel('error'),
+            runInProgress: false,
             runningSince: null,
             lastActivityAt: failedAt,
             lastFinishedAt: failedAt,
@@ -2122,6 +2165,7 @@ function App() {
           ...currentPane,
           status: 'attention',
           statusText: '\u505c\u6b62\u3057\u307e\u3057\u305f',
+          runInProgress: false,
           runningSince: null,
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
@@ -2143,6 +2187,7 @@ function App() {
       ...pane,
       status: 'attention',
       statusText: '\u505c\u6b62\u3057\u307e\u3057\u305f',
+      runInProgress: false,
       runningSince: null
     }))
 
@@ -2306,6 +2351,7 @@ function App() {
       title: `${pane.title} copy`,
       status: 'idle',
       statusText: statusLabel('idle'),
+      runInProgress: false,
       prompt: '',
       logs: [],
       streamEntries: [],
@@ -2857,17 +2903,12 @@ function App() {
 
     try {
       await openWorkspaceInVsCode(target)
-      updatePane(paneId, {
-        status: 'idle',
-        statusText: 'VSCode \u3092\u8d77\u52d5\u3057\u307e\u3057\u305f',
-        lastError: null
-      })
+      const completedAt = Date.now()
+      mutatePane(paneId, (currentPane) => applyBackgroundActionSuccess(currentPane, 'VSCode \u3092\u8d77\u52d5\u3057\u307e\u3057\u305f', completedAt))
     } catch (error) {
-      updatePane(paneId, {
-        status: 'error',
-        statusText: 'VSCode \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
-      })
+      const failedAt = Date.now()
+      const message = error instanceof Error ? error.message : String(error)
+      mutatePane(paneId, (currentPane) => applyBackgroundActionFailure(currentPane, 'VSCode \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f', message, failedAt))
     }
   }
 
@@ -2889,17 +2930,12 @@ function App() {
         label: targetPath,
         resourceType: 'folder'
       })
-      updatePane(paneId, {
-        status: 'idle',
-        statusText: 'Explorer を起動しました',
-        lastError: null
-      })
+      const completedAt = Date.now()
+      mutatePane(paneId, (currentPane) => applyBackgroundActionSuccess(currentPane, 'Explorer を起動しました', completedAt))
     } catch (error) {
-      updatePane(paneId, {
-        status: 'error',
-        statusText: 'Explorer の起動に失敗しました',
-        lastError: error instanceof Error ? error.message : String(error)
-      })
+      const failedAt = Date.now()
+      const message = error instanceof Error ? error.message : String(error)
+      mutatePane(paneId, (currentPane) => applyBackgroundActionFailure(currentPane, 'Explorer の起動に失敗しました', message, failedAt))
     }
   }
 
@@ -2916,17 +2952,12 @@ function App() {
 
     try {
       await openTargetInCommandPrompt(target)
-      updatePane(paneId, {
-        status: 'idle',
-        statusText: '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3057\u307e\u3057\u305f',
-        lastError: null
-      })
+      const completedAt = Date.now()
+      mutatePane(paneId, (currentPane) => applyBackgroundActionSuccess(currentPane, '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3057\u307e\u3057\u305f', completedAt))
     } catch (error) {
-      updatePane(paneId, {
-        status: 'error',
-        statusText: '\u30bf\u30fc\u30df\u30ca\u30eb\u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
-      })
+      const failedAt = Date.now()
+      const message = error instanceof Error ? error.message : String(error)
+      mutatePane(paneId, (currentPane) => applyBackgroundActionFailure(currentPane, '\u30bf\u30fc\u30df\u30ca\u30eb\u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f', message, failedAt))
     }
   }
 
@@ -3996,7 +4027,7 @@ function App() {
           <div className="pane-matrix">
             {panes.map((pane, index) => {
               const isFocused = pane.id === focusedPaneId
-              const isStalled = pane.status === 'running' && pane.lastActivityAt !== null && now - pane.lastActivityAt > STALL_MS
+              const isStalled = pane.runInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > STALL_MS
 
               return (
                 <button

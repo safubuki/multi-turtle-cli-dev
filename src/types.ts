@@ -208,6 +208,7 @@ export interface PaneState {
   codexFastMode: CodexFastMode
   status: PaneStatus
   statusText: string
+  runInProgress: boolean
   workspaceMode: WorkspaceMode
   localWorkspacePath: string
   localBrowserPath: string
