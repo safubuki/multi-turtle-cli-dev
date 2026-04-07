@@ -22,6 +22,7 @@ interface RunOptions {
   reasoningEffort: ReasoningEffort
   autonomyMode: AutonomyMode
   codexFastMode: CodexFastMode
+  codexExecutionMode?: 'sandboxed' | 'danger-full-access'
   sessionId: string | null
   target: WorkspaceTarget
   onEvent?: (event: RunStreamEvent) => void
@@ -44,6 +45,7 @@ interface ParsedRunState {
 const REMOTE_CAPTURE_BEGIN = '__TAKO_REMOTE_CAPTURE_BEGIN__'
 const REMOTE_CAPTURE_END = '__TAKO_REMOTE_CAPTURE_END__'
 const REMOTE_CODEX_OUTPUT_PLACEHOLDER = '__TAKO_REMOTE_CODEX_OUTPUT__'
+const CODEX_SANDBOX_RETRY_NOTICE = 'Codex の sandbox 初期化に失敗したため、この実行だけ sandbox なしで再試行します。'
 
 const DEFAULT_STATE = (): ParsedRunState => ({
   sessionId: null,
@@ -87,6 +89,77 @@ function sanitizeSessionId(sessionId: string | null | undefined): string | null 
   }
 
   return normalized
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return String(error)
+}
+
+function isCodexSandboxStartupFailure(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return normalized.includes('bwrap:') ||
+    normalized.includes('bubblewrap') ||
+    normalized.includes('failed rtm_newaddr') ||
+    (normalized.includes('loopback') && normalized.includes('operation not permitted')) ||
+    (normalized.includes('sandbox') && normalized.includes('operation not permitted'))
+}
+
+function isLikelyFileWriteRequest(prompt: string): boolean {
+  const normalized = prompt.toLowerCase()
+  return /\.md\b|write|save|create file|output to file|markdown|書き込|保存|作成|出力|ファイル|そのまま入れて/.test(normalized)
+}
+
+function isCodexSandboxFailureResponse(response: string): boolean {
+  const normalized = response.toLowerCase()
+  return isCodexSandboxStartupFailure(normalized) ||
+    normalized.includes('サンドボックス制約') ||
+    normalized.includes('書き込みを実行できませんでした') ||
+    normalized.includes('作成できていません') ||
+    normalized.includes('operation not permitted')
+}
+
+function buildCodexExecArgs(
+  prefixArgs: string[],
+  model: string,
+  outputFilePath: string,
+  resolvedSessionId: string | null,
+  executionMode: 'sandboxed' | 'danger-full-access'
+): string[] {
+  const sandboxArgs = executionMode === 'danger-full-access'
+    ? ['--dangerously-bypass-approvals-and-sandbox']
+    : ['--full-auto']
+
+  return resolvedSessionId
+    ? [
+        ...prefixArgs,
+        'exec',
+        '--json',
+        ...sandboxArgs,
+        '--skip-git-repo-check',
+        '-o',
+        outputFilePath,
+        '-m',
+        model,
+        'resume',
+        resolvedSessionId,
+        '-'
+      ]
+    : [
+        ...prefixArgs,
+        'exec',
+        '--json',
+        ...sandboxArgs,
+        '--skip-git-repo-check',
+        '-o',
+        outputFilePath,
+        '-m',
+        model,
+        '-'
+      ]
 }
 
 function isCmdScript(command: string): boolean {
@@ -511,33 +584,13 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
 
   if (options.provider === 'codex') {
     const outputFilePath = createCodexOutputCapturePath()
-    const args = resolvedSessionId
-      ? [
-          ...launcher.prefixArgs,
-          'exec',
-          '--json',
-          '--full-auto',
-          '--skip-git-repo-check',
-          '-o',
-          outputFilePath,
-          '-m',
-          options.model,
-          'resume',
-          resolvedSessionId,
-          '-'
-        ]
-      : [
-          ...launcher.prefixArgs,
-          'exec',
-          '--json',
-          '--full-auto',
-          '--skip-git-repo-check',
-          '-o',
-          outputFilePath,
-          '-m',
-          options.model,
-          '-'
-        ]
+    const args = buildCodexExecArgs(
+      launcher.prefixArgs,
+      options.model,
+      outputFilePath,
+      resolvedSessionId,
+      options.codexExecutionMode ?? 'sandboxed'
+    )
 
     return {
       command: launcher.command,
@@ -618,33 +671,13 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
 
   const remoteArgs =
     options.provider === 'codex'
-      ? resolvedSessionId
-        ? [
-            'codex',
-            'exec',
-            '--json',
-            '--full-auto',
-            '--skip-git-repo-check',
-            '-o',
-            REMOTE_CODEX_OUTPUT_PLACEHOLDER,
-            '-m',
-            options.model,
-            'resume',
-            resolvedSessionId,
-            '-'
-          ]
-        : [
-            'codex',
-            'exec',
-            '--json',
-            '--full-auto',
-            '--skip-git-repo-check',
-            '-o',
-            REMOTE_CODEX_OUTPUT_PLACEHOLDER,
-            '-m',
-            options.model,
-            '-'
-          ]
+      ? buildCodexExecArgs(
+          ['codex'],
+          options.model,
+          REMOTE_CODEX_OUTPUT_PLACEHOLDER,
+          resolvedSessionId,
+          options.codexExecutionMode ?? 'sandboxed'
+        )
       : options.provider === 'gemini'
         ? [
             'gemini',
@@ -882,7 +915,7 @@ function createActiveRun(
   }
 }
 
-export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
+async function startSingleCliRun(options: RunOptions): Promise<ActiveCliRun> {
   const launchSpec =
     options.target.kind === 'local'
       ? await buildLocalLaunchSpec(options)
@@ -900,6 +933,64 @@ export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
   child.stdin.end(launchSpec.stdinPrompt ? `${launchSpec.stdinPrompt}\n` : '')
 
   return createActiveRun(child, options, launchSpec)
+}
+
+export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
+  const initialRun = await startSingleCliRun({
+    ...options,
+    codexExecutionMode: options.codexExecutionMode ?? 'sandboxed'
+  })
+
+  if (options.provider !== 'codex') {
+    return initialRun
+  }
+
+  let currentRun = initialRun
+  let stopped = false
+
+  const retryWithoutSandbox = async (): Promise<CliExecResult> => {
+    options.onEvent?.({
+      type: 'status',
+      text: CODEX_SANDBOX_RETRY_NOTICE
+    })
+
+    const retryRun = await startSingleCliRun({
+      ...options,
+      codexExecutionMode: 'danger-full-access'
+    })
+    currentRun = retryRun
+
+    if (stopped) {
+      retryRun.stop()
+      throw new Error('CLI run stopped')
+    }
+
+    return retryRun.promise
+  }
+
+  return {
+    promise: (async () => {
+      try {
+        const result = await initialRun.promise
+        if (!stopped && isLikelyFileWriteRequest(options.prompt) && isCodexSandboxFailureResponse(result.response)) {
+          return retryWithoutSandbox()
+        }
+
+        return result
+      } catch (error) {
+        const message = getErrorMessage(error)
+        if (stopped || !isCodexSandboxStartupFailure(message)) {
+          throw error
+        }
+
+        return retryWithoutSandbox()
+      }
+    })(),
+    stop: () => {
+      stopped = true
+      currentRun.stop()
+    }
+  }
 }
 
 

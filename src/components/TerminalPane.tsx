@@ -704,6 +704,13 @@ export function TerminalPane({
     onUpdate(pane.id, { autoShareTargetIds: nextTargetIds })
   }
 
+  const handleRunRequest = () => {
+    onRun(pane.id)
+    window.requestAnimationFrame(() => {
+      promptRef.current?.focus()
+    })
+  }
+
   const handleShellKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.ctrlKey && event.key.toLowerCase() === 'c' && !pane.shellRunning) {
       event.preventDefault()
@@ -931,7 +938,7 @@ export function TerminalPane({
             onKeyDown={(event) => {
               if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canRun && !isBusy) {
                 event.preventDefault()
-                onRun(pane.id)
+                handleRunRequest()
               }
             }}
             placeholder={UI.promptPlaceholder}
@@ -952,7 +959,7 @@ export function TerminalPane({
               {isRunInProgress ? (
                 <button type="button" className="danger-button stable-run-button" onClick={() => onStop(pane.id)}><Square size={16} />{UI.stop}</button>
               ) : (
-                <button type="button" className="primary-button stable-run-button" disabled={!canRun || isProviderUpdating} onClick={() => onRun(pane.id)}><Play size={16} />{UI.run}</button>
+                <button type="button" className="primary-button stable-run-button" disabled={!canRun || isProviderUpdating} onClick={handleRunRequest}><Play size={16} />{UI.run}</button>
               )}
             </div>
           </div>

@@ -1975,6 +1975,7 @@ function App() {
 
     mutatePane(paneId, (currentPane) => ({
       ...currentPane,
+      prompt: '',
       logs: appendLogEntry(currentPane.logs, userEntry),
       status: 'running',
       statusText: '\u5b9f\u884c\u4e2d',
