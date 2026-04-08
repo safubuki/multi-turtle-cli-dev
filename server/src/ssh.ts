@@ -1,4 +1,4 @@
-﻿import { existsSync } from 'fs'
+import { existsSync } from 'fs'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -301,6 +301,10 @@ async function runSsh(target: SshTargetConfig, remoteArgs: string[], stdinConten
     timeoutMs,
     password: connection.password
   })
+}
+
+export async function runRemoteBashCommand(host: string, connection: SshConnectionOptions | undefined, script: string, timeoutMs = SSH_TIMEOUT_MS): Promise<string> {
+  return runSsh({ host, connection }, ['bash', '-lc', shellEscapePosix(script)], '', timeoutMs)
 }
 
 function buildScpCommandArgs(

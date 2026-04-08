@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: dark;
   --bg: #071014;
   --bg-soft: #0d171c;
@@ -1494,6 +1494,108 @@ textarea {
   min-height: 90px;
 }
 
+.composer-panel.is-drop-active {
+  border-color: rgba(84, 210, 194, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 194, 0.18);
+}
+
+.prompt-image-input {
+  display: none;
+}
+
+.prompt-image-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.prompt-image-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: min(100%, 320px);
+  padding: 6px 8px 6px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.prompt-image-chip.status-uploading {
+  border-color: rgba(84, 210, 194, 0.26);
+  background: rgba(84, 210, 194, 0.08);
+}
+
+.prompt-image-chip.status-error {
+  border-color: rgba(255, 127, 127, 0.28);
+  background: rgba(255, 127, 127, 0.08);
+}
+
+.prompt-image-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  overflow: hidden;
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.prompt-image-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.prompt-image-meta {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.prompt-image-meta strong,
+.prompt-image-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-image-meta strong {
+  font-size: 0.82rem;
+}
+
+.prompt-image-meta span {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.prompt-image-chip.status-error .prompt-image-meta span {
+  color: #ffd3d3;
+}
+
+.prompt-image-remove-button {
+  width: 30px;
+  height: 30px;
+}
+
+.composer-image-hint {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.composer-image-hint.is-disabled {
+  color: #f2ddb0;
+}
+
+.composer-upload-button {
+  min-width: 126px;
+}
+
 .composer-footer {
   justify-content: space-between;
   margin-top: 10px;
@@ -1502,6 +1604,7 @@ textarea {
 .composer-actions {
   flex: 0 0 auto;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .composer-actions .primary-button,
@@ -3843,3 +3946,5 @@ textarea {
     justify-content: flex-start;
   }
 }
+
+

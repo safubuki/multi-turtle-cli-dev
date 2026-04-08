@@ -4,6 +4,7 @@ import express from 'express'
 import { startCliRun } from './cliRunner.js'
 import { startShellRun } from './shellRunner.js'
 import { pickFolderDialog, pickSaveFileDialog } from './nativeDialog.js'
+import { assertPromptImagePath, stagePromptImage as stageRuntimePromptImage } from './promptImages.js'
 import { getProviderCatalogs } from './providerCatalog.js'
 import {
   browseRemoteDirectory,
@@ -29,7 +30,7 @@ const activeRuns = new Map<string, ActiveCliRun>()
 const activeShellRuns = new Map<string, ActiveShellRun>()
 
 app.use(cors())
-app.use(express.json({ limit: '10mb' }))
+app.use(express.json({ limit: '25mb' }))
 
 function normalizeAutonomyMode(value: unknown): AutonomyMode {
   return value === 'max' ? 'max' : 'balanced'
@@ -73,6 +74,33 @@ function normalizeConnection(value: unknown): SshConnectionOptions | undefined {
     extraArgs: normalizeString('extraArgs')
   }
 }
+function normalizeImageAttachments(value: unknown): RunRequestBody['imageAttachments'] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return []
+    }
+
+    const candidate = item as Record<string, unknown>
+    const fileName = typeof candidate.fileName === 'string' ? candidate.fileName.trim() : ''
+    const mimeType = typeof candidate.mimeType === 'string' ? candidate.mimeType.trim() : ''
+    const size = typeof candidate.size === 'number' && Number.isFinite(candidate.size) ? candidate.size : 0
+    const localPath = typeof candidate.localPath === 'string' ? candidate.localPath.trim() : ''
+    if (!fileName || !mimeType || !localPath) {
+      return []
+    }
+
+    return [{
+      fileName,
+      mimeType,
+      size,
+      localPath: assertPromptImagePath(localPath)
+    }]
+  })
+}
 
 function buildCombinedPrompt(body: RunRequestBody): string {
   const sections = [
@@ -89,6 +117,16 @@ function buildCombinedPrompt(body: RunRequestBody): string {
           (item, index) =>
             `Context ${index + 1}\nSource: ${item.sourcePaneTitle}\nWorkspace: ${item.workspaceLabel}\nSummary: ${item.summary}\nDetails:\n${item.detail}`
         )
+      ].join('\n')
+    )
+  }
+
+  if (body.imageAttachments.length > 0) {
+    sections.push(
+      [
+        'Attached Images',
+        'The user attached image files that should be treated as part of this request.',
+        ...body.imageAttachments.map((item, index) => `Image ${index + 1}: ${item.fileName}`)
       ].join('\n')
     )
   }
@@ -269,6 +307,41 @@ app.post('/api/system/pick-save-file', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'save file picker failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/system/stage-image', async (req, res) => {
+  try {
+    const { fileName, mimeType, contentBase64 } = req.body as {
+      fileName?: string
+      mimeType?: string
+      contentBase64?: string
+    }
+
+    if (!fileName?.trim() || !mimeType?.trim() || !contentBase64?.trim()) {
+      res.status(400).json({
+        success: false,
+        error: 'fileName, mimeType, and contentBase64 are required'
+      })
+      return
+    }
+
+    const attachment = await stageRuntimePromptImage({
+      fileName: fileName.trim(),
+      mimeType: mimeType.trim(),
+      contentBase64: contentBase64.trim()
+    })
+
+    res.json({
+      success: true,
+      attachment
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'image staging failed',
       details: String(error)
     })
   }
@@ -702,7 +775,8 @@ app.post('/api/run', async (req, res) => {
     ...rawBody,
     autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
     codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
-    sessionId: rawBody.sessionId ?? null
+    sessionId: rawBody.sessionId ?? null,
+    imageAttachments: normalizeImageAttachments(rawBody.imageAttachments)
   }
 
   if (activeRuns.has(body.paneId)) {
@@ -722,7 +796,8 @@ app.post('/api/run', async (req, res) => {
       codexFastMode: body.codexFastMode,
       prompt: buildCombinedPrompt(body),
       sessionId: body.sessionId,
-      target: body.target
+      target: body.target,
+      imageAttachments: body.imageAttachments
     })
 
     activeRuns.set(body.paneId, run)
@@ -764,7 +839,8 @@ app.post('/api/run/stream', async (req, res) => {
     ...rawBody,
     autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
     codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
-    sessionId: rawBody.sessionId ?? null
+    sessionId: rawBody.sessionId ?? null,
+    imageAttachments: normalizeImageAttachments(rawBody.imageAttachments)
   }
 
   if (activeRuns.has(body.paneId)) {
@@ -799,6 +875,7 @@ app.post('/api/run/stream', async (req, res) => {
       prompt: buildCombinedPrompt(body),
       sessionId: body.sessionId,
       target: body.target,
+      imageAttachments: body.imageAttachments,
       onEvent: (event) => writeStreamEvent(res, event)
     })
 

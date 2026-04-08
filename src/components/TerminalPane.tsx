@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
+﻿import { isValidElement, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type ComponentProps, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
 import {
   AlertTriangle,
   ArrowDownLeft,
@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   Maximize2,
   Play,
+  Plus,
   RefreshCcw,
   Settings2,
   Share2,
@@ -28,7 +29,18 @@ import {
 } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { LocalWorkspace, PaneLogEntry, PaneState, PaneStreamEntry, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
+import type {
+  LocalWorkspace,
+  PaneLogEntry,
+  PaneState,
+  PaneStreamEntry,
+  PromptImageAttachment,
+  PromptImageAttachmentSource,
+  ProviderCatalogResponse,
+  ProviderId,
+  SharedContextItem,
+  SshHost
+} from '../types'
 
 interface TransferOptions {
   localPath?: string
@@ -49,6 +61,9 @@ interface TerminalPaneProps {
   onUpdate: (paneId: string, updates: Partial<PaneState>) => void
   onProviderChange: (paneId: string, provider: ProviderId) => void
   onModelChange: (paneId: string, model: string) => void
+  promptImageAttachments: PromptImageAttachment[]
+  onAddPromptImages: (paneId: string, files: File[], source: PromptImageAttachmentSource) => void
+  onRemovePromptImage: (paneId: string, attachmentId: string) => void
   onRun: (paneId: string) => void
   onStop: (paneId: string) => void
   onShare: (paneId: string) => void
@@ -138,6 +153,13 @@ const UI = {
   workspaceUnset: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u672a\u8a2d\u5b9a',
   promptPlaceholder: '\u3084\u308a\u305f\u3044\u3053\u3068\u3092\u5165\u529b\u3057\u307e\u3059\u3002Ctrl+Enter \u3067\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002',
   stalledHint: '\u5fdc\u7b54\u5f85\u3061\u304c\u9577\u304f\u306a\u3063\u3066\u3044\u307e\u3059\u3002CLI \u306b\u3088\u3063\u3066\u306f\u6570\u5206\u304b\u304b\u308b\u3053\u3068\u304c\u3042\u308b\u305f\u3081\u3001\u5fc5\u8981\u306a\u3089\u505c\u6b62\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002',
+  promptImageHint: '＋ / ドラッグ&ドロップ / Ctrl+V で画像を追加できます。画像だけで実行することもできます。',
+  promptImageUnsupported: 'GitHub Copilot CLI は画像入力未対応です。Codex CLI または Gemini CLI を選択してください。',
+  promptImageAdd: '画像を追加',
+  promptImageRemove: '画像を外す',
+  promptImageUploading: '準備中',
+  promptImageReady: '添付済み',
+  promptImageError: '要確認',
   runningHint: 'CLI \u3092\u5b9f\u884c\u4e2d\u3067\u3059\u3002',
   updatingHint: 'AI \u3092\u66f4\u65b0\u4e2d\u3067\u3059\u3002',
   stopSending: '\u505c\u6b62\u8981\u6c42\u3092\u9001\u4fe1\u4e2d\u3067\u3059\u3002',
@@ -311,7 +333,7 @@ function formatStreamEntryForCopy(entry: PaneStreamEntry): string {
 function splitTrailingUrlPunctuation(value: string): { url: string; trailing: string } {
   let url = value
   let trailing = ''
-  const trailingChars = new Set([',', '.', ';', '!', '?', ')', ']', '}', '>', '`', '、', '。', '，', '．', '）', '］', '｝', '」', '』', '】'])
+  const trailingChars = new Set([',', '.', ';', '!', '?', ')', ']', '}', '>', '`', '、', '。', '！', '？', '」', '』', '）', '］', '｝', '＞'])
 
   while (url.length > 0) {
     const lastChar = url[url.length - 1] ?? ''
@@ -818,6 +840,9 @@ export function TerminalPane({
   onUpdate,
   onProviderChange,
   onModelChange,
+  promptImageAttachments,
+  onAddPromptImages,
+  onRemovePromptImage,
   onRun,
   onStop,
   onShare,
@@ -862,6 +887,9 @@ export function TerminalPane({
   const menuRef = useRef<HTMLDetailsElement | null>(null)
   const promptRef = useRef<HTMLTextAreaElement | null>(null)
   const shellInputRef = useRef<HTMLInputElement | null>(null)
+  const [isPromptDropActive, setIsPromptDropActive] = useState(false)
+  const promptImageInputRef = useRef<HTMLInputElement | null>(null)
+  const promptDropDepthRef = useRef(0)
   const shellModalInputRef = useRef<HTMLInputElement | null>(null)
   const shellConsoleRef = useRef<HTMLDivElement | null>(null)
   const shellModalConsoleRef = useRef<HTMLDivElement | null>(null)
@@ -968,7 +996,14 @@ export function TerminalPane({
   const isRunInProgress = pane.runInProgress
   const isBusy = isRunInProgress || hasRunningStatus || isProviderUpdating
   const isStalled = isRunInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > 120_000
-  const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
+  const isPromptImageSupported = pane.provider !== 'copilot'
+  const hasUploadingPromptImages = promptImageAttachments.some((attachment) => attachment.status === 'uploading')
+  const hasPromptImageErrors = promptImageAttachments.some((attachment) => attachment.status === 'error')
+  const hasPromptInput = pane.prompt.trim().length > 0 || promptImageAttachments.length > 0
+  const hasWorkspaceTarget = pane.workspaceMode === 'local'
+    ? pane.localWorkspacePath.trim().length > 0
+    : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0
+  const canRun = hasPromptInput && hasWorkspaceTarget && !hasUploadingPromptImages && !hasPromptImageErrors && (isPromptImageSupported || promptImageAttachments.length === 0)
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
   const currentRequestText = pane.currentRequestText?.trim() ?? ''
@@ -1189,6 +1224,86 @@ export function TerminalPane({
     window.requestAnimationFrame(() => {
       promptRef.current?.focus()
     })
+  }
+
+  const getPromptTransferFiles = (fileList: FileList | null): File[] => Array.from(fileList ?? [])
+
+  const resetPromptDropState = () => {
+    promptDropDepthRef.current = 0
+    setIsPromptDropActive(false)
+  }
+
+  const handlePromptImageButtonClick = () => {
+    promptImageInputRef.current?.click()
+  }
+
+  const handlePromptImageInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? [])
+    if (files.length > 0) {
+      onAddPromptImages(pane.id, files, 'picker')
+    }
+    event.target.value = ''
+  }
+
+  const handlePromptDragEnter = (event: ReactDragEvent<HTMLElement>) => {
+    const files = getPromptTransferFiles(event.dataTransfer.files)
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    promptDropDepthRef.current += 1
+    setIsPromptDropActive(true)
+  }
+
+  const handlePromptDragOver = (event: ReactDragEvent<HTMLElement>) => {
+    const files = getPromptTransferFiles(event.dataTransfer.files)
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    if (!isPromptDropActive) {
+      setIsPromptDropActive(true)
+    }
+  }
+
+  const handlePromptDragLeave = (event: ReactDragEvent<HTMLElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      resetPromptDropState()
+      return
+    }
+
+    promptDropDepthRef.current = Math.max(0, promptDropDepthRef.current - 1)
+    if (promptDropDepthRef.current === 0) {
+      setIsPromptDropActive(false)
+    }
+  }
+
+  const handlePromptDrop = (event: ReactDragEvent<HTMLElement>) => {
+    const files = getPromptTransferFiles(event.dataTransfer.files)
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    resetPromptDropState()
+    onAddPromptImages(pane.id, files, 'drop')
+  }
+
+  const handlePromptPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    onAddPromptImages(pane.id, files, 'clipboard')
   }
 
   const handleOpenLinkedPath = (targetPath: string) => {
@@ -1450,7 +1565,13 @@ export function TerminalPane({
           </div>
         </section>
 
-        <section className="composer-panel minimal-composer">
+        <section
+          className={`composer-panel minimal-composer ${isPromptDropActive ? 'is-drop-active' : ''}`}
+          onDragEnter={handlePromptDragEnter}
+          onDragOver={handlePromptDragOver}
+          onDragLeave={handlePromptDragLeave}
+          onDrop={handlePromptDrop}
+        >
           <div className="panel-header slim">
             <div>
               <h3>{UI.instruction}</h3>
@@ -1466,10 +1587,52 @@ export function TerminalPane({
               <p className="request-context-body">{pane.currentRequestText}</p>
             </div>
           ) : null}
+          <input
+            ref={promptImageInputRef}
+            className="prompt-image-input"
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handlePromptImageInputChange}
+          />
+          {promptImageAttachments.length > 0 ? (
+            <div className="prompt-image-strip" aria-label="attached-images">
+              {promptImageAttachments.map((attachment) => (
+                <div key={attachment.id} className={`prompt-image-chip status-${attachment.status}`}>
+                  <div className="prompt-image-thumb">
+                    <img src={attachment.previewUrl} alt={attachment.fileName} loading="lazy" />
+                  </div>
+                  <div className="prompt-image-meta">
+                    <strong>{attachment.fileName}</strong>
+                    <span>
+                      {attachment.status === 'uploading'
+                        ? UI.promptImageUploading
+                        : attachment.status === 'error'
+                          ? attachment.error || UI.promptImageError
+                          : UI.promptImageReady}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button compact-icon-button prompt-image-remove-button"
+                    onClick={() => onRemovePromptImage(pane.id, attachment.id)}
+                    title={UI.promptImageRemove}
+                    aria-label={UI.promptImageRemove}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <p className={`composer-image-hint ${!isPromptImageSupported ? 'is-disabled' : ''}`}>
+            {isPromptImageSupported ? UI.promptImageHint : UI.promptImageUnsupported}
+          </p>
           <textarea
             ref={promptRef}
             value={pane.prompt}
             onChange={(event) => onUpdate(pane.id, { prompt: event.target.value })}
+            onPaste={handlePromptPaste}
             onKeyDown={(event) => {
               if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canRun && !isBusy) {
                 event.preventDefault()
@@ -1488,11 +1651,27 @@ export function TerminalPane({
                 <><LoaderCircle size={16} className="spin" /><span>{pane.statusText}</span></>
               ) : pane.lastError ? (
                 <><AlertTriangle size={16} /><span>{pane.lastError}</span></>
+              ) : hasUploadingPromptImages ? (
+                <><LoaderCircle size={16} className="spin" /><span>{UI.promptImageUploading}</span></>
+              ) : !isPromptImageSupported ? (
+                <><AlertTriangle size={16} /><span>{UI.promptImageUnsupported}</span></>
               ) : (
                 <span>{workspaceLabel}</span>
               )}
             </div>
             <div className="composer-actions">
+              {!canOfferStop ? (
+                <button
+                  type="button"
+                  className="secondary-button composer-upload-button"
+                  disabled={!isPromptImageSupported}
+                  onClick={handlePromptImageButtonClick}
+                  title={UI.promptImageAdd}
+                >
+                  <Plus size={16} />
+                  {UI.promptImageAdd}
+                </button>
+              ) : null}
               {canOfferStop ? (
                 <button type="button" className="danger-button stable-run-button" disabled={pane.stopRequested} onClick={() => onStop(pane.id)}><Square size={16} />{stopButtonLabel}</button>
               ) : (
@@ -1746,7 +1925,7 @@ export function TerminalPane({
 
                         <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions ssh-key-primary-actions">
                           <button type="button" className="secondary-button ssh-soft-button accent" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}><KeyRound size={16} />{UI.generateKey}</button>
-                          <span className="ssh-action-separator" aria-hidden="true">→</span>
+                          <span className="ssh-action-separator" aria-hidden="true">/</span>
                           <button type="button" className="secondary-button ssh-soft-button accent" disabled={pane.sshActionState === 'running' || !pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}><ArrowUpRight size={16} />{UI.installKey}</button>
                         </div>
 
@@ -2048,4 +2227,9 @@ export function TerminalPane({
     </>
   )
 }
+
+
+
+
+
 

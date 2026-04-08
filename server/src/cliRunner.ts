@@ -8,11 +8,12 @@ import type {
   CodexFastMode,
   ProviderId,
   ReasoningEffort,
+  RunImageAttachment,
   RunStreamEvent,
   WorkspaceTarget
 } from './types.js'
 import { getProviderCatalogs } from './providerCatalog.js'
-import { buildSshCommandArgs } from './ssh.js'
+import { buildSshCommandArgs, runRemoteBashCommand, scpTransfer } from './ssh.js'
 import { APP_ROOT, buildRemoteBashBootstrap, dedupeStrings, shellEscapePosix } from './util.js'
 
 interface RunOptions {
@@ -25,6 +26,7 @@ interface RunOptions {
   codexExecutionMode?: 'sandboxed' | 'danger-full-access'
   sessionId: string | null
   target: WorkspaceTarget
+  imageAttachments: RunImageAttachment[]
   onEvent?: (event: RunStreamEvent) => void
 }
 
@@ -46,6 +48,11 @@ const REMOTE_CAPTURE_BEGIN = '__TAKO_REMOTE_CAPTURE_BEGIN__'
 const REMOTE_CAPTURE_END = '__TAKO_REMOTE_CAPTURE_END__'
 const REMOTE_CODEX_OUTPUT_PLACEHOLDER = '__TAKO_REMOTE_CODEX_OUTPUT__'
 const CODEX_SANDBOX_RETRY_NOTICE = 'Codex の sandbox 初期化に失敗したため、この実行だけ sandbox なしで再試行します。'
+
+interface ResolvedRunImageAttachment {
+  fileName: string
+  path: string
+}
 
 const DEFAULT_STATE = (): ParsedRunState => ({
   sessionId: null,
@@ -128,7 +135,8 @@ function buildCodexExecArgs(
   model: string,
   outputFilePath: string,
   resolvedSessionId: string | null,
-  executionMode: 'sandboxed' | 'danger-full-access'
+  executionMode: 'sandboxed' | 'danger-full-access',
+  imagePaths: string[]
 ): string[] {
   const sandboxArgs = executionMode === 'danger-full-access'
     ? ['--dangerously-bypass-approvals-and-sandbox']
@@ -145,6 +153,7 @@ function buildCodexExecArgs(
         outputFilePath,
         '-m',
         model,
+        ...imagePaths.flatMap((imagePath) => ['--image', imagePath]),
         'resume',
         resolvedSessionId,
         '-'
@@ -159,6 +168,7 @@ function buildCodexExecArgs(
         outputFilePath,
         '-m',
         model,
+        ...imagePaths.flatMap((imagePath) => ['--image', imagePath]),
         '-'
       ]
 }
@@ -691,10 +701,145 @@ function resolveCommand(provider: ProviderId): { command: string; prefixArgs: st
   }
 }
 
-function buildProviderPrompt(options: RunOptions): string {
+function sanitizePromptImageFileName(index: number, fileName: string): string {
+  const extension = path.extname(fileName).replace(/[^.a-zA-Z0-9_-]/g, '')
+  const baseName = path.basename(fileName, extension).replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+  const safeBaseName = baseName || `image-${index + 1}`
+  return `${safeBaseName}${extension || '.img'}`
+}
+
+function resolveLocalImageAttachments(imageAttachments: RunImageAttachment[]): ResolvedRunImageAttachment[] {
+  return imageAttachments.map((attachment) => {
+    if (!fs.existsSync(attachment.localPath)) {
+      throw new Error(`画像ファイルが見つかりません: ${attachment.fileName}`)
+    }
+
+    return {
+      fileName: attachment.fileName,
+      path: attachment.localPath
+    }
+  })
+}
+
+async function cleanupRemoteImageDirectory(target: Extract<WorkspaceTarget, { kind: 'ssh' }>, remoteDirectory: string | null): Promise<void> {
+  if (!remoteDirectory) {
+    return
+  }
+
+  await runRemoteBashCommand(
+    target.host,
+    target.connection,
+    `if [ -d ${shellEscapePosix(remoteDirectory)} ]; then rm -rf ${shellEscapePosix(remoteDirectory)}; fi`,
+    15_000
+  )
+}
+
+async function prepareRemoteImageAttachments(options: RunOptions): Promise<{
+  remoteDirectory: string | null
+  attachments: ResolvedRunImageAttachment[]
+}> {
+  if (options.target.kind !== 'ssh' || options.imageAttachments.length === 0) {
+    return {
+      remoteDirectory: null,
+      attachments: []
+    }
+  }
+
+  options.onEvent?.({
+    type: 'status',
+    text: `画像をリモート環境へ転送します (${options.imageAttachments.length} 件)`
+  })
+
+  let remoteDirectory: string | null = null
+
+  try {
+    const remoteDirectoryOutput = await runRemoteBashCommand(
+      options.target.host,
+      options.target.connection,
+      [
+        'if command -v mktemp >/dev/null 2>&1; then',
+        '  mktemp -d "${TMPDIR:-/tmp}/multi-turtle-images.XXXXXX"',
+        'else',
+        '  dir="${TMPDIR:-/tmp}/multi-turtle-images-$$-$(date +%s)"',
+        '  mkdir -p "$dir"',
+        "  printf '%s\\n' \"$dir\"",
+        'fi'
+      ].join('\n'),
+      20_000
+    )
+
+    remoteDirectory = remoteDirectoryOutput
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .find(Boolean) ?? null
+
+    if (!remoteDirectory) {
+      throw new Error('リモート側の一時画像フォルダを作成できませんでした。')
+    }
+
+    const attachments: ResolvedRunImageAttachment[] = []
+    for (const [index, attachment] of options.imageAttachments.entries()) {
+      const remotePath = `${remoteDirectory}/${sanitizePromptImageFileName(index, attachment.fileName)}`
+      options.onEvent?.({
+        type: 'status',
+        text: `画像を転送中: ${attachment.fileName}`
+      })
+      await scpTransfer('upload', { host: options.target.host, connection: options.target.connection }, attachment.localPath, remotePath)
+      attachments.push({
+        fileName: attachment.fileName,
+        path: remotePath
+      })
+    }
+
+    return {
+      remoteDirectory,
+      attachments
+    }
+  } catch (error) {
+    await cleanupRemoteImageDirectory(options.target, remoteDirectory).catch(() => undefined)
+    throw error
+  }
+}
+
+function buildAttachedImagePrompt(provider: ProviderId, imageAttachments: ResolvedRunImageAttachment[]): string {
+  if (imageAttachments.length === 0) {
+    return ''
+  }
+
+  if (provider === 'gemini') {
+    return [
+      'Attached Images',
+      'Treat these image files as part of the request and inspect them directly from the listed paths before answering.',
+      ...imageAttachments.map((attachment, index) => `Image ${index + 1}: ${attachment.fileName}\nPath: ${attachment.path}`)
+    ].join('\n')
+  }
+
+  return [
+    'Attached Images',
+    'Treat the attached image files as part of the request and inspect them before answering.',
+    ...imageAttachments.map((attachment, index) => `Image ${index + 1}: ${attachment.fileName}`)
+  ].join('\n')
+}
+
+function buildGeminiIncludeDirectoryArgs(basePath: string, imageAttachments: ResolvedRunImageAttachment[]): string[] {
+  const directories = dedupeStrings([
+    basePath,
+    ...imageAttachments.map((attachment) => path.dirname(attachment.path))
+  ])
+
+  return directories.flatMap((directoryPath) => ['--include-directories', directoryPath])
+}
+
+function buildProviderPrompt(options: RunOptions, imageAttachments: ResolvedRunImageAttachment[] = []): string {
+  const promptSections = [
+    ...(imageAttachments.length > 0 ? [buildAttachedImagePrompt(options.provider, imageAttachments)] : []),
+    options.prompt
+  ]
+  const promptBody = promptSections.filter(Boolean).join('\n\n')
+
   return options.provider === 'codex' && options.codexFastMode === 'fast'
-    ? ['/fast', '', options.prompt].join('\n')
-    : options.prompt
+    ? ['/fast', '', promptBody].join('\n')
+    : promptBody
 }
 
 function quoteForCmd(value: string): string {
@@ -728,10 +873,15 @@ function spawnCliChild(command: string, args: string[], cwd: string): ChildProce
 }
 
 async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec> {
+  if (options.provider === 'copilot' && options.imageAttachments.length > 0) {
+    throw new Error('GitHub Copilot CLI は画像入力に対応していません。Codex CLI または Gemini CLI を選択してください。')
+  }
+
   const supportsReasoning = await modelSupportsReasoning(options.provider, options.model)
   const resolvedSessionId = sanitizeSessionId(options.sessionId)
   const launcher = resolveCommand(options.provider)
-  const providerPrompt = buildProviderPrompt(options)
+  const resolvedImageAttachments = resolveLocalImageAttachments(options.imageAttachments)
+  const providerPrompt = buildProviderPrompt(options, resolvedImageAttachments)
 
   if (options.provider === 'codex') {
     const outputFilePath = createCodexOutputCapturePath()
@@ -740,7 +890,8 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
       options.model,
       outputFilePath,
       resolvedSessionId,
-      options.codexExecutionMode ?? 'sandboxed'
+      options.codexExecutionMode ?? 'sandboxed',
+      resolvedImageAttachments.map((attachment) => attachment.path)
     )
 
     return {
@@ -761,8 +912,7 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
       'stream-json',
       '--approval-mode',
       approvalMode,
-      '--include-directories',
-      options.target.path,
+      ...buildGeminiIncludeDirectoryArgs(options.target.path, resolvedImageAttachments),
       '--prompt',
       providerPrompt
     ]
@@ -811,14 +961,19 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
 }
 
 async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec> {
-  const providerPrompt = buildProviderPrompt(options)
   if (options.target.kind !== 'ssh') {
     throw new Error('Remote launch requires ssh target.')
+  }
+
+  if (options.provider === 'copilot' && options.imageAttachments.length > 0) {
+    throw new Error('GitHub Copilot CLI は画像入力に対応していません。Codex CLI または Gemini CLI を選択してください。')
   }
 
   const supportsReasoning = await modelSupportsReasoning(options.provider, options.model)
   const resolvedSessionId = sanitizeSessionId(options.sessionId)
   const approvalMode = options.autonomyMode === 'max' ? 'yolo' : 'auto_edit'
+  const preparedRemoteImages = await prepareRemoteImageAttachments(options)
+  const providerPrompt = buildProviderPrompt(options, preparedRemoteImages.attachments)
 
   const remoteArgs =
     options.provider === 'codex'
@@ -827,7 +982,8 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
           options.model,
           REMOTE_CODEX_OUTPUT_PLACEHOLDER,
           resolvedSessionId,
-          options.codexExecutionMode ?? 'sandboxed'
+          options.codexExecutionMode ?? 'sandboxed',
+          preparedRemoteImages.attachments.map((attachment) => attachment.path)
         )
       : options.provider === 'gemini'
         ? [
@@ -838,8 +994,7 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
             'stream-json',
             '--approval-mode',
             approvalMode,
-            '--include-directories',
-            options.target.path,
+            ...buildGeminiIncludeDirectoryArgs(options.target.path, preparedRemoteImages.attachments),
             '--prompt',
             providerPrompt,
             ...(resolvedSessionId ? ['--resume', resolvedSessionId] : [])
@@ -874,6 +1029,14 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
     `cd ${shellEscapePosix(options.target.path)}`,
     `if ! command -v ${providerCommand} >/dev/null 2>&1; then printf '%s\n' 'Remote ${providerCommand} CLI was not found in PATH after loading shell profiles.' >&2; exit 127; fi`
   ]
+
+  if (preparedRemoteImages.remoteDirectory) {
+    remoteCommandLines.push(
+      `tako_prompt_image_dir=${shellEscapePosix(preparedRemoteImages.remoteDirectory)}`,
+      'cleanup_tako_prompt_images() { if [ -n "$tako_prompt_image_dir" ] && [ -d "$tako_prompt_image_dir" ]; then rm -rf "$tako_prompt_image_dir"; fi; }',
+      'trap cleanup_tako_prompt_images EXIT'
+    )
+  }
 
   if (options.provider === 'codex') {
     remoteCommandLines.push(
@@ -1143,6 +1306,9 @@ export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
     }
   }
 }
+
+
+
 
 
 

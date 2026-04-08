@@ -32,6 +32,7 @@ import {
   removeKnownHost,
   runPaneStream,
   runShellStream,
+  stagePromptImage,
   stopPaneRun,
   stopShellRun,
   transferSshPath,
@@ -46,10 +47,13 @@ import type {
   PaneSessionRecord,
   PaneState,
   PaneStatus,
+  PromptImageAttachment,
+  PromptImageAttachmentSource,
   ProviderCatalogResponse,
   ProviderId,
   ReasoningEffort,
   RemoteDirectoryEntry,
+  RunImageAttachment,
   RunStreamEvent,
   ShellRunEvent,
   SharedContextItem,
@@ -96,6 +100,104 @@ const TITLE_IMAGE_URL = new URL('../assets/title.png', import.meta.url).href
 
 function createId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
+}
+
+function extensionFromMimeType(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case 'image/png':
+      return '.png'
+    case 'image/jpeg':
+      return '.jpg'
+    case 'image/webp':
+      return '.webp'
+    case 'image/gif':
+      return '.gif'
+    case 'image/bmp':
+      return '.bmp'
+    case 'image/svg+xml':
+      return '.svg'
+    case 'image/avif':
+      return '.avif'
+    default:
+      return '.img'
+  }
+}
+
+function inferImageMimeType(fileName: string): string | null {
+  const normalized = fileName.trim().toLowerCase()
+  if (normalized.endsWith('.png')) {
+    return 'image/png'
+  }
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
+    return 'image/jpeg'
+  }
+  if (normalized.endsWith('.webp')) {
+    return 'image/webp'
+  }
+  if (normalized.endsWith('.gif')) {
+    return 'image/gif'
+  }
+  if (normalized.endsWith('.bmp')) {
+    return 'image/bmp'
+  }
+  if (normalized.endsWith('.svg')) {
+    return 'image/svg+xml'
+  }
+  if (normalized.endsWith('.avif')) {
+    return 'image/avif'
+  }
+  return null
+}
+
+function normalizePromptImageFile(file: File, source: PromptImageAttachmentSource): { file: File; fileName: string; mimeType: string } | null {
+  const detectedMimeType = file.type.trim() || inferImageMimeType(file.name)
+  if (!detectedMimeType || !detectedMimeType.startsWith('image/')) {
+    return null
+  }
+
+  const normalizedFileName = file.name.trim() || `${source}-image-${Date.now()}${extensionFromMimeType(detectedMimeType)}`
+  return {
+    file,
+    fileName: normalizedFileName,
+    mimeType: detectedMimeType
+  }
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('画像ファイルの読み込みに失敗しました。'))
+        return
+      }
+
+      const [, contentBase64 = ''] = reader.result.split(',', 2)
+      if (!contentBase64) {
+        reject(new Error('画像データを base64 に変換できませんでした。'))
+        return
+      }
+
+      resolve(contentBase64)
+    }
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('画像ファイルの読み込みに失敗しました。'))
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+function buildPromptWithImageSummary(prompt: string, imageAttachments: Pick<RunImageAttachment, 'fileName'>[]): string {
+  if (imageAttachments.length === 0) {
+    return prompt
+  }
+
+  const normalizedPrompt = prompt.trim()
+  return [
+    '[添付画像]',
+    ...imageAttachments.map((attachment, index) => `${index + 1}. ${attachment.fileName}`),
+    ...(normalizedPrompt ? ['', normalizedPrompt] : [])
+  ].join('\n')
 }
 
 function clipText(text: string, maxLength: number): string {
@@ -1391,6 +1493,7 @@ function App() {
   const [workspacePicker, setWorkspacePicker] = useState<WorkspacePickerState | null>(null)
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null)
   const [matrixDropTargetId, setMatrixDropTargetId] = useState<string | null>(null)
+  const [paneImageAttachments, setPaneImageAttachments] = useState<Record<string, PromptImageAttachment[]>>({})
 
   const panesRef = useRef<PaneState[]>([])
   const localWorkspacesRef = useRef<LocalWorkspace[]>([])
@@ -1403,6 +1506,7 @@ function App() {
   const workspaceRefreshTimersRef = useRef<Record<string, number>>({})
   const matrixTileRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const paneCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const paneImageAttachmentsRef = useRef<Record<string, PromptImageAttachment[]>>({})
   const matrixTileRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const paneCardRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const refreshBootstrapInFlightRef = useRef(false)
@@ -1411,6 +1515,81 @@ function App() {
   panesRef.current = panes
   localWorkspacesRef.current = localWorkspaces
   sharedContextRef.current = sharedContext
+  paneImageAttachmentsRef.current = paneImageAttachments
+
+  const revokePromptImagePreview = (attachment: Pick<PromptImageAttachment, 'previewUrl'>) => {
+    if (attachment.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(attachment.previewUrl)
+    }
+  }
+
+  const updatePanePromptImages = (
+    paneId: string,
+    updater: (current: PromptImageAttachment[]) => PromptImageAttachment[]
+  ) => {
+    setPaneImageAttachments((current) => {
+      const existing = current[paneId] ?? []
+      const next = updater(existing)
+      if (next.length === 0) {
+        if (!(paneId in current)) {
+          return current
+        }
+
+        const snapshot = { ...current }
+        delete snapshot[paneId]
+        return snapshot
+      }
+
+      return {
+        ...current,
+        [paneId]: next
+      }
+    })
+  }
+
+  const clearPanePromptImages = (paneId: string) => {
+    setPaneImageAttachments((current) => {
+      const existing = current[paneId] ?? []
+      for (const attachment of existing) {
+        revokePromptImagePreview(attachment)
+      }
+
+      if (!(paneId in current)) {
+        return current
+      }
+
+      const snapshot = { ...current }
+      delete snapshot[paneId]
+      return snapshot
+    })
+  }
+
+  const clearMultiplePanePromptImages = (paneIds: string[]) => {
+    const paneIdSet = new Set(paneIds)
+    if (paneIdSet.size === 0) {
+      return
+    }
+
+    setPaneImageAttachments((current) => {
+      let changed = false
+      const snapshot = { ...current }
+
+      for (const paneId of paneIdSet) {
+        const existing = snapshot[paneId] ?? []
+        if (existing.length === 0) {
+          continue
+        }
+
+        changed = true
+        for (const attachment of existing) {
+          revokePromptImagePreview(attachment)
+        }
+        delete snapshot[paneId]
+      }
+
+      return changed ? snapshot : current
+    })
+  }
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
@@ -1427,6 +1606,11 @@ function App() {
       }
       for (const controller of Object.values(shellControllersRef.current)) {
         controller.abort()
+      }
+      for (const attachments of Object.values(paneImageAttachmentsRef.current)) {
+        for (const attachment of attachments) {
+          revokePromptImagePreview(attachment)
+        }
       }
     }
   }, [])
@@ -1795,6 +1979,11 @@ function App() {
     }
 
     const nextModel = bootstrap.providers[provider].models[0]
+    const hasPromptImages = (paneImageAttachmentsRef.current[paneId] ?? []).length > 0
+    if (provider === 'copilot' && hasPromptImages) {
+      clearPanePromptImages(paneId)
+    }
+
     updatePane(paneId, {
       provider,
       model: nextModel?.id ?? '',
@@ -1802,8 +1991,117 @@ function App() {
       codexFastMode: 'off',
       sessionId: null,
       sessionScopeKey: null,
-      selectedSessionKey: null
+      selectedSessionKey: null,
+      ...(provider === 'copilot' && hasPromptImages
+        ? {
+            status: 'attention' as const,
+            statusText: 'Copilot では画像添付を使えません',
+            lastError: 'GitHub Copilot CLI は画像入力未対応のため、添付画像を解除しました。'
+          }
+        : {})
     })
+  }
+
+  const handleAddPromptImages = async (paneId: string, files: File[], source: PromptImageAttachmentSource) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane) {
+      return
+    }
+
+    if (pane.provider === 'copilot') {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: 'Copilot では画像添付を使えません',
+        lastError: 'GitHub Copilot CLI は画像入力未対応です。Codex CLI または Gemini CLI を選択してください。'
+      })
+      return
+    }
+
+    const normalizedFiles = files
+      .map((file) => normalizePromptImageFile(file, source))
+      .filter((item): item is { file: File; fileName: string; mimeType: string } => Boolean(item))
+
+    if (normalizedFiles.length === 0) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '画像ファイルを選択してください',
+        lastError: '添付できるのは画像ファイルのみです。'
+      })
+      return
+    }
+
+    const draftAttachments: PromptImageAttachment[] = normalizedFiles.map(({ file, fileName, mimeType }) => ({
+      id: createId('prompt-image'),
+      fileName,
+      mimeType,
+      size: file.size,
+      localPath: null,
+      previewUrl: URL.createObjectURL(file),
+      status: 'uploading',
+      source,
+      error: null
+    }))
+
+    updatePanePromptImages(paneId, (current) => [...current, ...draftAttachments])
+
+    await Promise.all(draftAttachments.map(async (attachment, index) => {
+      const sourceFile = normalizedFiles[index]
+      if (!sourceFile) {
+        return
+      }
+
+      try {
+        const contentBase64 = await readFileAsBase64(sourceFile.file)
+        const response = await stagePromptImage({
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          contentBase64
+        })
+
+        updatePanePromptImages(paneId, (current) =>
+          current.map((item) =>
+            item.id === attachment.id
+              ? {
+                  ...item,
+                  status: 'ready',
+                  localPath: response.attachment.localPath,
+                  error: null
+                }
+              : item
+          )
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        updatePanePromptImages(paneId, (current) =>
+          current.map((item) =>
+            item.id === attachment.id
+              ? {
+                  ...item,
+                  status: 'error',
+                  localPath: null,
+                  error: message
+                }
+              : item
+          )
+        )
+        updatePane(paneId, {
+          status: 'attention',
+          statusText: '画像添付を確認してください',
+          lastError: `画像を準備できませんでした: ${attachment.fileName}`
+        })
+      }
+    }))
+  }
+
+  const handleRemovePromptImage = (paneId: string, attachmentId: string) => {
+    const existing = paneImageAttachmentsRef.current[paneId] ?? []
+    const targetAttachment = existing.find((attachment) => attachment.id === attachmentId)
+    if (!targetAttachment) {
+      return
+    }
+
+    revokePromptImagePreview(targetAttachment)
+    updatePanePromptImages(paneId, (current) => current.filter((attachment) => attachment.id !== attachmentId))
   }
 
   const handleModelChange = (paneId: string, model: string) => {
@@ -2197,29 +2495,79 @@ function App() {
     if (!target) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
+        statusText: 'ワークスペースを選択してください',
+        lastError: 'ワークスペースが未設定です。'
       })
       return
     }
 
-    const prompt = pane.prompt.trim()
+    const promptImages = paneImageAttachmentsRef.current[paneId] ?? []
+    const prompt = pane.prompt.trim() || (promptImages.length > 0 ? '添付画像を確認してください。' : '')
     if (!prompt) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '\u6307\u793a\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: '\u30d7\u30ed\u30f3\u30d7\u30c8\u304c\u7a7a\u3067\u3059\u3002'
+        statusText: '指示または画像を追加してください',
+        lastError: 'プロンプトが空です。画像のみで実行する場合は画像を添付してください。'
       })
       return
     }
 
+    if (pane.provider === 'copilot' && promptImages.length > 0) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: 'Copilot では画像添付を使えません',
+        lastError: 'GitHub Copilot CLI は画像入力未対応です。Codex CLI または Gemini CLI を選択してください。'
+      })
+      return
+    }
+
+    if (promptImages.some((attachment) => attachment.status === 'uploading')) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '画像の準備中です',
+        lastError: '画像のアップロードが完了してから実行してください。'
+      })
+      return
+    }
+
+    const failedImage = promptImages.find((attachment) => attachment.status === 'error')
+    if (failedImage) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '画像添付を確認してください',
+        lastError: failedImage.error || `画像を準備できませんでした: ${failedImage.fileName}`
+      })
+      return
+    }
+
+    const readyImageAttachments: RunImageAttachment[] = promptImages.flatMap((attachment) =>
+      attachment.status === 'ready' && attachment.localPath
+        ? [{
+            fileName: attachment.fileName,
+            mimeType: attachment.mimeType,
+            size: attachment.size,
+            localPath: attachment.localPath
+          }]
+        : []
+    )
+
+    if (promptImages.length > 0 && readyImageAttachments.length !== promptImages.length) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '画像の準備中です',
+        lastError: '画像の準備が完了していないため、もう一度確認してください。'
+      })
+      return
+    }
+
+    const requestText = buildPromptWithImageSummary(prompt, readyImageAttachments)
     const startedAt = Date.now()
     const currentSessionScopeKey = buildPaneSessionScopeKey(pane)
     const resumeSessionId = pane.sessionScopeKey === currentSessionScopeKey ? pane.sessionId : null
     const userEntry: PaneLogEntry = {
       id: createId('log'),
       role: 'user',
-      text: prompt,
+      text: requestText,
       createdAt: startedAt
     }
 
@@ -2275,7 +2623,7 @@ function App() {
       prompt: '',
       logs: appendLogEntry(currentPane.logs, userEntry),
       status: 'running',
-      statusText: '\u5b9f\u884c\u4e2d',
+      statusText: '実行中',
       runInProgress: true,
       lastRunAt: startedAt,
       runningSince: startedAt,
@@ -2286,13 +2634,14 @@ function App() {
       liveOutput: '',
       sessionId: resumeSessionId,
       sessionScopeKey: currentSessionScopeKey,
-      currentRequestText: prompt,
+      currentRequestText: requestText,
       currentRequestAt: startedAt,
       stopRequested: false,
       stopRequestAvailable: true,
       attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
-      streamEntries: appendStreamEntry([], 'system', `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
+      streamEntries: appendStreamEntry([], 'system', `開始: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
+    clearPanePromptImages(paneId)
 
     try {
       await runPaneStream(
@@ -2307,7 +2656,8 @@ function App() {
           prompt,
           sessionId: resumeSessionId,
           memory,
-          sharedContext: sharedContextPayload
+          sharedContext: sharedContextPayload,
+          imageAttachments: readyImageAttachments
         },
         (event) => handleStreamEvent(paneId, event),
         controller.signal
@@ -2358,7 +2708,7 @@ function App() {
         mutatePane(paneId, (currentPane) => ({
           ...currentPane,
           status: 'attention',
-          statusText: '\u505c\u6b62\u3057\u307e\u3057\u305f',
+          statusText: '停止しました',
           runInProgress: false,
           runningSince: null,
           stopRequested: false,
@@ -2366,7 +2716,7 @@ function App() {
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
-          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '\u5b9f\u884c\u3092\u505c\u6b62\u3057\u307e\u3057\u305f', stoppedAt)
+          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '実行を停止しました', stoppedAt)
         }))
       }
     } finally {
@@ -2463,6 +2813,8 @@ function App() {
     if (ids.length === 0) {
       return
     }
+
+    clearMultiplePanePromptImages(ids)
 
     const removedContextIds = sharedContextRef.current
       .filter((item) => ids.includes(item.sourcePaneId))
@@ -4327,6 +4679,9 @@ function App() {
                   onUpdate={updatePane}
                   onProviderChange={handleProviderChange}
                   onModelChange={handleModelChange}
+                  promptImageAttachments={paneImageAttachments[pane.id] ?? []}
+                  onAddPromptImages={(paneId, files, source) => void handleAddPromptImages(paneId, files, source)}
+                  onRemovePromptImage={handleRemovePromptImage}
                   onRun={(paneId) => void handleRun(paneId)}
                   onStop={(paneId) => void handleStop(paneId)}
                   onShare={shareFromPane}
@@ -4443,6 +4798,15 @@ function App() {
 }
 
 export default App
+
+
+
+
+
+
+
+
+
 
 
 

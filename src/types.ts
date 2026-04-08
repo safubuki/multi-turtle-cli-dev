@@ -152,6 +152,38 @@ export interface SharedContextPayload {
   detail: string
 }
 
+export interface RunImageAttachment {
+  fileName: string
+  mimeType: string
+  size: number
+  localPath: string
+}
+
+export type PromptImageAttachmentStatus = 'uploading' | 'ready' | 'error'
+export type PromptImageAttachmentSource = 'picker' | 'drop' | 'clipboard'
+
+export interface PromptImageAttachment {
+  id: string
+  fileName: string
+  mimeType: string
+  size: number
+  localPath: string | null
+  previewUrl: string
+  status: PromptImageAttachmentStatus
+  source: PromptImageAttachmentSource
+  error: string | null
+}
+
+export interface StagePromptImageRequest {
+  fileName: string
+  mimeType: string
+  contentBase64: string
+}
+
+export interface StagePromptImageResponse {
+  success: boolean
+  attachment: RunImageAttachment
+}
 
 export interface PaneStreamEntry {
   id: string
@@ -281,6 +313,7 @@ export interface RunPaneRequest {
   sessionId: string | null
   memory: PaneLogEntry[]
   sharedContext: SharedContextPayload[]
+  imageAttachments: RunImageAttachment[]
 }
 
 export interface RunPaneResponse {

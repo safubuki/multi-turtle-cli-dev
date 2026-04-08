@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   BootstrapPayload,
   LocalBrowseResponse,
   LocalBrowseRootsResponse,
@@ -11,6 +11,8 @@
   RunStreamEvent,
   ShellRunEvent,
   ShellRunRequest,
+  StagePromptImageRequest,
+  StagePromptImageResponse,
   SshConnectionOptions,
   SshInspectionResponse,
   SshKeyDeleteResponse,
@@ -306,6 +308,16 @@ export function pickSaveFilePath(defaultName: string): Promise<{ success: boolea
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ defaultName })
+  })
+}
+
+export function stagePromptImage(payload: StagePromptImageRequest): Promise<StagePromptImageResponse> {
+  return requestJson<StagePromptImageResponse>('/api/system/stage-image', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
   })
 }
 
