@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
+import { isValidElement, useEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
 import {
   AlertTriangle,
   ArrowDownLeft,
@@ -26,6 +26,8 @@ import {
   Wifi,
   X
 } from 'lucide-react'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { LocalWorkspace, PaneLogEntry, PaneState, PaneStreamEntry, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
 
 interface TransferOptions {
@@ -126,7 +128,7 @@ const UI = {
   outputEmpty: '\u307e\u3060\u51fa\u529b\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   outputPlaceholder: '\u3053\u3053\u306b\u5b9f\u884c\u7d50\u679c\u3068\u6700\u65b0\u306e\u5fdc\u7b54\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   outputGenerating: '\u56de\u7b54\u3092\u751f\u6210\u4e2d\u3067\u3059',
-  outputGeneratingHint: '\u524d\u56de\u306e\u56de\u7b54\u306f\u5207\u308a\u66ff\u3048\u6e08\u307f\u3067\u3059\u3002\u65b0\u3057\u3044\u7d50\u679c\u3092\u3053\u3053\u306b\u8868\u793a\u3057\u307e\u3059\u3002',
+  outputGeneratingHint: '\u65b0\u3057\u3044\u7d50\u679c\u3092\u3053\u3053\u306b\u8868\u793a\u3057\u307e\u3059\u3002\u56de\u7b54\u307e\u3067\u304a\u5f85\u3061\u304f\u3060\u3055\u3044\u3002',
   outputExpand: '\u51fa\u529b\u3092\u62e1\u5927',
   instruction: 'AI\u6307\u793a\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09',
   currentRequest: '\u73fe\u5728\u51e6\u7406\u4e2d\u306e\u4f9d\u983c',
@@ -353,6 +355,25 @@ function isLikelyFileLinkTarget(value: string): boolean {
     return false
   }
 
+  const withoutQuery = normalized.split(/[?#]/, 1)[0] ?? normalized
+  const basename = withoutQuery.split(/[\\/]/).pop() ?? withoutQuery
+  const lastDotIndex = basename.lastIndexOf('.')
+  const hasPathSeparator = /[\\/]/.test(withoutQuery)
+
+  if (lastDotIndex <= 0) {
+    return false
+  }
+
+  const stem = basename.slice(0, lastDotIndex)
+  const extension = basename.slice(lastDotIndex + 1)
+  if (!extension || !/^[A-Za-z0-9]+$/.test(extension)) {
+    return false
+  }
+
+  if (!hasPathSeparator && /^\d+(?:\.\d+)*$/.test(stem)) {
+    return false
+  }
+
   return (
     /^[A-Za-z]:[\\/]/.test(normalized) ||
     normalized.startsWith('\\\\') ||
@@ -361,8 +382,224 @@ function isLikelyFileLinkTarget(value: string): boolean {
     normalized.startsWith('../') ||
     normalized.startsWith('.\\') ||
     normalized.startsWith('..\\') ||
-    /^[^?#]+\.[A-Za-z0-9]+(?:#.*)?$/.test(normalized)
+    /^[A-Za-z0-9._-]+\.[A-Za-z0-9]+(?:#.*)?$/.test(normalized)
   )
+}
+
+const FILE_PATH_TOKEN_PATTERN = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)?(?:[\w.-]+[\\/])*[\w.-]+\.[A-Za-z0-9]{1,12}(?:#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?)?/g
+
+type MarkdownNode = {
+  type: string
+  value?: string
+  url?: string
+  children?: MarkdownNode[]
+}
+
+type MarkdownLinkProps = ComponentProps<'a'> & {
+  href?: string
+  children?: ReactNode
+}
+
+type MarkdownCodeProps = ComponentProps<'code'> & {
+  inline?: boolean
+  children?: ReactNode
+}
+
+function flattenReactText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node)
+  }
+
+  if (Array.isArray(node)) {
+    return node.map((item) => flattenReactText(item)).join('')
+  }
+
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return flattenReactText(node.props.children ?? '')
+  }
+
+  return ''
+}
+
+function createMarkdownTextNode(value: string): MarkdownNode {
+  return {
+    type: 'text',
+    value
+  }
+}
+
+function createMarkdownLinkNode(value: string): MarkdownNode {
+  return {
+    type: 'link',
+    url: value,
+    children: [createMarkdownTextNode(value)]
+  }
+}
+
+function linkifyFilePathText(value: string): MarkdownNode[] {
+  const nodes: MarkdownNode[] = []
+  let lastIndex = 0
+
+  FILE_PATH_TOKEN_PATTERN.lastIndex = 0
+  for (const match of value.matchAll(FILE_PATH_TOKEN_PATTERN)) {
+    const rawMatch = match[0]
+    const startIndex = match.index ?? 0
+    const previousChar = value[startIndex - 1] ?? ''
+    const nextChar = value[startIndex + rawMatch.length] ?? ''
+
+    if ((previousChar && /[\w/\\.-]/.test(previousChar)) || (nextChar && /[\w/\\-]/.test(nextChar))) {
+      continue
+    }
+
+    const { url: filePath, trailing } = splitTrailingUrlPunctuation(rawMatch)
+    if (!filePath || !isLikelyFileLinkTarget(filePath)) {
+      continue
+    }
+
+    if (startIndex > lastIndex) {
+      nodes.push(createMarkdownTextNode(value.slice(lastIndex, startIndex)))
+    }
+
+    nodes.push(createMarkdownLinkNode(filePath))
+    if (trailing) {
+      nodes.push(createMarkdownTextNode(trailing))
+    }
+
+    lastIndex = startIndex + rawMatch.length
+  }
+
+  if (lastIndex < value.length) {
+    nodes.push(createMarkdownTextNode(value.slice(lastIndex)))
+  }
+
+  return nodes.length > 0 ? nodes : [createMarkdownTextNode(value)]
+}
+
+function normalizeMarkdownSpacing(value: string): string {
+  const lines = value.replace(/\r\n/g, '\n').split('\n')
+  const normalizedLines: string[] = []
+  const listItemPattern = /^[ \t]*(?:[-*+]|\d+\.)[ \t]+/
+  const indentedContinuationPattern = /^[ \t]{2,}\S/
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? ''
+    normalizedLines.push(line)
+
+    if (!listItemPattern.test(line)) {
+      continue
+    }
+
+    let nextIndex = index + 1
+    while (nextIndex < lines.length && (lines[nextIndex] ?? '').trim() === '') {
+      nextIndex += 1
+    }
+
+    const hasBlankGap = nextIndex > index + 1
+    const nextLine = lines[nextIndex] ?? ''
+    if (!hasBlankGap || !indentedContinuationPattern.test(nextLine)) {
+      continue
+    }
+
+    index = nextIndex - 1
+  }
+
+  return normalizedLines.join('\n')
+}
+
+function hasStructuredMarkdown(value: string): boolean {
+  const normalized = value.replace(/\r\n/g, '\n').trim()
+  if (!normalized) {
+    return false
+  }
+
+  if (/^#{1,6}[ \t]+\S/m.test(normalized)) {
+    return true
+  }
+
+  if (/^[ \t]*(?:[-*+]|\d+\.)[ \t]+\S/m.test(normalized)) {
+    return true
+  }
+
+  if (/^>[ \t]?\S/m.test(normalized)) {
+    return true
+  }
+
+  if (/^(?:```|~~~)/m.test(normalized)) {
+    return true
+  }
+
+  if (/^[ \t]{0,3}(?:---|\*\*\*|___)[ \t]*$/m.test(normalized)) {
+    return true
+  }
+
+  if (/\[[^\]]+\]\([^)]+\)/.test(normalized)) {
+    return true
+  }
+
+  const lines = normalized.split('\n')
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const currentLine = (lines[index] ?? '').trim()
+    const nextLine = (lines[index + 1] ?? '').trim()
+    if (currentLine.includes('|') && /^\|?(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(nextLine)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function transformMarkdownNodes(children: MarkdownNode[]): MarkdownNode[] {
+  return children.flatMap((child) => {
+    if (child.type === 'text' && typeof child.value === 'string') {
+      return linkifyFilePathText(child.value)
+    }
+
+    if (child.type === 'link' || child.type === 'code' || child.type === 'inlineCode' || child.type === 'definition' || child.type === 'html') {
+      return [child]
+    }
+
+    if (Array.isArray(child.children) && child.children.length > 0) {
+      return [
+        {
+          ...child,
+          children: transformMarkdownNodes(child.children)
+        }
+      ]
+    }
+
+    return [child]
+  })
+}
+
+function remarkLinkifyFilePaths() {
+  return (tree: MarkdownNode) => {
+    if (Array.isArray(tree.children)) {
+      tree.children = transformMarkdownNodes(tree.children)
+    }
+  }
+}
+
+function renderLinkTarget(target: string, children: ReactNode, onOpenFile?: (path: string) => void, className = 'linkified-link'): ReactNode {
+  const normalizedTarget = normalizeLinkTarget(target)
+  const fileTarget = stripFileLineFragment(normalizedTarget)
+
+  if (isSafeExternalUrl(normalizedTarget)) {
+    return (
+      <a className={className} href={normalizedTarget} target="_blank" rel="noreferrer noopener">
+        {children}
+      </a>
+    )
+  }
+
+  if (isLikelyFileLinkTarget(normalizedTarget) && onOpenFile) {
+    return (
+      <button type="button" className={`${className} linkified-inline-button`} onClick={() => onOpenFile(fileTarget)}>
+        {children}
+      </button>
+    )
+  }
+
+  return <span>{children}</span>
 }
 
 function acquireBodyScrollLock(): () => void {
@@ -401,119 +638,6 @@ function acquireBodyScrollLock(): () => void {
   }
 }
 
-function renderTextWithLinks(
-  text: string,
-  keyPrefix: string,
-  onOpenFile?: (path: string) => void
-): ReactNode[] {
-  const lines = text.split('\n')
-  const nodes: ReactNode[] = []
-  const tokenPattern = /\[([^\]]+)\]\(([^)]+)\)|https?:\/\/[^\s<>"']+/g
-
-  for (const [lineIndex, line] of lines.entries()) {
-    let lastIndex = 0
-
-    for (const match of line.matchAll(tokenPattern)) {
-      const token = match[0]
-      const startIndex = match.index ?? 0
-
-      if (startIndex > lastIndex) {
-        nodes.push(
-          <span key={`${keyPrefix}-text-${lineIndex}-${lastIndex}`}>
-            {line.slice(lastIndex, startIndex)}
-          </span>
-        )
-      }
-
-      const markdownLabel = match[1]
-      const markdownTarget = match[2]
-
-      if (markdownLabel && markdownTarget) {
-        const normalizedTarget = normalizeLinkTarget(markdownTarget)
-        const fileTarget = stripFileLineFragment(normalizedTarget)
-
-        if (isSafeExternalUrl(normalizedTarget)) {
-          nodes.push(
-            <a
-              key={`${keyPrefix}-md-url-${lineIndex}-${startIndex}`}
-              className="linkified-link"
-              href={normalizedTarget}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              {markdownLabel}
-            </a>
-          )
-        } else if (isLikelyFileLinkTarget(normalizedTarget) && onOpenFile) {
-          nodes.push(
-            <button
-              key={`${keyPrefix}-md-file-${lineIndex}-${startIndex}`}
-              type="button"
-              className="linkified-link linkified-inline-button"
-              onClick={() => onOpenFile(fileTarget)}
-            >
-              {markdownLabel}
-            </button>
-          )
-        } else {
-          nodes.push(
-            <span key={`${keyPrefix}-md-plain-${lineIndex}-${startIndex}`}>
-              {markdownLabel}
-            </span>
-          )
-        }
-      } else {
-        const rawUrl = token
-        const { url, trailing } = splitTrailingUrlPunctuation(rawUrl)
-
-        if (url && isSafeExternalUrl(url)) {
-          nodes.push(
-            <a
-              key={`${keyPrefix}-url-${lineIndex}-${startIndex}`}
-              className="linkified-link"
-              href={url}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              {url}
-            </a>
-          )
-        } else {
-          nodes.push(
-            <span key={`${keyPrefix}-raw-${lineIndex}-${startIndex}`}>
-              {rawUrl}
-            </span>
-          )
-        }
-
-        if (trailing) {
-          nodes.push(
-            <span key={`${keyPrefix}-trail-${lineIndex}-${startIndex}`}>
-              {trailing}
-            </span>
-          )
-        }
-      }
-
-      lastIndex = startIndex + token.length
-    }
-
-    if (lastIndex < line.length) {
-      nodes.push(
-        <span key={`${keyPrefix}-tail-${lineIndex}-${lastIndex}`}>
-          {line.slice(lastIndex)}
-        </span>
-      )
-    }
-
-    if (lineIndex < lines.length - 1) {
-      nodes.push(<br key={`${keyPrefix}-br-${lineIndex}`} />)
-    }
-  }
-
-  return nodes.length > 0 ? nodes : [<span key={`${keyPrefix}-empty`}>{text}</span>]
-}
-
 function LinkifiedText({
   text,
   keyPrefix,
@@ -525,9 +649,46 @@ function LinkifiedText({
   variant?: 'body' | 'mono'
   onOpenFile?: (path: string) => void
 }) {
+  const normalizedText = useMemo(() => normalizeMarkdownSpacing(text), [text])
+  const isStructuredMarkdownText = useMemo(
+    () => variant === 'body' && hasStructuredMarkdown(normalizedText),
+    [normalizedText, variant]
+  )
+
+  const markdownComponents = useMemo(
+    (): Components => ({
+      a: ({ href, children }: MarkdownLinkProps) =>
+        renderLinkTarget(href ?? '', children ?? null, onOpenFile),
+      code: ({ inline, className, children, ...props }: MarkdownCodeProps) => {
+        const codeText = flattenReactText(children ?? '').replace(/\n$/, '')
+        if (inline && isLikelyFileLinkTarget(codeText) && onOpenFile) {
+          return renderLinkTarget(
+            codeText,
+            <code className={className} {...props}>{codeText}</code>,
+            onOpenFile,
+            'linkified-link linkified-code-link'
+          )
+        }
+
+        return <code className={className} {...props}>{children}</code>
+      }
+    }),
+    [onOpenFile]
+  )
+
+  const className = variant === 'mono'
+    ? 'linkified-text linkified-text-mono'
+    : `linkified-text ${isStructuredMarkdownText ? 'linkified-text-compact' : 'linkified-text-plain'}`
+
   return (
-    <div className={variant === 'mono' ? 'linkified-text linkified-text-mono' : 'linkified-text'}>
-      {renderTextWithLinks(text, keyPrefix, onOpenFile)}
+    <div className={className}>
+      <ReactMarkdown
+        key={keyPrefix}
+        remarkPlugins={[remarkGfm, remarkLinkifyFilePaths]}
+        components={markdownComponents}
+      >
+        {normalizedText}
+      </ReactMarkdown>
     </div>
   )
 }
@@ -1268,7 +1429,7 @@ export function TerminalPane({
           </div>
           <div className={`output-surface console-output ${isRunInProgress ? 'is-streaming' : ''}`} aria-label="output-console">
             {hasOutput ? (
-              <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} variant="mono" onOpenFile={handleOpenLinkedPath} />
+              <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} onOpenFile={handleOpenLinkedPath} />
             ) : isWaitingForFreshOutput ? (
               <div className="output-loading-state" aria-live="polite">
                 <div className="output-loading-head">
@@ -1741,7 +1902,7 @@ export function TerminalPane({
               <div><h3>{UI.output}</h3><p>{pane.title}</p></div>
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(false)} title="close"><X size={16} /></button>
             </div>
-            <div className="output-modal-body">{hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output-modal`} variant="mono" onOpenFile={handleOpenLinkedPath} /> : null}</div>
+            <div className="output-modal-body">{hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output-modal`} onOpenFile={handleOpenLinkedPath} /> : null}</div>
             <div className="output-modal-footer"><button type="button" className="secondary-button" disabled={!outputText} onClick={() => onCopyOutput(pane.id)}><Copy size={16} />{UI.copyOutput}</button></div>
           </div>
         </div>

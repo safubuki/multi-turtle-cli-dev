@@ -1887,10 +1887,169 @@ textarea {
   line-height: 1.55;
 }
 
+.output-panel .output-surface .linkified-text,
+.output-modal-body .linkified-text {
+  font-size: 0.95rem;
+}
+
+.output-panel .output-surface .linkified-text-plain,
+.output-modal-body .linkified-text-plain {
+  --linkified-line-height: 1.46;
+  --linkified-block-gap: 6px;
+  --linkified-heading-gap: 6px;
+  --linkified-list-item-gap: 3px;
+  --linkified-list-paragraph-gap: 2px;
+  --linkified-nested-list-gap: 2px;
+}
+
+.output-panel .output-surface .linkified-text-compact,
+.output-modal-body .linkified-text-compact {
+  --linkified-line-height: 1.22;
+  --linkified-block-gap: 2px;
+  --linkified-heading-gap: 2px;
+  --linkified-list-item-gap: 0;
+  --linkified-list-paragraph-gap: 0;
+  --linkified-nested-list-gap: 0;
+}
+
 .linkified-text {
+  --linkified-line-height: 1.6;
+  --linkified-block-gap: 8px;
+  --linkified-heading-gap: 8px;
+  --linkified-list-item-gap: 4px;
+  --linkified-list-paragraph-gap: 4px;
+  --linkified-nested-list-gap: 4px;
   margin: 0;
-  white-space: pre-wrap;
   word-break: break-word;
+  line-height: var(--linkified-line-height);
+}
+
+.linkified-text > :first-child {
+  margin-top: 0;
+}
+
+.linkified-text > :last-child {
+  margin-bottom: 0;
+}
+
+.linkified-text p,
+.linkified-text ul,
+.linkified-text ol,
+.linkified-text blockquote,
+.linkified-text pre,
+.linkified-text table,
+.linkified-text hr {
+  margin: 0 0 var(--linkified-block-gap);
+}
+
+.linkified-text p,
+.linkified-text li,
+.linkified-text blockquote {
+  white-space: pre-wrap;
+}
+
+.linkified-text h1,
+.linkified-text h2,
+.linkified-text h3,
+.linkified-text h4,
+.linkified-text h5,
+.linkified-text h6 {
+  margin: 0 0 var(--linkified-heading-gap);
+  line-height: 1.28;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+.linkified-text h1 {
+  font-size: 1.28rem;
+}
+
+.linkified-text h2 {
+  font-size: 1.14rem;
+}
+
+.linkified-text h3 {
+  font-size: 1.04rem;
+}
+
+.linkified-text ul,
+.linkified-text ol {
+  padding-left: 1.2rem;
+}
+
+.linkified-text li + li {
+  margin-top: var(--linkified-list-item-gap);
+}
+
+.linkified-text li > p {
+  margin-bottom: var(--linkified-list-paragraph-gap);
+}
+
+.linkified-text li > ul,
+.linkified-text li > ol,
+.linkified-text ul ul,
+.linkified-text ul ol,
+.linkified-text ol ul,
+.linkified-text ol ol {
+  margin-top: var(--linkified-nested-list-gap);
+  margin-bottom: 0;
+}
+
+.linkified-text li > :last-child {
+  margin-bottom: 0;
+}
+
+.linkified-text strong {
+  font-weight: 700;
+  color: rgba(246, 250, 255, 0.98);
+}
+
+.linkified-text blockquote {
+  padding-left: 14px;
+  border-left: 3px solid rgba(140, 233, 221, 0.3);
+  color: var(--muted);
+}
+
+.linkified-text code {
+  padding: 0.08rem 0.42rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: 'Cascadia Code', 'Consolas', 'SFMono-Regular', monospace;
+  font-size: 0.9em;
+}
+
+.linkified-text pre {
+  overflow-x: auto;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(8, 14, 22, 0.88);
+}
+
+.linkified-text pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.linkified-text table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.linkified-text th,
+.linkified-text td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.linkified-text hr {
+  border: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .linkified-link {
@@ -1902,10 +2061,15 @@ textarea {
 }
 
 .linkified-inline-button {
+  display: inline;
   padding: 0;
   border: 0;
   background: transparent;
   font: inherit;
+}
+
+.linkified-code-link code {
+  color: inherit;
 }
 
 .linkified-link:hover {
