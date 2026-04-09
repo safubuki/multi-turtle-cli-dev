@@ -2911,7 +2911,7 @@ function App() {
     }
 
     const created = createInitialPane(panesRef.current.length, bootstrap, localWorkspacesRef.current)
-    setPanes((current) => [...current, created])
+    setPanes((current) => [created, ...current])
     setFocusedPaneId(created.id)
     setSelectedPaneIds([])
   }

@@ -149,6 +149,7 @@ const UI = {
   instruction: 'AI\u6307\u793a\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09',
   currentRequest: '\u73fe\u5728\u51e6\u7406\u4e2d\u306e\u4f9d\u983c',
   latestRequest: '\u4eca\u56de\u306e\u4f9d\u983c',
+  copyLatestResult: '\u6700\u65b0\u7d50\u679c\u3092\u30b3\u30d4\u30fc',
   requestSentAt: '\u9001\u4fe1',
   outputForRequest: '\u5bfe\u5fdc\u3059\u308b\u4f9d\u983c',
   workspaceUnset: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u672a\u8a2d\u5b9a',
@@ -240,7 +241,7 @@ const UI = {
   sharedToPrefix: 'to :',
   noSharedContext: '\u5171\u6709\u6e08\u307f\u306e\u6587\u8108\u306f\u307e\u3060\u3042\u308a\u307e\u305b\u3093\u3002',
   selectedCount: '\u4ef6\u9078\u629e',
-  thisSessionHistory: 'このセッションの履歴',
+  thisSessionHistory: '\u3053\u306e\u30bb\u30af\u30b7\u30e7\u30f3\u306e\u4f1a\u8a71\u5c65\u6b74',
   resumeSelectedSession: 'この会話の続きから話す',
   promptImagePreview: '添付画像を開く',
   runLogs: '\u5b9f\u884c\u30ed\u30b0',
@@ -885,6 +886,7 @@ export function TerminalPane({
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
   const [isRunLogsExpanded, setIsRunLogsExpanded] = useState(false)
+  const [runLogsMode, setRunLogsMode] = useState<'logs' | 'conversation'>('logs')
   const [runLogsTab, setRunLogsTab] = useState<'conversation' | 'stream'>('conversation')
   const [expandedPromptImageId, setExpandedPromptImageId] = useState<string | null>(null)
   const [isShellExpanded, setIsShellExpanded] = useState(false)
@@ -1067,11 +1069,20 @@ export function TerminalPane({
   const visibleStreamEntries = useMemo(() => [...visibleSession.streamEntries].reverse(), [visibleSession.streamEntries])
   const conversationCopyText = visibleConversationEntries.map((entry) => formatConversationEntryForCopy(entry, pane.provider)).join('\n\n').trim()
   const streamCopyText = visibleStreamEntries.map((entry) => formatStreamEntryForCopy(entry)).join('\n\n').trim()
-  const activeRunLogsCopyText = runLogsTab === 'conversation' ? conversationCopyText : streamCopyText
-  const activeRunLogsCopyLabel = runLogsTab === 'conversation' ? UI.copyConversationAll : UI.copyStreamAll
-  const activeRunLogsCopyMessage = runLogsTab === 'conversation'
-    ? '会話履歴をクリップボードにコピーしました'
-    : 'ストリームをクリップボードにコピーしました'
+  const activeRunLogsTab = runLogsMode === 'conversation'
+    ? 'conversation'
+    : runLogsTab === 'stream' && hasVisibleStream
+      ? 'stream'
+      : hasVisibleConversation
+        ? 'conversation'
+        : 'stream'
+  const shouldShowRunLogsTabs = runLogsMode === 'logs' && hasVisibleConversation && hasVisibleStream
+  const runLogsModalTitle = runLogsMode === 'conversation' ? UI.thisSessionHistory : UI.runLogs
+  const activeRunLogsCopyText = activeRunLogsTab === 'conversation' ? conversationCopyText : streamCopyText
+  const activeRunLogsCopyLabel = activeRunLogsTab === 'conversation' ? UI.copyConversationAll : UI.copyStreamAll
+  const activeRunLogsCopyMessage = activeRunLogsTab === 'conversation'
+    ? '\u4f1a\u8a71\u5c65\u6b74\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f'
+    : '\u30b9\u30c8\u30ea\u30fc\u30e0\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f'
   const incomingShareSources = useMemo(() => {
     const sourceMap = new Map<string, { id: string; title: string; count: number }>()
 
@@ -1325,12 +1336,14 @@ export function TerminalPane({
   }
 
   const handleOpenRunLogs = () => {
+    setRunLogsMode('logs')
     setRunLogsTab('conversation')
     setIsRunLogsExpanded(true)
   }
 
   const handleOpenCurrentSessionHistory = () => {
     onSelectSession(pane.id, null)
+    setRunLogsMode('conversation')
     setRunLogsTab('conversation')
     setIsRunLogsExpanded(true)
   }
@@ -1559,6 +1572,7 @@ export function TerminalPane({
                   ))}
                 </div>
               )}
+              <button type="button" className={copiedControlKey === `output-${pane.id}` ? 'icon-button is-copied' : 'icon-button'} disabled={!outputText} onClick={() => void handleCopyWithFeedback(`output-${pane.id}`, outputText, '\u6700\u65b0\u7d50\u679c\u3092\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f')} title={UI.copyLatestResult} aria-label={UI.copyLatestResult}>{copiedControlKey === `output-${pane.id}` ? <CheckCircle2 size={16} /> : <Copy size={16} />}</button>
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(true)} title={UI.outputExpand}><Maximize2 size={16} /></button>
             </div>
           </div>
@@ -2134,7 +2148,7 @@ export function TerminalPane({
         <div className="output-modal-backdrop">
           <div className="output-modal run-logs-modal" onClick={(event) => event.stopPropagation()}>
             <div className="panel-header slim">
-              <div><h3>{UI.runLogs}</h3><p>{pane.title}</p></div>
+              <div><h3>{runLogsModalTitle}</h3><p>{pane.title}</p></div>
               <button type="button" className="icon-button" onClick={() => setIsRunLogsExpanded(false)} title={UI.close}><X size={16} /></button>
             </div>
             <div className="output-modal-body run-logs-modal-body">
@@ -2149,25 +2163,27 @@ export function TerminalPane({
                         </select>
                       </label>
                     )}
-                    <div className="run-logs-tab-row" role="tablist" aria-label={UI.runLogs}>
-                      <button type="button" role="tab" aria-selected={runLogsTab === 'conversation'} className={runLogsTab === 'conversation' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('conversation')}>
-                        <span>{UI.conversation}</span>
-                        <span>{visibleSession.logs.length}</span>
-                      </button>
-                      <button type="button" role="tab" aria-selected={runLogsTab === 'stream'} className={runLogsTab === 'stream' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('stream')}>
-                        <span>{UI.stream}</span>
-                        <span>{visibleSession.streamEntries.length}</span>
-                      </button>
-                    </div>
+                    {shouldShowRunLogsTabs ? (
+                      <div className="run-logs-tab-row" role="tablist" aria-label={UI.runLogs}>
+                        <button type="button" role="tab" aria-selected={activeRunLogsTab === 'conversation'} className={activeRunLogsTab === 'conversation' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('conversation')}>
+                          <span>{UI.conversation}</span>
+                          <span>{visibleSession.logs.length}</span>
+                        </button>
+                        <button type="button" role="tab" aria-selected={activeRunLogsTab === 'stream'} className={activeRunLogsTab === 'stream' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('stream')}>
+                          <span>{UI.stream}</span>
+                          <span>{visibleSession.streamEntries.length}</span>
+                        </button>
+                      </div>
+                    ) : null}
                     <div className="run-logs-action-row">
                       <button
                         type="button"
-                        className={copiedControlKey === `run-logs-${runLogsTab}` ? 'secondary-button is-copied' : 'secondary-button'}
+                        className={copiedControlKey === `run-logs-${activeRunLogsTab}` ? 'secondary-button is-copied' : 'secondary-button'}
                         disabled={!activeRunLogsCopyText}
-                        onClick={() => void handleCopyWithFeedback(`run-logs-${runLogsTab}`, activeRunLogsCopyText, activeRunLogsCopyMessage)}
+                        onClick={() => void handleCopyWithFeedback(`run-logs-${activeRunLogsTab}`, activeRunLogsCopyText, activeRunLogsCopyMessage)}
                       >
-                        {copiedControlKey === `run-logs-${runLogsTab}` ? <CheckCircle2 size={15} /> : <Copy size={15} />}
-                        {copiedControlKey === `run-logs-${runLogsTab}` ? 'コピー済み' : activeRunLogsCopyLabel}
+                        {copiedControlKey === `run-logs-${activeRunLogsTab}` ? <CheckCircle2 size={15} /> : <Copy size={15} />}
+                        {copiedControlKey === `run-logs-${activeRunLogsTab}` ? 'コピー済み' : activeRunLogsCopyLabel}
                       </button>
                       <button type="button" className="secondary-button" disabled={isBusy || !canResumeVisibleSession} onClick={() => { onResumeSession(pane.id, visibleSession.key); setIsRunLogsExpanded(false) }}><History size={15} />{UI.resumeSelectedSession}</button>
                       <button type="button" className="secondary-button" disabled={isBusy || !hasVisibleSessionContent} onClick={() => onClearSelectedSessionHistory(pane.id, visibleSession.key)}><Trash2 size={15} />{UI.clearSelectedSessionHistory}</button>
@@ -2175,7 +2191,7 @@ export function TerminalPane({
                     </div>
                   </div>
                   <div className="session-log-meta"><strong>{visibleSession.label}</strong><span>{formatClock(visibleSession.updatedAt)}</span></div>
-                  {runLogsTab === 'conversation' ? (
+                  {activeRunLogsTab === 'conversation' ? (
                     hasVisibleConversation ? (
                       <div className="history-panel run-logs-panel">
                         <div className="section-headline compact-headline"><strong>{UI.conversation}</strong><span>{visibleSession.logs.length}</span></div>
