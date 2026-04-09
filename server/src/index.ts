@@ -1,7 +1,7 @@
 import cors from 'cors'
 import nodePath from 'path'
 import express from 'express'
-import { startCliRun } from './cliRunner.js'
+import { previewCliRunCommand, startCliRun } from './cliRunner.js'
 import { startShellRun } from './shellRunner.js'
 import { pickFolderDialog, pickSaveFileDialog } from './nativeDialog.js'
 import { assertPromptImagePath, removePromptImages as removeRuntimePromptImages, stagePromptImage as stageRuntimePromptImage } from './promptImages.js'
@@ -137,6 +137,16 @@ function buildCombinedPrompt(body: RunRequestBody): string {
 
 function isValidRunRequest(body: Partial<RunRequestBody> | null | undefined): body is RunRequestBody {
   return Boolean(body?.paneId && body.provider && body.model && body.target && body.prompt?.trim())
+}
+
+function normalizeRunRequestBody(rawBody: Partial<RunRequestBody>): RunRequestBody {
+  return {
+    ...rawBody,
+    autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
+    codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
+    sessionId: rawBody.sessionId ?? null,
+    imageAttachments: normalizeImageAttachments(rawBody.imageAttachments)
+  } as RunRequestBody
 }
 
 function writeStreamEvent(res: express.Response, event: RunStreamEvent): void {
@@ -781,6 +791,44 @@ app.post('/api/shell/stop', (req, res) => {
   })
 })
 
+app.post('/api/run/preview-command', async (req, res) => {
+  const rawBody = req.body as Partial<RunRequestBody>
+  if (!isValidRunRequest(rawBody)) {
+    res.status(400).json({
+      success: false,
+      error: 'invalid run request'
+    })
+    return
+  }
+
+  try {
+    const body = normalizeRunRequestBody(rawBody)
+    const combinedPrompt = buildCombinedPrompt(body)
+    const preview = await previewCliRunCommand({
+      provider: body.provider,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+      autonomyMode: body.autonomyMode,
+      codexFastMode: body.codexFastMode,
+      prompt: combinedPrompt,
+      sessionId: body.sessionId,
+      target: body.target,
+      imageAttachments: body.imageAttachments
+    })
+
+    res.json({
+      success: true,
+      ...preview
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'preview command failed',
+      details: String(error)
+    })
+  }
+})
+
 app.post('/api/run', async (req, res) => {
   const rawBody = req.body as Partial<RunRequestBody>
   if (!isValidRunRequest(rawBody)) {
@@ -791,13 +839,7 @@ app.post('/api/run', async (req, res) => {
     return
   }
 
-  const body: RunRequestBody = {
-    ...rawBody,
-    autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
-    codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
-    sessionId: rawBody.sessionId ?? null,
-    imageAttachments: normalizeImageAttachments(rawBody.imageAttachments)
-  }
+  const body = normalizeRunRequestBody(rawBody)
 
   if (activeRuns.has(body.paneId)) {
     res.status(409).json({
@@ -855,13 +897,7 @@ app.post('/api/run/stream', async (req, res) => {
     return
   }
 
-  const body: RunRequestBody = {
-    ...rawBody,
-    autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
-    codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
-    sessionId: rawBody.sessionId ?? null,
-    imageAttachments: normalizeImageAttachments(rawBody.imageAttachments)
-  }
+  const body = normalizeRunRequestBody(rawBody)
 
   if (activeRuns.has(body.paneId)) {
     res.status(409).json({

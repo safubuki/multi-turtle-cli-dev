@@ -23,6 +23,7 @@ import {
   Settings2,
   Share2,
   Square,
+  SquareTerminal,
   Trash2,
   Wifi,
   X
@@ -34,6 +35,7 @@ import type {
   PaneLogEntry,
   PaneState,
   PaneStreamEntry,
+  PreviewRunCommandResponse,
   PromptImageAttachment,
   PromptImageAttachmentSource,
   ProviderCatalogResponse,
@@ -57,6 +59,7 @@ interface TerminalPaneProps {
   sharedContext: SharedContextItem[]
   now: number
   isFocused: boolean
+  isFocusLayout: boolean
   onFocus: (paneId: string) => void
   onUpdate: (paneId: string, updates: Partial<PaneState>) => void
   onProviderChange: (paneId: string, provider: ProviderId) => void
@@ -64,7 +67,8 @@ interface TerminalPaneProps {
   promptImageAttachments: PromptImageAttachment[]
   onAddPromptImages: (paneId: string, files: File[], source: PromptImageAttachmentSource) => void
   onRemovePromptImage: (paneId: string, attachmentId: string) => void
-  onRun: (paneId: string) => void
+  onPreviewRunCommand: (paneId: string, promptOverride?: string) => Promise<PreviewRunCommandResponse>
+  onRun: (paneId: string, promptOverride?: string) => void
   onStop: (paneId: string) => void
   onShare: (paneId: string) => void
   onShareToPane: (sourcePaneId: string, targetPaneId: string) => void
@@ -149,9 +153,19 @@ const UI = {
   instruction: 'AI\u6307\u793a\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09',
   currentRequest: '\u73fe\u5728\u51e6\u7406\u4e2d\u306e\u4f9d\u983c',
   latestRequest: '\u4eca\u56de\u306e\u4f9d\u983c',
+  previewCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u78ba\u8a8d',
+  previewCommandLoading: '\u30b3\u30de\u30f3\u30c9\u3092\u751f\u6210\u4e2d',
+  commandPreviewTitle: '\u5b9f\u884c\u30b3\u30de\u30f3\u30c9',
+  effectivePrompt: '\u5b9f\u969b\u306b\u6e21\u3059\u5165\u529b',
+  workingDirectory: '\u5b9f\u884c\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
+  previewNotes: '\u88dc\u8db3',
+  copyPreviewCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u30b3\u30d4\u30fc',
+  copyEffectivePrompt: '\u5165\u529b\u3092\u30b3\u30d4\u30fc',
   copyLatestResult: '\u6700\u65b0\u7d50\u679c\u3092\u30b3\u30d4\u30fc',
   requestSentAt: '\u9001\u4fe1',
   outputForRequest: '\u5bfe\u5fdc\u3059\u308b\u4f9d\u983c',
+  requestExpand: '\u5168\u6587\u3092\u8868\u793a',
+  requestCollapse: '\u6298\u308a\u305f\u305f\u3080',
   workspaceUnset: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u672a\u8a2d\u5b9a',
   promptPlaceholder: '\u3084\u308a\u305f\u3044\u3053\u3068\u3092\u5165\u529b\u3057\u307e\u3059\u3002Ctrl+Enter \u3067\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002',
   stalledHint: '\u5fdc\u7b54\u5f85\u3061\u304c\u9577\u304f\u306a\u3063\u3066\u3044\u307e\u3059\u3002CLI \u306b\u3088\u3063\u3066\u306f\u6570\u5206\u304b\u304b\u308b\u3053\u3068\u304c\u3042\u308b\u305f\u3081\u3001\u5fc5\u8981\u306a\u3089\u505c\u6b62\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002',
@@ -366,7 +380,7 @@ function normalizeLinkTarget(value: string): string {
 }
 
 function stripFileLineFragment(value: string): string {
-  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '')
+  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '').replace(/(\.[A-Za-z0-9]{1,12}):\d+(?::\d+)?$/i, '$1')
 }
 
 function isSafeExternalUrl(value: string): boolean {
@@ -415,7 +429,7 @@ function isLikelyFileLinkTarget(value: string): boolean {
   )
 }
 
-const FILE_PATH_TOKEN_PATTERN = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)?(?:[\w.-]+[\\/])*[\w.-]+\.[A-Za-z0-9]{1,12}(?:#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?)?/g
+const FILE_PATH_TOKEN_PATTERN = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)?(?:[\w.-]+[\\/])*[\w.-]+\.[A-Za-z0-9]{1,12}(?::\d+(?::\d+)?)?(?:#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?)?/g
 
 type MarkdownNode = {
   type: string
@@ -843,6 +857,7 @@ export function TerminalPane({
   sharedContext,
   now,
   isFocused,
+  isFocusLayout,
   onFocus,
   onUpdate,
   onProviderChange,
@@ -850,6 +865,7 @@ export function TerminalPane({
   promptImageAttachments,
   onAddPromptImages,
   onRemovePromptImage,
+  onPreviewRunCommand,
   onRun,
   onStop,
   onShare,
@@ -903,13 +919,31 @@ export function TerminalPane({
   const shellModalInputRef = useRef<HTMLInputElement | null>(null)
   const shellConsoleRef = useRef<HTMLDivElement | null>(null)
   const shellModalConsoleRef = useRef<HTMLDivElement | null>(null)
+  const outputSurfaceRef = useRef<HTMLDivElement | null>(null)
+  const outputContentRef = useRef<HTMLDivElement | null>(null)
+  const promptSyncFrameRef = useRef<number | null>(null)
+  const promptSyncedValueRef = useRef(pane.prompt)
+  const outputResetKeyRef = useRef<string | null>(null)
   const copyFeedbackTimerRef = useRef<number | null>(null)
+  const promptAppliedHeightRef = useRef(0)
   const [copiedControlKey, setCopiedControlKey] = useState<string | null>(null)
+  const [promptDraft, setPromptDraft] = useState(pane.prompt)
+  const [promptManualHeight, setPromptManualHeight] = useState<number | null>(null)
+  const [isRequestExpanded, setIsRequestExpanded] = useState(false)
+  const [isCommandPreviewOpen, setIsCommandPreviewOpen] = useState(false)
+  const [commandPreviewState, setCommandPreviewState] = useState<{
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    data: PreviewRunCommandResponse | null
+    error: string | null
+  }>({ status: 'idle', data: null, error: null })
 
   useEffect(() => {
     return () => {
       if (copyFeedbackTimerRef.current !== null) {
         window.clearTimeout(copyFeedbackTimerRef.current)
+      }
+      if (promptSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(promptSyncFrameRef.current)
       }
     }
   }, [])
@@ -943,18 +977,52 @@ export function TerminalPane({
   }, [isMenuOpen])
 
   useEffect(() => {
+    if (pane.prompt === promptSyncedValueRef.current) {
+      return
+    }
+
+    promptSyncedValueRef.current = pane.prompt
+    setPromptDraft(pane.prompt)
+  }, [pane.prompt])
+
+  useEffect(() => {
     const element = promptRef.current
     if (!element) {
       return
     }
 
-    element.style.height = '0px'
-    const nextHeight = Math.min(Math.max(element.scrollHeight, 118), 220)
+    const minHeight = isFocusLayout ? 232 : 186
+    const maxHeight = isFocusLayout ? 520 : 420
+    const autoHeight = Math.min(Math.max(element.scrollHeight, minHeight), maxHeight)
+    const nextHeight = promptManualHeight === null ? autoHeight : Math.max(promptManualHeight, minHeight)
+
+    promptAppliedHeightRef.current = nextHeight
     element.style.height = `${nextHeight}px`
-    element.style.overflowY = element.scrollHeight > 220 ? 'auto' : 'hidden'
-  }, [pane.prompt])
+    element.style.overflowY = element.scrollHeight > nextHeight ? 'auto' : 'hidden'
+  }, [isFocusLayout, promptDraft, promptManualHeight])
 
 
+
+  useEffect(() => {
+    const element = promptRef.current
+    if (!element || typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const nextHeight = Math.round(entries[0]?.contentRect.height ?? element.offsetHeight)
+      if (Math.abs(nextHeight - promptAppliedHeightRef.current) <= 2) {
+        return
+      }
+
+      setPromptManualHeight((current) => (current === nextHeight ? current : nextHeight))
+    })
+
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+    }
+  }, [])
 
   useEffect(() => {
     const elements = [shellConsoleRef.current, shellModalConsoleRef.current].filter(Boolean) as HTMLDivElement[]
@@ -962,6 +1030,32 @@ export function TerminalPane({
       element.scrollTop = element.scrollHeight
     }
   }, [pane.shellOutput, pane.shellCommand, isShellExpanded])
+
+  useEffect(() => {
+    if (!outputSurfaceRef.current || !outputContentRef.current || !pane.currentRequestAt || !getOutputText(pane).trim()) {
+      return
+    }
+
+    const outputResetKey = `${pane.currentRequestAt}`
+    if (outputResetKeyRef.current === outputResetKey) {
+      return
+    }
+
+    outputResetKeyRef.current = outputResetKey
+    window.requestAnimationFrame(() => {
+      const surface = outputSurfaceRef.current
+      const anchor = outputContentRef.current
+      if (!surface || !anchor) {
+        return
+      }
+
+      surface.scrollTo({ top: Math.max(0, anchor.offsetTop - 2) })
+    })
+  }, [pane.currentRequestAt, pane.lastResponse, pane.liveOutput.length])
+
+  useEffect(() => {
+    setIsRequestExpanded(false)
+  }, [pane.currentRequestAt, pane.currentRequestText])
 
   useEffect(() => {
     if (!pane.sshPasswordPulseAt) {
@@ -1009,7 +1103,7 @@ export function TerminalPane({
   const isPromptImageSupported = pane.provider !== 'copilot'
   const hasUploadingPromptImages = promptImageAttachments.some((attachment) => attachment.status === 'uploading')
   const hasPromptImageErrors = promptImageAttachments.some((attachment) => attachment.status === 'error')
-  const hasPromptInput = pane.prompt.trim().length > 0 || promptImageAttachments.length > 0
+  const hasPromptInput = promptDraft.trim().length > 0 || promptImageAttachments.length > 0
   const hasWorkspaceTarget = pane.workspaceMode === 'local'
     ? pane.localWorkspacePath.trim().length > 0
     : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0
@@ -1019,6 +1113,7 @@ export function TerminalPane({
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
   const currentRequestText = pane.currentRequestText?.trim() ?? ''
+  const shouldCollapseCurrentRequest = currentRequestText.split(/\r?\n/).length > 5 || currentRequestText.length > 280
   const hasCurrentRequest = currentRequestText.length > 0
   const requestLabel = isRunInProgress ? UI.currentRequest : UI.latestRequest
   const requestPreview = hasCurrentRequest ? summarizePromptPreview(currentRequestText) : ''
@@ -1083,6 +1178,9 @@ export function TerminalPane({
   const activeRunLogsCopyMessage = activeRunLogsTab === 'conversation'
     ? '\u4f1a\u8a71\u5c65\u6b74\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f'
     : '\u30b9\u30c8\u30ea\u30fc\u30e0\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f'
+  const previewCommandText = commandPreviewState.data?.commandLine ?? ''
+  const previewPromptText = commandPreviewState.data?.effectivePrompt ?? ''
+  const previewNotes = commandPreviewState.data?.notes ?? []
   const incomingShareSources = useMemo(() => {
     const sourceMap = new Map<string, { id: string; title: string; count: number }>()
 
@@ -1240,15 +1338,83 @@ export function TerminalPane({
     onUpdate(pane.id, { autoShareTargetIds: nextTargetIds })
   }
 
+  const flushPromptSync = (nextValue = promptDraft) => {
+    if (promptSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(promptSyncFrameRef.current)
+      promptSyncFrameRef.current = null
+    }
+
+    if (promptSyncedValueRef.current === nextValue) {
+      return
+    }
+
+    promptSyncedValueRef.current = nextValue
+    onUpdate(pane.id, { prompt: nextValue })
+  }
+
+  const schedulePromptSync = (nextValue: string) => {
+    if (promptSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(promptSyncFrameRef.current)
+    }
+
+    promptSyncFrameRef.current = window.requestAnimationFrame(() => {
+      promptSyncFrameRef.current = null
+      if (promptSyncedValueRef.current === nextValue) {
+        return
+      }
+
+      promptSyncedValueRef.current = nextValue
+      onUpdate(pane.id, { prompt: nextValue })
+    })
+  }
+
+  const handlePromptDraftChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const nextValue = event.target.value
+    setPromptDraft(nextValue)
+    schedulePromptSync(nextValue)
+  }
+
+  const capturePromptManualHeight = () => {
+    const element = promptRef.current
+    if (!element) {
+      return
+    }
+
+    const nextHeight = Math.round(element.offsetHeight)
+    if (Math.abs(nextHeight - promptAppliedHeightRef.current) <= 2) {
+      return
+    }
+
+    setPromptManualHeight(nextHeight)
+  }
+
   const handleRunRequest = () => {
     if (!canRun || isBusy) {
       return
     }
 
-    onRun(pane.id)
+    flushPromptSync()
+    onRun(pane.id, promptDraft)
     window.requestAnimationFrame(() => {
       promptRef.current?.focus()
     })
+  }
+
+  const handleOpenCommandPreview = async () => {
+    flushPromptSync()
+    setIsCommandPreviewOpen(true)
+    setCommandPreviewState({ status: 'loading', data: null, error: null })
+
+    try {
+      const preview = await onPreviewRunCommand(pane.id, promptDraft)
+      setCommandPreviewState({ status: 'ready', data: preview, error: null })
+    } catch (error) {
+      setCommandPreviewState({
+        status: 'error',
+        data: null,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   const getPromptTransferFiles = (fileList: FileList | null): File[] => Array.from(fileList ?? [])
@@ -1576,35 +1742,50 @@ export function TerminalPane({
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(true)} title={UI.outputExpand}><Maximize2 size={16} /></button>
             </div>
           </div>
-          <div className={`output-surface console-output ${isRunInProgress ? 'is-streaming' : ''}`} aria-label="output-console">
+          <div ref={outputSurfaceRef} className={`output-surface console-output ${isRunInProgress ? 'is-streaming' : ''}`} aria-label="output-console">
             {hasCurrentRequest ? (
               <div className={`request-context-card ${isRunInProgress ? 'is-live' : ''}`}>
                 <div className="request-context-head">
                   <strong>{requestLabel}</strong>
                   {pane.currentRequestAt ? <span>{`${UI.requestSentAt}: ${formatClock(pane.currentRequestAt)}`}</span> : null}
                 </div>
-                <p className="request-context-body">{pane.currentRequestText}</p>
+                <div className={shouldCollapseCurrentRequest && !isRequestExpanded ? 'request-context-body-wrap is-collapsed' : 'request-context-body-wrap'}>
+                  <p className="request-context-body">{pane.currentRequestText}</p>
+                </div>
+                {shouldCollapseCurrentRequest ? (
+                  <div className="request-context-actions">
+                    <button
+                      type="button"
+                      className="ghost-button compact-ghost request-context-toggle"
+                      onClick={() => setIsRequestExpanded((current) => !current)}
+                    >
+                      {isRequestExpanded ? UI.requestCollapse : UI.requestExpand}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
-            {hasOutput ? (
-              <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} onOpenFile={handleOpenLinkedPath} />
-            ) : isWaitingForFreshOutput ? (
-              <div className="output-loading-state" aria-live="polite">
-                <div className="output-loading-head">
-                  <LoaderCircle size={16} className="spin" />
-                  <strong>{UI.outputGenerating}</strong>
+            <div ref={outputContentRef} className="output-result-block">
+              {hasOutput ? (
+                <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} onOpenFile={handleOpenLinkedPath} />
+              ) : isWaitingForFreshOutput ? (
+                <div className="output-loading-state" aria-live="polite">
+                  <div className="output-loading-head">
+                    <LoaderCircle size={16} className="spin" />
+                    <strong>{UI.outputGenerating}</strong>
+                  </div>
+                  {hasCurrentRequest ? <p className="output-loading-request">{`${UI.outputForRequest}: ${requestPreview}`}</p> : null}
+                  <p className="output-loading-copy">{UI.outputGeneratingHint}</p>
+                  <div className="output-loading-bars" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
                 </div>
-                {hasCurrentRequest ? <p className="output-loading-request">{`${UI.outputForRequest}: ${requestPreview}`}</p> : null}
-                <p className="output-loading-copy">{UI.outputGeneratingHint}</p>
-                <div className="output-loading-bars" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-              </div>
-            ) : (
-              <p className="panel-placeholder">{UI.outputPlaceholder}</p>
-            )}
+              ) : (
+                <p className="panel-placeholder">{UI.outputPlaceholder}</p>
+              )}
+            </div>
           </div>
         </section>
 
@@ -1670,8 +1851,8 @@ export function TerminalPane({
           ) : null}
           <textarea
             ref={promptRef}
-            value={pane.prompt}
-            onChange={(event) => onUpdate(pane.id, { prompt: event.target.value })}
+            value={promptDraft}
+            onChange={handlePromptDraftChange}
             onPaste={handlePromptPaste}
             onKeyDown={(event) => {
               if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canRun && !isBusy) {
@@ -1680,6 +1861,9 @@ export function TerminalPane({
               }
             }}
             placeholder={UI.promptPlaceholder}
+            onBlur={() => flushPromptSync()}
+            onMouseUp={capturePromptManualHeight}
+            onTouchEnd={capturePromptManualHeight}
           />
           <div className="composer-footer">
             <div className="composer-footer-leading">
@@ -1703,6 +1887,16 @@ export function TerminalPane({
               </div>
             </div>
             <div className="composer-actions">
+              <button
+                type="button"
+                className="secondary-button composer-command-button"
+                disabled={commandPreviewState.status === 'loading'}
+                onClick={() => void handleOpenCommandPreview()}
+                title={UI.previewCommand}
+              >
+                {commandPreviewState.status === 'loading' ? <LoaderCircle size={16} className="spin" /> : <SquareTerminal size={16} />}
+                {commandPreviewState.status === 'loading' ? UI.previewCommandLoading : UI.previewCommand}
+              </button>
               {!canOfferStop ? (
                 <button
                   type="button"
@@ -2130,6 +2324,79 @@ export function TerminalPane({
         </div>
       )}
 
+      {isCommandPreviewOpen ? (
+        <div className="output-modal-backdrop" onClick={() => setIsCommandPreviewOpen(false)}>
+          <div className="output-modal command-preview-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-header slim">
+              <div><h3>{UI.commandPreviewTitle}</h3><p>{pane.title}</p></div>
+              <button type="button" className="icon-button" onClick={() => setIsCommandPreviewOpen(false)} title={UI.close}><X size={16} /></button>
+            </div>
+            <div className="output-modal-body command-preview-modal-body">
+              {commandPreviewState.status === 'loading' ? (
+                <div className="command-preview-loading" aria-live="polite">
+                  <LoaderCircle size={18} className="spin" />
+                  <span>{UI.previewCommandLoading}</span>
+                </div>
+              ) : commandPreviewState.status === 'error' ? (
+                <p className="panel-placeholder compact-error">{commandPreviewState.error ?? UI.versionCheckError}</p>
+              ) : commandPreviewState.data ? (
+                <div className="command-preview-grid">
+                  <section className="command-preview-field">
+                    <div className="command-preview-field-head">
+                      <strong>{UI.commandPreviewTitle}</strong>
+                      <button
+                        type="button"
+                        className={copiedControlKey === `preview-command-${pane.id}` ? 'icon-button compact-icon-button is-copied' : 'icon-button compact-icon-button'}
+                        onClick={() => void handleCopyWithFeedback(`preview-command-${pane.id}`, previewCommandText, '実行コマンドをコピーしました')}
+                        title={UI.copyPreviewCommand}
+                        aria-label={UI.copyPreviewCommand}
+                      >
+                        {copiedControlKey === `preview-command-${pane.id}` ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                      </button>
+                    </div>
+                    <pre className="command-preview-block">{previewCommandText}</pre>
+                  </section>
+
+                  <section className="command-preview-field">
+                    <div className="command-preview-field-head">
+                      <strong>{UI.workingDirectory}</strong>
+                    </div>
+                    <pre className="command-preview-block">{commandPreviewState.data.workingDirectory}</pre>
+                  </section>
+
+                  <section className="command-preview-field">
+                    <div className="command-preview-field-head">
+                      <strong>{UI.effectivePrompt}</strong>
+                      <button
+                        type="button"
+                        className={copiedControlKey === `preview-prompt-${pane.id}` ? 'icon-button compact-icon-button is-copied' : 'icon-button compact-icon-button'}
+                        onClick={() => void handleCopyWithFeedback(`preview-prompt-${pane.id}`, previewPromptText, '実際に渡す入力をコピーしました')}
+                        title={UI.copyEffectivePrompt}
+                        aria-label={UI.copyEffectivePrompt}
+                      >
+                        {copiedControlKey === `preview-prompt-${pane.id}` ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                      </button>
+                    </div>
+                    <pre className="command-preview-block prompt">{previewPromptText}</pre>
+                  </section>
+
+                  {previewNotes.length > 0 ? (
+                    <section className="command-preview-field">
+                      <div className="command-preview-field-head">
+                        <strong>{UI.previewNotes}</strong>
+                      </div>
+                      <ul className="command-preview-notes">
+                        {previewNotes.map((note) => <li key={note}>{note}</li>)}
+                      </ul>
+                    </section>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {selectedPromptImage ? (
         <div className="output-modal-backdrop" onClick={() => setExpandedPromptImageId(null)}>
           <div className="output-modal prompt-image-modal" onClick={(event) => event.stopPropagation()}>
@@ -2287,6 +2554,15 @@ export function TerminalPane({
     </>
   )
 }
+
+
+
+
+
+
+
+
+
 
 
 

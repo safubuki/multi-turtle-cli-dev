@@ -153,6 +153,15 @@ export interface RunRequestBody {
   imageAttachments: RunImageAttachment[]
 }
 
+export interface PreviewRunCommandResponse {
+  success: boolean
+  commandLine: string
+  stdinPrompt: string | null
+  effectivePrompt: string
+  workingDirectory: string
+  notes: string[]
+}
+
 export type RunStreamEvent =
   | {
       type: 'session'

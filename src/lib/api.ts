@@ -6,6 +6,8 @@ import type {
   RemoteBrowseResponse,
   RemoteCreateDirectoryResponse,
   RemoteWorkspaceResponse,
+  PreviewRunCommandRequest,
+  PreviewRunCommandResponse,
   RunPaneRequest,
   RunPaneResponse,
   RunStreamEvent,
@@ -176,6 +178,16 @@ export async function runPaneStream(
   if (buffer.trim()) {
     processLine(buffer)
   }
+}
+
+export function previewRunCommand(payload: PreviewRunCommandRequest): Promise<PreviewRunCommandResponse> {
+  return requestJson<PreviewRunCommandResponse>('/api/run/preview-command', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  })
 }
 
 export function stopPaneRun(paneId: string): Promise<StopRunResponse> {

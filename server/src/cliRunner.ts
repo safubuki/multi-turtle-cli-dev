@@ -47,6 +47,7 @@ interface ParsedRunState {
 const REMOTE_CAPTURE_BEGIN = '__TAKO_REMOTE_CAPTURE_BEGIN__'
 const REMOTE_CAPTURE_END = '__TAKO_REMOTE_CAPTURE_END__'
 const REMOTE_CODEX_OUTPUT_PLACEHOLDER = '__TAKO_REMOTE_CODEX_OUTPUT__'
+const REMOTE_PREVIEW_IMAGE_DIR = '/tmp/multi-turtle-images-preview'
 const CODEX_SANDBOX_RETRY_NOTICE = 'Codex の sandbox 初期化に失敗したため、この実行だけ sandbox なしで再試行します。'
 
 interface ResolvedRunImageAttachment {
@@ -801,6 +802,26 @@ async function prepareRemoteImageAttachments(options: RunOptions): Promise<{
   }
 }
 
+function resolveRemotePreviewImageAttachments(imageAttachments: RunImageAttachment[]): {
+  remoteDirectory: string | null
+  attachments: ResolvedRunImageAttachment[]
+} {
+  if (imageAttachments.length === 0) {
+    return {
+      remoteDirectory: null,
+      attachments: []
+    }
+  }
+
+  return {
+    remoteDirectory: REMOTE_PREVIEW_IMAGE_DIR,
+    attachments: imageAttachments.map((attachment, index) => ({
+      fileName: attachment.fileName,
+      path: path.posix.join(REMOTE_PREVIEW_IMAGE_DIR, sanitizePromptImageFileName(index, attachment.fileName))
+    }))
+  }
+}
+
 function buildAttachedImagePrompt(provider: ProviderId, imageAttachments: ResolvedRunImageAttachment[]): string {
   if (imageAttachments.length === 0) {
     return ''
@@ -856,6 +877,14 @@ function quoteForCmd(value: string): string {
 
 function buildWindowsCommandLine(command: string, args: string[]): string {
   return [quoteForCmd(command), ...args.map((value) => quoteForCmd(value))].join(' ')
+}
+
+function buildPreviewCommandLine(command: string, args: string[]): string {
+  if (process.platform === 'win32') {
+    return buildWindowsCommandLine(command, args)
+  }
+
+  return [shellEscapePosix(command), ...args.map((value) => shellEscapePosix(value))].join(' ')
 }
 
 function spawnCliChild(command: string, args: string[], cwd: string): ChildProcessWithoutNullStreams {
@@ -960,19 +989,20 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
   }
 }
 
-async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec> {
+async function buildRemoteLaunchSpecFromResolved(
+  options: RunOptions,
+  preparedRemoteImages: {
+    remoteDirectory: string | null
+    attachments: ResolvedRunImageAttachment[]
+  }
+): Promise<CliLaunchSpec> {
   if (options.target.kind !== 'ssh') {
     throw new Error('Remote launch requires ssh target.')
-  }
-
-  if (options.provider === 'copilot' && options.imageAttachments.length > 0) {
-    throw new Error('GitHub Copilot CLI は画像入力に対応していません。Codex CLI または Gemini CLI を選択してください。')
   }
 
   const supportsReasoning = await modelSupportsReasoning(options.provider, options.model)
   const resolvedSessionId = sanitizeSessionId(options.sessionId)
   const approvalMode = options.autonomyMode === 'max' ? 'yolo' : 'auto_edit'
-  const preparedRemoteImages = await prepareRemoteImageAttachments(options)
   const providerPrompt = buildProviderPrompt(options, preparedRemoteImages.attachments)
 
   const remoteArgs =
@@ -1070,6 +1100,19 @@ async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec
     ),
     stdinPrompt: options.provider === 'copilot' ? null : options.provider === 'gemini' ? null : providerPrompt
   }
+}
+
+async function buildRemoteLaunchSpec(options: RunOptions): Promise<CliLaunchSpec> {
+  if (options.target.kind !== 'ssh') {
+    throw new Error('Remote launch requires ssh target.')
+  }
+
+  if (options.provider === 'copilot' && options.imageAttachments.length > 0) {
+    throw new Error('GitHub Copilot CLI \u306f\u753b\u50cf\u5165\u529b\u306b\u5bfe\u5fdc\u3057\u3066\u3044\u307e\u305b\u3093\u3002Codex CLI \u307e\u305f\u306f Gemini CLI \u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002')
+  }
+
+  const preparedRemoteImages = await prepareRemoteImageAttachments(options)
+  return buildRemoteLaunchSpecFromResolved(options, preparedRemoteImages)
 }
 
 function createActiveRun(
@@ -1226,6 +1269,55 @@ function createActiveRun(
       stopped = true
       child.kill()
     }
+  }
+}
+
+export async function previewCliRunCommand(options: RunOptions): Promise<{
+  commandLine: string
+  stdinPrompt: string | null
+  effectivePrompt: string
+  workingDirectory: string
+  notes: string[]
+}> {
+  if (options.provider === 'copilot' && options.imageAttachments.length > 0) {
+    throw new Error('GitHub Copilot CLI \u306f\u753b\u50cf\u5165\u529b\u306b\u5bfe\u5fdc\u3057\u3066\u3044\u307e\u305b\u3093\u3002Codex CLI \u307e\u305f\u306f Gemini CLI \u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002')
+  }
+
+  const notes: string[] = []
+
+  if (options.target.kind === 'local') {
+    const resolvedImageAttachments = resolveLocalImageAttachments(options.imageAttachments)
+    const effectivePrompt = buildProviderPrompt(options, resolvedImageAttachments)
+    const launchSpec = await buildLocalLaunchSpec(options)
+    if (launchSpec.stdinPrompt) {
+      notes.push('Codex CLI \u3067\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u672c\u4f53\u3092\u6a19\u6e96\u5165\u529b\u3067\u6e21\u3057\u307e\u3059\u3002')
+    }
+
+    return {
+      commandLine: buildPreviewCommandLine(launchSpec.command, launchSpec.args),
+      stdinPrompt: launchSpec.stdinPrompt,
+      effectivePrompt,
+      workingDirectory: options.target.path,
+      notes
+    }
+  }
+
+  const previewRemoteImages = resolveRemotePreviewImageAttachments(options.imageAttachments)
+  const effectivePrompt = buildProviderPrompt(options, previewRemoteImages.attachments)
+  const launchSpec = await buildRemoteLaunchSpecFromResolved(options, previewRemoteImages)
+  if (launchSpec.stdinPrompt) {
+    notes.push('Codex CLI \u3067\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u672c\u4f53\u3092\u6a19\u6e96\u5165\u529b\u3067\u6e21\u3057\u307e\u3059\u3002')
+  }
+  if (previewRemoteImages.attachments.length > 0) {
+    notes.push('\u30ea\u30e2\u30fc\u30c8\u753b\u50cf\u306f\u5b9f\u884c\u6642\u306b\u4e00\u6642\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\u3078\u8ee2\u9001\u3055\u308c\u308b\u305f\u3081\u3001\u30d7\u30ec\u30d3\u30e5\u30fc\u3067\u306f\u4ee3\u8868\u30d1\u30b9\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059\u3002')
+  }
+
+  return {
+    commandLine: buildPreviewCommandLine(launchSpec.command, launchSpec.args),
+    stdinPrompt: launchSpec.stdinPrompt,
+    effectivePrompt,
+    workingDirectory: options.target.path,
+    notes
   }
 }
 

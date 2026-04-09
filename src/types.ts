@@ -331,6 +331,17 @@ export interface RunPaneResponse {
   sessionId: string | null
 }
 
+export interface PreviewRunCommandRequest extends RunPaneRequest {}
+
+export interface PreviewRunCommandResponse {
+  success: boolean
+  commandLine: string
+  stdinPrompt: string | null
+  effectivePrompt: string
+  workingDirectory: string
+  notes: string[]
+}
+
 export interface ShellRunRequest {
   paneId: string
   target: WorkspaceTarget

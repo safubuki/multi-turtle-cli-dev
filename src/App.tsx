@@ -29,6 +29,7 @@ import {
   openWorkspaceInVsCode,
   pickLocalWorkspace,
   pickSaveFilePath,
+  previewRunCommand,
   removeKnownHost,
   runPaneStream,
   runShellStream,
@@ -48,6 +49,7 @@ import type {
   PaneSessionRecord,
   PaneState,
   PaneStatus,
+  PreviewRunCommandResponse,
   PromptImageAttachment,
   PromptImageAttachmentSource,
   ProviderCatalogResponse,
@@ -470,7 +472,7 @@ function normalizeLinkedPathTarget(value: string): string {
 }
 
 function stripLinkedPathFragment(value: string): string {
-  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '')
+  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '').replace(/(\.[A-Za-z0-9]{1,12}):\d+(?::\d+)?$/i, '$1')
 }
 
 function isAbsoluteLocalPath(value: string): boolean {
@@ -1581,6 +1583,7 @@ function App() {
   const paneCardRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const refreshBootstrapInFlightRef = useRef(false)
   const refreshBootstrapRef = useRef<(() => Promise<void>) | null>(null)
+  const persistTimerRef = useRef<number | null>(null)
 
   panesRef.current = panes
   localWorkspacesRef.current = localWorkspaces
@@ -1733,13 +1736,27 @@ function App() {
       return
     }
 
-    persistState({
-      panes,
-      sharedContext,
-      layout,
-      localWorkspaces,
-      focusedPaneId
-    })
+    if (persistTimerRef.current !== null) {
+      window.clearTimeout(persistTimerRef.current)
+    }
+
+    persistTimerRef.current = window.setTimeout(() => {
+      persistState({
+        panes,
+        sharedContext,
+        layout,
+        localWorkspaces,
+        focusedPaneId
+      })
+      persistTimerRef.current = null
+    }, 180)
+
+    return () => {
+      if (persistTimerRef.current !== null) {
+        window.clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = null
+      }
+    }
   }, [bootstrap, focusedPaneId, layout, localWorkspaces, panes, sharedContext])
 
   useEffect(() => {
@@ -2602,63 +2619,64 @@ function App() {
     }
   }
 
-  const handleRun = async (paneId: string) => {
+  const preparePaneRunPayload = (paneId: string, promptOverride?: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || isPaneBusyForExecution(pane) || controllersRef.current[paneId]) {
-      return
+    if (!pane) {
+      return { ok: false as const, error: "\u30da\u30a4\u30f3\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002" }
     }
 
     const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
     if (!target) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: 'ワークスペースを選択してください',
-        lastError: 'ワークスペースが未設定です。'
+        statusText: "\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044",
+        lastError: "\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002"
       })
-      return
+      return { ok: false as const, error: "\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002" }
     }
 
     const promptImages = paneImageAttachmentsRef.current[paneId] ?? []
-    const prompt = pane.prompt.trim() || (promptImages.length > 0 ? '添付画像を確認してください。' : '')
-    if (!prompt) {
+    const promptText = (promptOverride ?? pane.prompt).trim() || (promptImages.length > 0 ? "\u6dfb\u4ed8\u753b\u50cf\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002" : "")
+    if (!promptText) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '指示または画像を追加してください',
-        lastError: 'プロンプトが空です。画像のみで実行する場合は画像を添付してください。'
+        statusText: "\u6307\u793a\u307e\u305f\u306f\u753b\u50cf\u3092\u8ffd\u52a0\u3057\u3066\u304f\u3060\u3055\u3044",
+        lastError: "\u30d7\u30ed\u30f3\u30d7\u30c8\u304c\u7a7a\u3067\u3059\u3002\u753b\u50cf\u306e\u307f\u3067\u5b9f\u884c\u3059\u308b\u5834\u5408\u306f\u753b\u50cf\u3092\u6dfb\u4ed8\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
       })
-      return
+      return { ok: false as const, error: "\u30d7\u30ed\u30f3\u30d7\u30c8\u304c\u7a7a\u3067\u3059\u3002" }
     }
 
-    if (pane.provider === 'copilot' && promptImages.length > 0) {
+    if (pane.provider === "copilot" && promptImages.length > 0) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: 'Copilot では画像添付を使えません',
-        lastError: 'GitHub Copilot CLI は画像入力未対応です。Codex CLI または Gemini CLI を選択してください。'
+        statusText: "Copilot \u3067\u306f\u753b\u50cf\u6dfb\u4ed8\u3092\u4f7f\u3048\u307e\u305b\u3093",
+        lastError: "GitHub Copilot CLI \u306f\u753b\u50cf\u5165\u529b\u672a\u5bfe\u5fdc\u3067\u3059\u3002Codex CLI \u307e\u305f\u306f Gemini CLI \u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
       })
-      return
+      return { ok: false as const, error: "GitHub Copilot CLI \u306f\u753b\u50cf\u5165\u529b\u672a\u5bfe\u5fdc\u3067\u3059\u3002" }
     }
 
-    if (promptImages.some((attachment) => attachment.status === 'uploading')) {
+    if (promptImages.some((attachment) => attachment.status === "uploading")) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '画像の準備中です',
-        lastError: '画像のアップロードが完了してから実行してください。'
+        statusText: "\u753b\u50cf\u306e\u6e96\u5099\u4e2d\u3067\u3059",
+        lastError: "\u753b\u50cf\u306e\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u304c\u5b8c\u4e86\u3057\u3066\u304b\u3089\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
       })
-      return
+      return { ok: false as const, error: "\u753b\u50cf\u306e\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u304c\u5b8c\u4e86\u3057\u3066\u304b\u3089\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002" }
     }
 
-    const failedImage = promptImages.find((attachment) => attachment.status === 'error')
+    const failedImage = promptImages.find((attachment) => attachment.status === "error")
     if (failedImage) {
+      const errorMessage = failedImage.error || `\u753b\u50cf\u3092\u6e96\u5099\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${failedImage.fileName}`
       updatePane(paneId, {
         status: 'attention',
-        statusText: '画像添付を確認してください',
-        lastError: failedImage.error || `画像を準備できませんでした: ${failedImage.fileName}`
+        statusText: "\u753b\u50cf\u6dfb\u4ed8\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044",
+        lastError: errorMessage
       })
-      return
+      return { ok: false as const, error: errorMessage }
     }
 
     const readyImageAttachments: RunImageAttachment[] = promptImages.flatMap((attachment) =>
-      attachment.status === 'ready' && attachment.localPath
+      attachment.status === "ready" && attachment.localPath
         ? [{
             fileName: attachment.fileName,
             mimeType: attachment.mimeType,
@@ -2671,25 +2689,16 @@ function App() {
     if (promptImages.length > 0 && readyImageAttachments.length !== promptImages.length) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '画像の準備中です',
-        lastError: '画像の準備が完了していないため、もう一度確認してください。'
+        statusText: "\u753b\u50cf\u306e\u6e96\u5099\u4e2d\u3067\u3059",
+        lastError: "\u753b\u50cf\u306e\u6e96\u5099\u304c\u5b8c\u4e86\u3057\u3066\u3044\u306a\u3044\u305f\u3081\u3001\u3082\u3046\u4e00\u5ea6\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
       })
-      return
+      return { ok: false as const, error: "\u753b\u50cf\u306e\u6e96\u5099\u304c\u5b8c\u4e86\u3057\u3066\u3044\u306a\u3044\u305f\u3081\u3001\u3082\u3046\u4e00\u5ea6\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002" }
     }
 
-    const requestText = buildPromptWithImageSummary(prompt, readyImageAttachments)
-    const startedAt = Date.now()
+    const requestText = buildPromptWithImageSummary(promptText, readyImageAttachments)
     const currentSessionScopeKey = buildPaneSessionScopeKey(pane)
     const resumeSessionId = pane.sessionScopeKey === currentSessionScopeKey ? pane.sessionId : null
-    const userEntry: PaneLogEntry = {
-      id: createId('log'),
-      role: 'user',
-      text: requestText,
-      createdAt: startedAt
-    }
-
-    const memory = [...pane.logs, userEntry].slice(-8)
-    const attachedContext = sharedContext.filter((item) => pane.attachedContextIds.includes(item.id))
+    const attachedContext = sharedContextRef.current.filter((item) => pane.attachedContextIds.includes(item.id))
     const consumedContextIds = attachedContext.map((item) => item.id)
     const sharedContextPayload = attachedContext.map((item) => ({
       sourcePaneTitle: item.sourcePaneTitle,
@@ -2698,6 +2707,81 @@ function App() {
       summary: item.summary,
       detail: item.detail
     }))
+
+    return {
+      ok: true as const,
+      pane,
+      target,
+      promptText,
+      requestText,
+      readyImageAttachments,
+      currentSessionScopeKey,
+      resumeSessionId,
+      consumedContextIds,
+      sharedContextPayload
+    }
+  }
+
+  const handlePreviewRunCommand = async (paneId: string, promptOverride?: string): Promise<PreviewRunCommandResponse> => {
+    const prepared = preparePaneRunPayload(paneId, promptOverride)
+    if (!prepared.ok) {
+      throw new Error(prepared.error)
+    }
+
+    const previewEntry: PaneLogEntry = {
+      id: "preview",
+      role: "user",
+      text: prepared.requestText,
+      createdAt: Date.now()
+    }
+
+    return previewRunCommand({
+      paneId,
+      provider: prepared.pane.provider,
+      model: prepared.pane.model,
+      reasoningEffort: prepared.pane.reasoningEffort,
+      autonomyMode: prepared.pane.autonomyMode,
+      codexFastMode: prepared.pane.codexFastMode,
+      target: prepared.target,
+      prompt: prepared.promptText,
+      sessionId: prepared.resumeSessionId,
+      memory: [...prepared.pane.logs, previewEntry].slice(-8),
+      sharedContext: prepared.sharedContextPayload,
+      imageAttachments: prepared.readyImageAttachments
+    })
+  }
+
+  const handleRun = async (paneId: string, promptOverride?: string) => {
+    const prepared = preparePaneRunPayload(paneId, promptOverride)
+    if (!prepared.ok) {
+      return
+    }
+
+    const {
+      pane,
+      target,
+      promptText: prompt,
+      requestText,
+      readyImageAttachments,
+      currentSessionScopeKey,
+      resumeSessionId,
+      consumedContextIds,
+      sharedContextPayload
+    } = prepared
+
+    if (isPaneBusyForExecution(pane) || controllersRef.current[paneId]) {
+      return
+    }
+
+    const startedAt = Date.now()
+    const userEntry: PaneLogEntry = {
+      id: createId("log"),
+      role: "user",
+      text: requestText,
+      createdAt: startedAt
+    }
+
+    const memory = [...pane.logs, userEntry].slice(-8)
     const controller = new AbortController()
 
     controllersRef.current[paneId] = controller
@@ -2718,18 +2802,16 @@ function App() {
             const nextTargetPaneIds = item.targetPaneIds.filter((id) => id !== paneId)
             const nextTargetPaneTitles = item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
 
-            if (item.scope === 'direct' || nextTargetPaneIds.length === 0) {
+            if (item.scope === "direct" || nextTargetPaneIds.length === 0) {
               return []
             }
 
-            return [
-              {
-                ...item,
-                targetPaneIds: nextTargetPaneIds,
-                targetPaneTitles: nextTargetPaneTitles,
-                consumedByPaneIds: nextConsumedByPaneIds
-              }
-            ]
+            return [{
+              ...item,
+              targetPaneIds: nextTargetPaneIds,
+              targetPaneTitles: nextTargetPaneTitles,
+              consumedByPaneIds: nextConsumedByPaneIds
+            }]
           })
           .slice(0, MAX_SHARED_CONTEXT)
       )
@@ -2737,10 +2819,10 @@ function App() {
 
     mutatePane(paneId, (currentPane) => ({
       ...currentPane,
-      prompt: '',
+      prompt: "",
       logs: appendLogEntry(currentPane.logs, userEntry),
-      status: 'running',
-      statusText: '実行中',
+      status: "running",
+      statusText: "\u5b9f\u884c\u4e2d",
       runInProgress: true,
       lastRunAt: startedAt,
       runningSince: startedAt,
@@ -2748,7 +2830,7 @@ function App() {
       lastError: null,
       lastResponse: null,
       selectedSessionKey: null,
-      liveOutput: '',
+      liveOutput: "",
       sessionId: resumeSessionId,
       sessionScopeKey: currentSessionScopeKey,
       currentRequestText: requestText,
@@ -2756,7 +2838,7 @@ function App() {
       stopRequested: false,
       stopRequestAvailable: true,
       attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
-      streamEntries: appendStreamEntry([], 'system', `開始: ${currentPane.provider} / ${target.label}`, startedAt)
+      streamEntries: appendStreamEntry([], "system", `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
     queuePromptImageCleanup(paneId, readyImageAttachments.map((attachment) => attachment.localPath))
     clearPanePromptImages(paneId, { cleanupFiles: false })
@@ -2789,22 +2871,22 @@ function App() {
         const failedAt = Date.now()
         mutatePane(paneId, (currentPane) => {
           const issueSummary = getProviderIssueSummary(currentPane.provider, message)
-          const fallbackAttentionMessage = 'ストリーム接続が途中で切れました。サーバー側で実行が残っている可能性があるため、必要なら停止再送を試してください。'
+          const fallbackAttentionMessage = "\u30b9\u30c8\u30ea\u30fc\u30e0\u63a5\u7d9a\u304c\u9014\u4e2d\u3067\u5207\u308c\u307e\u3057\u305f\u3002\u30b5\u30fc\u30d0\u30fc\u5074\u3067\u5b9f\u884c\u304c\u6b8b\u3063\u3066\u3044\u308b\u53ef\u80fd\u6027\u304c\u3042\u308b\u305f\u3081\u3001\u5fc5\u8981\u306a\u3089\u505c\u6b62\u518d\u9001\u3092\u8a66\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
           const displayMessage = issueSummary?.displayMessage ?? fallbackAttentionMessage
           const systemEntry: PaneLogEntry = {
-            id: createId('log'),
-            role: 'system',
+            id: createId("log"),
+            role: "system",
             text: displayMessage,
             createdAt: failedAt
           }
 
-          const nextStreamEntries = appendStreamEntry(currentPane.streamEntries, 'stderr', message, failedAt)
+          const nextStreamEntries = appendStreamEntry(currentPane.streamEntries, "stderr", message, failedAt)
 
           return {
             ...currentPane,
             logs: appendLogEntry(currentPane.logs, systemEntry),
-            status: issueSummary?.status ?? 'attention',
-            statusText: issueSummary?.statusText ?? 'ストリーム接続が途切れました',
+            status: issueSummary?.status ?? "attention",
+            statusText: issueSummary?.statusText ?? "\u30b9\u30c8\u30ea\u30fc\u30e0\u63a5\u7d9a\u304c\u9014\u5207\u308c\u307e\u3057\u305f",
             runInProgress: false,
             runningSince: null,
             stopRequested: false,
@@ -2813,8 +2895,8 @@ function App() {
             lastFinishedAt: failedAt,
             lastError: displayMessage,
             streamEntries:
-              issueSummary && !currentPane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
-                ? appendStreamEntry(nextStreamEntries, 'system', issueSummary.displayMessage, failedAt)
+              issueSummary && !currentPane.streamEntries.some((entry) => entry.kind === "system" && entry.text === issueSummary.displayMessage)
+                ? appendStreamEntry(nextStreamEntries, "system", issueSummary.displayMessage, failedAt)
                 : nextStreamEntries
           }
         })
@@ -2825,8 +2907,8 @@ function App() {
         const stoppedAt = Date.now()
         mutatePane(paneId, (currentPane) => ({
           ...currentPane,
-          status: 'attention',
-          statusText: '停止しました',
+          status: "attention",
+          statusText: "\u505c\u6b62\u3057\u307e\u3057\u305f",
           runInProgress: false,
           runningSince: null,
           stopRequested: false,
@@ -2834,7 +2916,7 @@ function App() {
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
-          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '実行を停止しました', stoppedAt)
+          streamEntries: appendStreamEntry(currentPane.streamEntries, "system", "\u5b9f\u884c\u3092\u505c\u6b62\u3057\u307e\u3057\u305f", stoppedAt)
         }))
       }
     } finally {
@@ -4841,7 +4923,7 @@ function App() {
                   promptImageAttachments={paneImageAttachments[pane.id] ?? []}
                   onAddPromptImages={(paneId, files, source) => void handleAddPromptImages(paneId, files, source)}
                   onRemovePromptImage={handleRemovePromptImage}
-                  onRun={(paneId) => void handleRun(paneId)}
+                  onRun={(paneId, promptOverride) => void handleRun(paneId, promptOverride)}
                   onStop={(paneId) => void handleStop(paneId)}
                   onShare={shareFromPane}
                   onShareToPane={(sourcePaneId, targetPaneId) =>
@@ -4850,6 +4932,8 @@ function App() {
                   onCopyOutput={(paneId) => void handleCopyOutput(paneId)}
                   onCopyProviderCommand={(paneId, text, successMessage) => handleCopyProviderCommand(paneId, text, successMessage)}
                   onCopyText={(paneId, text, successMessage) => handleCopyText(paneId, text, successMessage)}
+                  isFocusLayout={layout === 'focus'}
+                  onPreviewRunCommand={(paneId, promptOverride) => handlePreviewRunCommand(paneId, promptOverride)}
                   onDuplicate={handleDuplicatePane}
                   onStartNewSession={handleStartNewSession}
                   onResetSession={handleResetSession}
