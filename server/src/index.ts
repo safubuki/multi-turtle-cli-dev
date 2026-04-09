@@ -1,9 +1,10 @@
 import cors from 'cors'
 import nodePath from 'path'
 import express from 'express'
-import { startCliRun } from './cliRunner.js'
+import { previewCliRunCommand, startCliRun } from './cliRunner.js'
 import { startShellRun } from './shellRunner.js'
 import { pickFolderDialog, pickSaveFileDialog } from './nativeDialog.js'
+import { assertPromptImagePath, removePromptImages as removeRuntimePromptImages, stagePromptImage as stageRuntimePromptImage } from './promptImages.js'
 import { getProviderCatalogs } from './providerCatalog.js'
 import {
   browseRemoteDirectory,
@@ -29,7 +30,7 @@ const activeRuns = new Map<string, ActiveCliRun>()
 const activeShellRuns = new Map<string, ActiveShellRun>()
 
 app.use(cors())
-app.use(express.json({ limit: '10mb' }))
+app.use(express.json({ limit: '25mb' }))
 
 function normalizeAutonomyMode(value: unknown): AutonomyMode {
   return value === 'max' ? 'max' : 'balanced'
@@ -73,6 +74,33 @@ function normalizeConnection(value: unknown): SshConnectionOptions | undefined {
     extraArgs: normalizeString('extraArgs')
   }
 }
+function normalizeImageAttachments(value: unknown): RunRequestBody['imageAttachments'] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return []
+    }
+
+    const candidate = item as Record<string, unknown>
+    const fileName = typeof candidate.fileName === 'string' ? candidate.fileName.trim() : ''
+    const mimeType = typeof candidate.mimeType === 'string' ? candidate.mimeType.trim() : ''
+    const size = typeof candidate.size === 'number' && Number.isFinite(candidate.size) ? candidate.size : 0
+    const localPath = typeof candidate.localPath === 'string' ? candidate.localPath.trim() : ''
+    if (!fileName || !mimeType || !localPath) {
+      return []
+    }
+
+    return [{
+      fileName,
+      mimeType,
+      size,
+      localPath: assertPromptImagePath(localPath)
+    }]
+  })
+}
 
 function buildCombinedPrompt(body: RunRequestBody): string {
   const sections = [
@@ -93,12 +121,32 @@ function buildCombinedPrompt(body: RunRequestBody): string {
     )
   }
 
+  if (body.imageAttachments.length > 0) {
+    sections.push(
+      [
+        'Attached Images',
+        'The user attached image files that should be treated as part of this request.',
+        ...body.imageAttachments.map((item, index) => `Image ${index + 1}: ${item.fileName}`)
+      ].join('\n')
+    )
+  }
+
   sections.push(body.prompt)
   return sections.join('\n\n')
 }
 
 function isValidRunRequest(body: Partial<RunRequestBody> | null | undefined): body is RunRequestBody {
   return Boolean(body?.paneId && body.provider && body.model && body.target && body.prompt?.trim())
+}
+
+function normalizeRunRequestBody(rawBody: Partial<RunRequestBody>): RunRequestBody {
+  return {
+    ...rawBody,
+    autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
+    codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
+    sessionId: rawBody.sessionId ?? null,
+    imageAttachments: normalizeImageAttachments(rawBody.imageAttachments)
+  } as RunRequestBody
 }
 
 function writeStreamEvent(res: express.Response, event: RunStreamEvent): void {
@@ -269,6 +317,61 @@ app.post('/api/system/pick-save-file', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'save file picker failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/system/stage-image', async (req, res) => {
+  try {
+    const { fileName, mimeType, contentBase64 } = req.body as {
+      fileName?: string
+      mimeType?: string
+      contentBase64?: string
+    }
+
+    if (!fileName?.trim() || !mimeType?.trim() || !contentBase64?.trim()) {
+      res.status(400).json({
+        success: false,
+        error: 'fileName, mimeType, and contentBase64 are required'
+      })
+      return
+    }
+
+    const attachment = await stageRuntimePromptImage({
+      fileName: fileName.trim(),
+      mimeType: mimeType.trim(),
+      contentBase64: contentBase64.trim()
+    })
+
+    res.json({
+      success: true,
+      attachment
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'image staging failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/system/unstage-images', async (req, res) => {
+  try {
+    const { localPaths } = req.body as { localPaths?: string[] }
+    const normalizedPaths = Array.isArray(localPaths)
+      ? localPaths.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : []
+
+    await removeRuntimePromptImages(normalizedPaths)
+    res.json({
+      success: true
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'image cleanup failed',
       details: String(error)
     })
   }
@@ -688,6 +791,44 @@ app.post('/api/shell/stop', (req, res) => {
   })
 })
 
+app.post('/api/run/preview-command', async (req, res) => {
+  const rawBody = req.body as Partial<RunRequestBody>
+  if (!isValidRunRequest(rawBody)) {
+    res.status(400).json({
+      success: false,
+      error: 'invalid run request'
+    })
+    return
+  }
+
+  try {
+    const body = normalizeRunRequestBody(rawBody)
+    const combinedPrompt = buildCombinedPrompt(body)
+    const preview = await previewCliRunCommand({
+      provider: body.provider,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+      autonomyMode: body.autonomyMode,
+      codexFastMode: body.codexFastMode,
+      prompt: combinedPrompt,
+      sessionId: body.sessionId,
+      target: body.target,
+      imageAttachments: body.imageAttachments
+    })
+
+    res.json({
+      success: true,
+      ...preview
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'preview command failed',
+      details: String(error)
+    })
+  }
+})
+
 app.post('/api/run', async (req, res) => {
   const rawBody = req.body as Partial<RunRequestBody>
   if (!isValidRunRequest(rawBody)) {
@@ -698,12 +839,7 @@ app.post('/api/run', async (req, res) => {
     return
   }
 
-  const body: RunRequestBody = {
-    ...rawBody,
-    autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
-    codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
-    sessionId: rawBody.sessionId ?? null
-  }
+  const body = normalizeRunRequestBody(rawBody)
 
   if (activeRuns.has(body.paneId)) {
     res.status(409).json({
@@ -722,7 +858,8 @@ app.post('/api/run', async (req, res) => {
       codexFastMode: body.codexFastMode,
       prompt: buildCombinedPrompt(body),
       sessionId: body.sessionId,
-      target: body.target
+      target: body.target,
+      imageAttachments: body.imageAttachments
     })
 
     activeRuns.set(body.paneId, run)
@@ -760,12 +897,7 @@ app.post('/api/run/stream', async (req, res) => {
     return
   }
 
-  const body: RunRequestBody = {
-    ...rawBody,
-    autonomyMode: normalizeAutonomyMode(rawBody.autonomyMode),
-    codexFastMode: normalizeCodexFastMode(rawBody.codexFastMode),
-    sessionId: rawBody.sessionId ?? null
-  }
+  const body = normalizeRunRequestBody(rawBody)
 
   if (activeRuns.has(body.paneId)) {
     res.status(409).json({
@@ -799,6 +931,7 @@ app.post('/api/run/stream', async (req, res) => {
       prompt: buildCombinedPrompt(body),
       sessionId: body.sessionId,
       target: body.target,
+      imageAttachments: body.imageAttachments,
       onEvent: (event) => writeStreamEvent(res, event)
     })
 

@@ -1,4 +1,4 @@
-import { existsSync } from 'fs'
+﻿import { existsSync } from 'fs'
 import path from 'path'
 import { execFile, spawn } from 'child_process'
 import { pathToFileURL } from 'url'
@@ -249,8 +249,8 @@ export async function openInVsCode(target: WorkspaceTarget): Promise<void> {
     target.kind === 'local'
       ? resourceType === 'file'
         ? workspacePath
-          ? ['--reuse-window', '--folder-uri', buildLocalFolderUri(workspacePath), '--file-uri', buildLocalFileUri(target.path)]
-          : ['--file-uri', buildLocalFileUri(target.path)]
+          ? ['--reuse-window', workspacePath, '--goto', path.resolve(target.path)]
+          : ['--goto', path.resolve(target.path)]
         : ['--folder-uri', buildLocalFolderUri(target.path)]
       : resourceType === 'file'
         ? workspacePath
@@ -417,3 +417,4 @@ function buildPosixTerminalCommand(target: WorkspaceTarget): string {
 
   return `ssh ${sshArgs.map((value) => shellEscapePosix(value)).join(' ')}`
 }
+

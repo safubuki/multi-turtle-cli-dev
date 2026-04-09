@@ -29,10 +29,13 @@ import {
   openWorkspaceInVsCode,
   pickLocalWorkspace,
   pickSaveFilePath,
+  previewRunCommand,
   removeKnownHost,
   runPaneStream,
   runShellStream,
+  stagePromptImage,
   stopPaneRun,
+  unstagePromptImages,
   stopShellRun,
   transferSshPath,
 } from './lib/api'
@@ -46,10 +49,14 @@ import type {
   PaneSessionRecord,
   PaneState,
   PaneStatus,
+  PreviewRunCommandResponse,
+  PromptImageAttachment,
+  PromptImageAttachmentSource,
   ProviderCatalogResponse,
   ProviderId,
   ReasoningEffort,
   RemoteDirectoryEntry,
+  RunImageAttachment,
   RunStreamEvent,
   ShellRunEvent,
   SharedContextItem,
@@ -86,6 +93,7 @@ const STORAGE_KEYS = {
 const MAX_LOGS = 24
 const MAX_STREAM_ENTRIES = 80
 const MAX_SESSION_HISTORY = 18
+const MAX_SESSION_LABEL_LENGTH = 40
 const MAX_LIVE_OUTPUT = 64_000
 const MAX_SHELL_OUTPUT = 48_000
 const MAX_SHARED_CONTEXT = 16
@@ -96,6 +104,104 @@ const TITLE_IMAGE_URL = new URL('../assets/title.png', import.meta.url).href
 
 function createId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
+}
+
+function extensionFromMimeType(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case 'image/png':
+      return '.png'
+    case 'image/jpeg':
+      return '.jpg'
+    case 'image/webp':
+      return '.webp'
+    case 'image/gif':
+      return '.gif'
+    case 'image/bmp':
+      return '.bmp'
+    case 'image/svg+xml':
+      return '.svg'
+    case 'image/avif':
+      return '.avif'
+    default:
+      return '.img'
+  }
+}
+
+function inferImageMimeType(fileName: string): string | null {
+  const normalized = fileName.trim().toLowerCase()
+  if (normalized.endsWith('.png')) {
+    return 'image/png'
+  }
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
+    return 'image/jpeg'
+  }
+  if (normalized.endsWith('.webp')) {
+    return 'image/webp'
+  }
+  if (normalized.endsWith('.gif')) {
+    return 'image/gif'
+  }
+  if (normalized.endsWith('.bmp')) {
+    return 'image/bmp'
+  }
+  if (normalized.endsWith('.svg')) {
+    return 'image/svg+xml'
+  }
+  if (normalized.endsWith('.avif')) {
+    return 'image/avif'
+  }
+  return null
+}
+
+function normalizePromptImageFile(file: File, source: PromptImageAttachmentSource): { file: File; fileName: string; mimeType: string } | null {
+  const detectedMimeType = file.type.trim() || inferImageMimeType(file.name)
+  if (!detectedMimeType || !detectedMimeType.startsWith('image/')) {
+    return null
+  }
+
+  const normalizedFileName = file.name.trim() || `${source}-image-${Date.now()}${extensionFromMimeType(detectedMimeType)}`
+  return {
+    file,
+    fileName: normalizedFileName,
+    mimeType: detectedMimeType
+  }
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('画像ファイルの読み込みに失敗しました。'))
+        return
+      }
+
+      const [, contentBase64 = ''] = reader.result.split(',', 2)
+      if (!contentBase64) {
+        reject(new Error('画像データを base64 に変換できませんでした。'))
+        return
+      }
+
+      resolve(contentBase64)
+    }
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('画像ファイルの読み込みに失敗しました。'))
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+function buildPromptWithImageSummary(prompt: string, imageAttachments: Pick<RunImageAttachment, 'fileName'>[]): string {
+  if (imageAttachments.length === 0) {
+    return prompt
+  }
+
+  const normalizedPrompt = prompt.trim()
+  return [
+    '[添付画像]',
+    ...imageAttachments.map((attachment, index) => `${index + 1}. ${attachment.fileName}`),
+    ...(normalizedPrompt ? ['', normalizedPrompt] : [])
+  ].join('\n')
 }
 
 function clipText(text: string, maxLength: number): string {
@@ -366,7 +472,7 @@ function normalizeLinkedPathTarget(value: string): string {
 }
 
 function stripLinkedPathFragment(value: string): string {
-  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '')
+  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '').replace(/(\.[A-Za-z0-9]{1,12}):\d+(?::\d+)?$/i, '$1')
 }
 
 function isAbsoluteLocalPath(value: string): boolean {
@@ -636,7 +742,69 @@ function hasSessionContent(pane: Pick<PaneState, 'logs' | 'streamEntries' | 'ses
   )
 }
 
-function buildSessionLabel(sessionId: string | null, createdAt: number): string {
+function clipSessionLabelText(text: string): string {
+  if (text.length <= MAX_SESSION_LABEL_LENGTH) {
+    return text
+  }
+
+  return `${text.slice(0, MAX_SESSION_LABEL_LENGTH - 1).trimEnd()}...`
+}
+
+function getSessionTopicCandidate(logs: PaneLogEntry[]): string | null {
+  const firstUserEntry = logs.find((entry) => entry.role === 'user' && entry.text.trim())
+  if (!firstUserEntry) {
+    return null
+  }
+
+  const normalizedLines = firstUserEntry.text
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  let imageCount = 0
+  let insideImageBlock = false
+  const contentLines: string[] = []
+
+  for (const line of normalizedLines) {
+    if (line === '[\u6dfb\u4ed8\u753b\u50cf]') {
+      insideImageBlock = true
+      continue
+    }
+
+    if (insideImageBlock && /^-\s+/.test(line)) {
+      imageCount += 1
+      continue
+    }
+
+    insideImageBlock = false
+    if (imageCount > 0 && line === '\u6dfb\u4ed8\u753b\u50cf\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002') {
+      continue
+    }
+
+    contentLines.push(line)
+  }
+
+  const normalizedText = contentLines.join(' ').replace(/\s+/g, ' ').trim()
+  if (normalizedText) {
+    return clipSessionLabelText(normalizedText)
+  }
+
+  if (imageCount > 0) {
+    return imageCount === 1
+      ? '\u753b\u50cf\u306b\u3064\u3044\u3066\u306e\u4f1a\u8a71'
+      : `\u753b\u50cf ${imageCount} \u679a\u306b\u3064\u3044\u3066\u306e\u4f1a\u8a71`
+  }
+
+  return null
+}
+
+function buildSessionLabel(sessionId: string | null, createdAt: number, logs: PaneLogEntry[]): string {
+  const topicCandidate = getSessionTopicCandidate(logs)
+  if (topicCandidate) {
+    return topicCandidate
+  }
+
   if (sessionId) {
     return `\u30bb\u30c3\u30b7\u30e7\u30f3 ${sessionId.slice(0, 8)}`
   }
@@ -647,15 +815,16 @@ function buildSessionLabel(sessionId: string | null, createdAt: number): string 
 function createArchivedSessionRecord(pane: PaneState): PaneSessionRecord {
   const createdAt = pane.lastRunAt ?? pane.lastActivityAt ?? pane.lastFinishedAt ?? Date.now()
   const updatedAt = pane.lastActivityAt ?? pane.lastFinishedAt ?? createdAt
+  const logs = pane.logs.slice(-MAX_LOGS)
 
   return {
     key: createId('session'),
-    label: buildSessionLabel(pane.sessionId, createdAt),
+    label: buildSessionLabel(pane.sessionId, createdAt, logs),
     sessionId: pane.sessionId,
     createdAt,
     updatedAt,
     status: pane.status,
-    logs: pane.logs.slice(-MAX_LOGS),
+    logs,
     streamEntries: pane.streamEntries.slice(-MAX_STREAM_ENTRIES)
   }
 }
@@ -1216,21 +1385,25 @@ function normalizeRemoteDirectoryEntry(rawEntry: Partial<RemoteDirectoryEntry> |
 }
 
 function normalizeSessionRecord(rawRecord: Partial<PaneSessionRecord> | null | undefined): PaneSessionRecord | null {
-  if (!rawRecord?.key || !rawRecord.label) {
+  if (!rawRecord?.key) {
     return null
   }
 
+  const logs = Array.isArray(rawRecord.logs) ? rawRecord.logs.slice(-MAX_LOGS) : []
+  const createdAt = typeof rawRecord.createdAt === 'number' ? rawRecord.createdAt : Date.now()
+  const sessionId = typeof rawRecord.sessionId === 'string' ? rawRecord.sessionId : null
+
   return {
     key: rawRecord.key,
-    label: rawRecord.label,
-    sessionId: typeof rawRecord.sessionId === 'string' ? rawRecord.sessionId : null,
-    createdAt: typeof rawRecord.createdAt === 'number' ? rawRecord.createdAt : Date.now(),
+    label: buildSessionLabel(sessionId, createdAt, logs),
+    sessionId,
+    createdAt,
     updatedAt: typeof rawRecord.updatedAt === 'number' ? rawRecord.updatedAt : null,
     status:
       rawRecord.status === 'completed' || rawRecord.status === 'attention' || rawRecord.status === 'error' || rawRecord.status === 'running' || rawRecord.status === 'updating'
         ? rawRecord.status
         : 'idle',
-    logs: Array.isArray(rawRecord.logs) ? rawRecord.logs.slice(-MAX_LOGS) : [],
+    logs,
     streamEntries: Array.isArray(rawRecord.streamEntries) ? rawRecord.streamEntries.slice(-MAX_STREAM_ENTRIES) : []
   }
 }
@@ -1391,6 +1564,7 @@ function App() {
   const [workspacePicker, setWorkspacePicker] = useState<WorkspacePickerState | null>(null)
   const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null)
   const [matrixDropTargetId, setMatrixDropTargetId] = useState<string | null>(null)
+  const [paneImageAttachments, setPaneImageAttachments] = useState<Record<string, PromptImageAttachment[]>>({})
 
   const panesRef = useRef<PaneState[]>([])
   const localWorkspacesRef = useRef<LocalWorkspace[]>([])
@@ -1403,14 +1577,130 @@ function App() {
   const workspaceRefreshTimersRef = useRef<Record<string, number>>({})
   const matrixTileRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const paneCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const paneImageAttachmentsRef = useRef<Record<string, PromptImageAttachment[]>>({})
+  const promptImageCleanupPathsRef = useRef<Record<string, string[]>>({})
   const matrixTileRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const paneCardRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const refreshBootstrapInFlightRef = useRef(false)
   const refreshBootstrapRef = useRef<(() => Promise<void>) | null>(null)
+  const persistTimerRef = useRef<number | null>(null)
 
   panesRef.current = panes
   localWorkspacesRef.current = localWorkspaces
   sharedContextRef.current = sharedContext
+  paneImageAttachmentsRef.current = paneImageAttachments
+
+  const revokePromptImagePreview = (attachment: Pick<PromptImageAttachment, 'previewUrl'>) => {
+    if (attachment.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(attachment.previewUrl)
+    }
+  }
+
+  const cleanupPromptImageFiles = (localPaths: string[]) => {
+    const normalizedPaths = [...new Set(localPaths.map((entry) => entry.trim()).filter(Boolean))]
+    if (normalizedPaths.length === 0) {
+      return
+    }
+
+    void unstagePromptImages(normalizedPaths).catch(() => undefined)
+  }
+
+  const queuePromptImageCleanup = (paneId: string, localPaths: string[]) => {
+    const normalizedPaths = [...new Set(localPaths.map((entry) => entry.trim()).filter(Boolean))]
+    if (normalizedPaths.length === 0) {
+      return
+    }
+
+    const existing = promptImageCleanupPathsRef.current[paneId] ?? []
+    promptImageCleanupPathsRef.current[paneId] = [...new Set([...existing, ...normalizedPaths])]
+  }
+
+  const flushQueuedPromptImageCleanup = (paneId: string) => {
+    const queuedPaths = promptImageCleanupPathsRef.current[paneId] ?? []
+    if (queuedPaths.length === 0) {
+      return
+    }
+
+    delete promptImageCleanupPathsRef.current[paneId]
+    cleanupPromptImageFiles(queuedPaths)
+  }
+
+  const updatePanePromptImages = (
+    paneId: string,
+    updater: (current: PromptImageAttachment[]) => PromptImageAttachment[]
+  ) => {
+    setPaneImageAttachments((current) => {
+      const existing = current[paneId] ?? []
+      const next = updater(existing)
+      if (next.length === 0) {
+        if (!(paneId in current)) {
+          return current
+        }
+
+        const snapshot = { ...current }
+        delete snapshot[paneId]
+        return snapshot
+      }
+
+      return {
+        ...current,
+        [paneId]: next
+      }
+    })
+  }
+
+  const clearPanePromptImages = (paneId: string, options: { cleanupFiles?: boolean } = {}) => {
+    const existing = paneImageAttachmentsRef.current[paneId] ?? []
+    if (options.cleanupFiles !== false) {
+      cleanupPromptImageFiles(existing.flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
+    }
+
+    setPaneImageAttachments((current) => {
+      for (const attachment of existing) {
+        revokePromptImagePreview(attachment)
+      }
+
+      if (!(paneId in current)) {
+        return current
+      }
+
+      const snapshot = { ...current }
+      delete snapshot[paneId]
+      return snapshot
+    })
+  }
+
+  const clearMultiplePanePromptImages = (paneIds: string[], options: { cleanupFiles?: boolean } = {}) => {
+    const paneIdSet = new Set(paneIds)
+    if (paneIdSet.size === 0) {
+      return
+    }
+
+    if (options.cleanupFiles !== false) {
+      const localPaths = [...paneIdSet].flatMap((paneId) => (paneImageAttachmentsRef.current[paneId] ?? []).flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
+      cleanupPromptImageFiles(localPaths)
+    }
+
+    setPaneImageAttachments((current) => {
+      let changed = false
+      const snapshot = { ...current }
+
+      for (const paneId of paneIdSet) {
+        const existing = snapshot[paneId] ?? []
+        if (existing.length === 0) {
+          continue
+        }
+
+        changed = true
+        for (const attachment of existing) {
+          revokePromptImagePreview(attachment)
+        }
+        delete snapshot[paneId]
+      }
+
+      return changed ? snapshot : current
+    })
+  }
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
@@ -1428,6 +1718,16 @@ function App() {
       for (const controller of Object.values(shellControllersRef.current)) {
         controller.abort()
       }
+      const pendingPaths = Object.values(promptImageCleanupPathsRef.current).flat()
+      cleanupPromptImageFiles([
+        ...pendingPaths,
+        ...Object.values(paneImageAttachmentsRef.current).flatMap((attachments) => attachments.flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
+      ])
+      for (const attachments of Object.values(paneImageAttachmentsRef.current)) {
+        for (const attachment of attachments) {
+          revokePromptImagePreview(attachment)
+        }
+      }
     }
   }, [])
 
@@ -1436,13 +1736,27 @@ function App() {
       return
     }
 
-    persistState({
-      panes,
-      sharedContext,
-      layout,
-      localWorkspaces,
-      focusedPaneId
-    })
+    if (persistTimerRef.current !== null) {
+      window.clearTimeout(persistTimerRef.current)
+    }
+
+    persistTimerRef.current = window.setTimeout(() => {
+      persistState({
+        panes,
+        sharedContext,
+        layout,
+        localWorkspaces,
+        focusedPaneId
+      })
+      persistTimerRef.current = null
+    }, 180)
+
+    return () => {
+      if (persistTimerRef.current !== null) {
+        window.clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = null
+      }
+    }
   }, [bootstrap, focusedPaneId, layout, localWorkspaces, panes, sharedContext])
 
   useEffect(() => {
@@ -1795,6 +2109,11 @@ function App() {
     }
 
     const nextModel = bootstrap.providers[provider].models[0]
+    const hasPromptImages = (paneImageAttachmentsRef.current[paneId] ?? []).length > 0
+    if (provider === 'copilot' && hasPromptImages) {
+      clearPanePromptImages(paneId)
+    }
+
     updatePane(paneId, {
       provider,
       model: nextModel?.id ?? '',
@@ -1802,8 +2121,121 @@ function App() {
       codexFastMode: 'off',
       sessionId: null,
       sessionScopeKey: null,
-      selectedSessionKey: null
+      selectedSessionKey: null,
+      ...(provider === 'copilot' && hasPromptImages
+        ? {
+            status: 'attention' as const,
+            statusText: 'Copilot では画像添付を使えません',
+            lastError: 'GitHub Copilot CLI は画像入力未対応のため、添付画像を解除しました。'
+          }
+        : {})
     })
+  }
+
+  const handleAddPromptImages = async (paneId: string, files: File[], source: PromptImageAttachmentSource) => {
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane) {
+      return
+    }
+
+    if (pane.provider === 'copilot') {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: 'Copilot では画像添付を使えません',
+        lastError: 'GitHub Copilot CLI は画像入力未対応です。Codex CLI または Gemini CLI を選択してください。'
+      })
+      return
+    }
+
+    const normalizedFiles = files
+      .map((file) => normalizePromptImageFile(file, source))
+      .filter((item): item is { file: File; fileName: string; mimeType: string } => Boolean(item))
+
+    if (normalizedFiles.length === 0) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: '画像ファイルを選択してください',
+        lastError: '添付できるのは画像ファイルのみです。'
+      })
+      return
+    }
+
+    const draftAttachments: PromptImageAttachment[] = normalizedFiles.map(({ file, fileName, mimeType }) => ({
+      id: createId('prompt-image'),
+      fileName,
+      mimeType,
+      size: file.size,
+      localPath: null,
+      previewUrl: URL.createObjectURL(file),
+      status: 'uploading',
+      source,
+      error: null
+    }))
+
+    updatePanePromptImages(paneId, (current) => [...current, ...draftAttachments])
+
+    await Promise.all(draftAttachments.map(async (attachment, index) => {
+      const sourceFile = normalizedFiles[index]
+      if (!sourceFile) {
+        return
+      }
+
+      try {
+        const contentBase64 = await readFileAsBase64(sourceFile.file)
+        const response = await stagePromptImage({
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          contentBase64
+        })
+
+        updatePanePromptImages(paneId, (current) =>
+          current.map((item) =>
+            item.id === attachment.id
+              ? {
+                  ...item,
+                  status: 'ready',
+                  localPath: response.attachment.localPath,
+                  error: null
+                }
+              : item
+          )
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        updatePanePromptImages(paneId, (current) =>
+          current.map((item) =>
+            item.id === attachment.id
+              ? {
+                  ...item,
+                  status: 'error',
+                  localPath: null,
+                  error: message
+                }
+              : item
+          )
+        )
+        updatePane(paneId, {
+          status: 'attention',
+          statusText: '画像添付を確認してください',
+          lastError: `画像を準備できませんでした: ${attachment.fileName}`
+        })
+      }
+    }))
+  }
+
+  const handleRemovePromptImage = (paneId: string, attachmentId: string) => {
+    const existing = paneImageAttachmentsRef.current[paneId] ?? []
+    const targetAttachment = existing.find((attachment) => attachment.id === attachmentId)
+    if (!targetAttachment) {
+      return
+    }
+
+    if (targetAttachment.localPath) {
+      cleanupPromptImageFiles([targetAttachment.localPath])
+    }
+
+    revokePromptImagePreview(targetAttachment)
+    updatePanePromptImages(paneId, (current) => current.filter((attachment) => attachment.id !== attachmentId))
   }
 
   const handleModelChange = (paneId: string, model: string) => {
@@ -2187,44 +2619,86 @@ function App() {
     }
   }
 
-  const handleRun = async (paneId: string) => {
+  const preparePaneRunPayload = (paneId: string, promptOverride?: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || isPaneBusyForExecution(pane) || controllersRef.current[paneId]) {
-      return
+    if (!pane) {
+      return { ok: false as const, error: "\u30da\u30a4\u30f3\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002" }
     }
 
     const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
     if (!target) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
+        statusText: "\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044",
+        lastError: "\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002"
       })
-      return
+      return { ok: false as const, error: "\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002" }
     }
 
-    const prompt = pane.prompt.trim()
-    if (!prompt) {
+    const promptImages = paneImageAttachmentsRef.current[paneId] ?? []
+    const promptText = (promptOverride ?? pane.prompt).trim() || (promptImages.length > 0 ? "\u6dfb\u4ed8\u753b\u50cf\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002" : "")
+    if (!promptText) {
       updatePane(paneId, {
         status: 'attention',
-        statusText: '\u6307\u793a\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: '\u30d7\u30ed\u30f3\u30d7\u30c8\u304c\u7a7a\u3067\u3059\u3002'
+        statusText: "\u6307\u793a\u307e\u305f\u306f\u753b\u50cf\u3092\u8ffd\u52a0\u3057\u3066\u304f\u3060\u3055\u3044",
+        lastError: "\u30d7\u30ed\u30f3\u30d7\u30c8\u304c\u7a7a\u3067\u3059\u3002\u753b\u50cf\u306e\u307f\u3067\u5b9f\u884c\u3059\u308b\u5834\u5408\u306f\u753b\u50cf\u3092\u6dfb\u4ed8\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
       })
-      return
+      return { ok: false as const, error: "\u30d7\u30ed\u30f3\u30d7\u30c8\u304c\u7a7a\u3067\u3059\u3002" }
     }
 
-    const startedAt = Date.now()
+    if (pane.provider === "copilot" && promptImages.length > 0) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: "Copilot \u3067\u306f\u753b\u50cf\u6dfb\u4ed8\u3092\u4f7f\u3048\u307e\u305b\u3093",
+        lastError: "GitHub Copilot CLI \u306f\u753b\u50cf\u5165\u529b\u672a\u5bfe\u5fdc\u3067\u3059\u3002Codex CLI \u307e\u305f\u306f Gemini CLI \u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+      })
+      return { ok: false as const, error: "GitHub Copilot CLI \u306f\u753b\u50cf\u5165\u529b\u672a\u5bfe\u5fdc\u3067\u3059\u3002" }
+    }
+
+    if (promptImages.some((attachment) => attachment.status === "uploading")) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: "\u753b\u50cf\u306e\u6e96\u5099\u4e2d\u3067\u3059",
+        lastError: "\u753b\u50cf\u306e\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u304c\u5b8c\u4e86\u3057\u3066\u304b\u3089\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+      })
+      return { ok: false as const, error: "\u753b\u50cf\u306e\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u304c\u5b8c\u4e86\u3057\u3066\u304b\u3089\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002" }
+    }
+
+    const failedImage = promptImages.find((attachment) => attachment.status === "error")
+    if (failedImage) {
+      const errorMessage = failedImage.error || `\u753b\u50cf\u3092\u6e96\u5099\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ${failedImage.fileName}`
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: "\u753b\u50cf\u6dfb\u4ed8\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044",
+        lastError: errorMessage
+      })
+      return { ok: false as const, error: errorMessage }
+    }
+
+    const readyImageAttachments: RunImageAttachment[] = promptImages.flatMap((attachment) =>
+      attachment.status === "ready" && attachment.localPath
+        ? [{
+            fileName: attachment.fileName,
+            mimeType: attachment.mimeType,
+            size: attachment.size,
+            localPath: attachment.localPath
+          }]
+        : []
+    )
+
+    if (promptImages.length > 0 && readyImageAttachments.length !== promptImages.length) {
+      updatePane(paneId, {
+        status: 'attention',
+        statusText: "\u753b\u50cf\u306e\u6e96\u5099\u4e2d\u3067\u3059",
+        lastError: "\u753b\u50cf\u306e\u6e96\u5099\u304c\u5b8c\u4e86\u3057\u3066\u3044\u306a\u3044\u305f\u3081\u3001\u3082\u3046\u4e00\u5ea6\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+      })
+      return { ok: false as const, error: "\u753b\u50cf\u306e\u6e96\u5099\u304c\u5b8c\u4e86\u3057\u3066\u3044\u306a\u3044\u305f\u3081\u3001\u3082\u3046\u4e00\u5ea6\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002" }
+    }
+
+    const requestText = buildPromptWithImageSummary(promptText, readyImageAttachments)
     const currentSessionScopeKey = buildPaneSessionScopeKey(pane)
     const resumeSessionId = pane.sessionScopeKey === currentSessionScopeKey ? pane.sessionId : null
-    const userEntry: PaneLogEntry = {
-      id: createId('log'),
-      role: 'user',
-      text: prompt,
-      createdAt: startedAt
-    }
-
-    const memory = [...pane.logs, userEntry].slice(-8)
-    const attachedContext = sharedContext.filter((item) => pane.attachedContextIds.includes(item.id))
+    const attachedContext = sharedContextRef.current.filter((item) => pane.attachedContextIds.includes(item.id))
     const consumedContextIds = attachedContext.map((item) => item.id)
     const sharedContextPayload = attachedContext.map((item) => ({
       sourcePaneTitle: item.sourcePaneTitle,
@@ -2233,6 +2707,81 @@ function App() {
       summary: item.summary,
       detail: item.detail
     }))
+
+    return {
+      ok: true as const,
+      pane,
+      target,
+      promptText,
+      requestText,
+      readyImageAttachments,
+      currentSessionScopeKey,
+      resumeSessionId,
+      consumedContextIds,
+      sharedContextPayload
+    }
+  }
+
+  const handlePreviewRunCommand = async (paneId: string, promptOverride?: string): Promise<PreviewRunCommandResponse> => {
+    const prepared = preparePaneRunPayload(paneId, promptOverride)
+    if (!prepared.ok) {
+      throw new Error(prepared.error)
+    }
+
+    const previewEntry: PaneLogEntry = {
+      id: "preview",
+      role: "user",
+      text: prepared.requestText,
+      createdAt: Date.now()
+    }
+
+    return previewRunCommand({
+      paneId,
+      provider: prepared.pane.provider,
+      model: prepared.pane.model,
+      reasoningEffort: prepared.pane.reasoningEffort,
+      autonomyMode: prepared.pane.autonomyMode,
+      codexFastMode: prepared.pane.codexFastMode,
+      target: prepared.target,
+      prompt: prepared.promptText,
+      sessionId: prepared.resumeSessionId,
+      memory: [...prepared.pane.logs, previewEntry].slice(-8),
+      sharedContext: prepared.sharedContextPayload,
+      imageAttachments: prepared.readyImageAttachments
+    })
+  }
+
+  const handleRun = async (paneId: string, promptOverride?: string) => {
+    const prepared = preparePaneRunPayload(paneId, promptOverride)
+    if (!prepared.ok) {
+      return
+    }
+
+    const {
+      pane,
+      target,
+      promptText: prompt,
+      requestText,
+      readyImageAttachments,
+      currentSessionScopeKey,
+      resumeSessionId,
+      consumedContextIds,
+      sharedContextPayload
+    } = prepared
+
+    if (isPaneBusyForExecution(pane) || controllersRef.current[paneId]) {
+      return
+    }
+
+    const startedAt = Date.now()
+    const userEntry: PaneLogEntry = {
+      id: createId("log"),
+      role: "user",
+      text: requestText,
+      createdAt: startedAt
+    }
+
+    const memory = [...pane.logs, userEntry].slice(-8)
     const controller = new AbortController()
 
     controllersRef.current[paneId] = controller
@@ -2253,18 +2802,16 @@ function App() {
             const nextTargetPaneIds = item.targetPaneIds.filter((id) => id !== paneId)
             const nextTargetPaneTitles = item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
 
-            if (item.scope === 'direct' || nextTargetPaneIds.length === 0) {
+            if (item.scope === "direct" || nextTargetPaneIds.length === 0) {
               return []
             }
 
-            return [
-              {
-                ...item,
-                targetPaneIds: nextTargetPaneIds,
-                targetPaneTitles: nextTargetPaneTitles,
-                consumedByPaneIds: nextConsumedByPaneIds
-              }
-            ]
+            return [{
+              ...item,
+              targetPaneIds: nextTargetPaneIds,
+              targetPaneTitles: nextTargetPaneTitles,
+              consumedByPaneIds: nextConsumedByPaneIds
+            }]
           })
           .slice(0, MAX_SHARED_CONTEXT)
       )
@@ -2272,10 +2819,10 @@ function App() {
 
     mutatePane(paneId, (currentPane) => ({
       ...currentPane,
-      prompt: '',
+      prompt: "",
       logs: appendLogEntry(currentPane.logs, userEntry),
-      status: 'running',
-      statusText: '\u5b9f\u884c\u4e2d',
+      status: "running",
+      statusText: "\u5b9f\u884c\u4e2d",
       runInProgress: true,
       lastRunAt: startedAt,
       runningSince: startedAt,
@@ -2283,16 +2830,18 @@ function App() {
       lastError: null,
       lastResponse: null,
       selectedSessionKey: null,
-      liveOutput: '',
+      liveOutput: "",
       sessionId: resumeSessionId,
       sessionScopeKey: currentSessionScopeKey,
-      currentRequestText: prompt,
+      currentRequestText: requestText,
       currentRequestAt: startedAt,
       stopRequested: false,
       stopRequestAvailable: true,
       attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
-      streamEntries: appendStreamEntry([], 'system', `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
+      streamEntries: appendStreamEntry([], "system", `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
+    queuePromptImageCleanup(paneId, readyImageAttachments.map((attachment) => attachment.localPath))
+    clearPanePromptImages(paneId, { cleanupFiles: false })
 
     try {
       await runPaneStream(
@@ -2307,7 +2856,8 @@ function App() {
           prompt,
           sessionId: resumeSessionId,
           memory,
-          sharedContext: sharedContextPayload
+          sharedContext: sharedContextPayload,
+          imageAttachments: readyImageAttachments
         },
         (event) => handleStreamEvent(paneId, event),
         controller.signal
@@ -2321,22 +2871,22 @@ function App() {
         const failedAt = Date.now()
         mutatePane(paneId, (currentPane) => {
           const issueSummary = getProviderIssueSummary(currentPane.provider, message)
-          const fallbackAttentionMessage = 'ストリーム接続が途中で切れました。サーバー側で実行が残っている可能性があるため、必要なら停止再送を試してください。'
+          const fallbackAttentionMessage = "\u30b9\u30c8\u30ea\u30fc\u30e0\u63a5\u7d9a\u304c\u9014\u4e2d\u3067\u5207\u308c\u307e\u3057\u305f\u3002\u30b5\u30fc\u30d0\u30fc\u5074\u3067\u5b9f\u884c\u304c\u6b8b\u3063\u3066\u3044\u308b\u53ef\u80fd\u6027\u304c\u3042\u308b\u305f\u3081\u3001\u5fc5\u8981\u306a\u3089\u505c\u6b62\u518d\u9001\u3092\u8a66\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
           const displayMessage = issueSummary?.displayMessage ?? fallbackAttentionMessage
           const systemEntry: PaneLogEntry = {
-            id: createId('log'),
-            role: 'system',
+            id: createId("log"),
+            role: "system",
             text: displayMessage,
             createdAt: failedAt
           }
 
-          const nextStreamEntries = appendStreamEntry(currentPane.streamEntries, 'stderr', message, failedAt)
+          const nextStreamEntries = appendStreamEntry(currentPane.streamEntries, "stderr", message, failedAt)
 
           return {
             ...currentPane,
             logs: appendLogEntry(currentPane.logs, systemEntry),
-            status: issueSummary?.status ?? 'attention',
-            statusText: issueSummary?.statusText ?? 'ストリーム接続が途切れました',
+            status: issueSummary?.status ?? "attention",
+            statusText: issueSummary?.statusText ?? "\u30b9\u30c8\u30ea\u30fc\u30e0\u63a5\u7d9a\u304c\u9014\u5207\u308c\u307e\u3057\u305f",
             runInProgress: false,
             runningSince: null,
             stopRequested: false,
@@ -2345,8 +2895,8 @@ function App() {
             lastFinishedAt: failedAt,
             lastError: displayMessage,
             streamEntries:
-              issueSummary && !currentPane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
-                ? appendStreamEntry(nextStreamEntries, 'system', issueSummary.displayMessage, failedAt)
+              issueSummary && !currentPane.streamEntries.some((entry) => entry.kind === "system" && entry.text === issueSummary.displayMessage)
+                ? appendStreamEntry(nextStreamEntries, "system", issueSummary.displayMessage, failedAt)
                 : nextStreamEntries
           }
         })
@@ -2357,8 +2907,8 @@ function App() {
         const stoppedAt = Date.now()
         mutatePane(paneId, (currentPane) => ({
           ...currentPane,
-          status: 'attention',
-          statusText: '\u505c\u6b62\u3057\u307e\u3057\u305f',
+          status: "attention",
+          statusText: "\u505c\u6b62\u3057\u307e\u3057\u305f",
           runInProgress: false,
           runningSince: null,
           stopRequested: false,
@@ -2366,12 +2916,13 @@ function App() {
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
-          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', '\u5b9f\u884c\u3092\u505c\u6b62\u3057\u307e\u3057\u305f', stoppedAt)
+          streamEntries: appendStreamEntry(currentPane.streamEntries, "system", "\u5b9f\u884c\u3092\u505c\u6b62\u3057\u307e\u3057\u305f", stoppedAt)
         }))
       }
     } finally {
       delete controllersRef.current[paneId]
       stopRequestedRef.current.delete(paneId)
+      flushQueuedPromptImageCleanup(paneId)
     }
   }
 
@@ -2442,7 +2993,7 @@ function App() {
     }
 
     const created = createInitialPane(panesRef.current.length, bootstrap, localWorkspacesRef.current)
-    setPanes((current) => [...current, created])
+    setPanes((current) => [created, ...current])
     setFocusedPaneId(created.id)
     setSelectedPaneIds([])
   }
@@ -2463,6 +3014,8 @@ function App() {
     if (ids.length === 0) {
       return
     }
+
+    clearMultiplePanePromptImages(ids)
 
     const removedContextIds = sharedContextRef.current
       .filter((item) => ids.includes(item.sourcePaneId))
@@ -2635,6 +3188,46 @@ function App() {
       ...pane,
       selectedSessionKey: sessionKey
     }))
+  }
+
+  const handleResumeSession = (paneId: string, sessionKey: string | null) => {
+    if (!sessionKey) {
+      return
+    }
+
+    mutatePane(paneId, (pane) => {
+      const selectedSession = pane.sessionHistory.find((session) => session.key === sessionKey)
+      if (!selectedSession?.sessionId) {
+        return pane
+      }
+
+      const latestUser = [...selectedSession.logs].reverse().find((entry) => entry.role === 'user') ?? null
+      const latestAssistant = [...selectedSession.logs].reverse().find((entry) => entry.role === 'assistant') ?? null
+
+      return {
+        ...pane,
+        prompt: '',
+        status: 'idle',
+        statusText: statusLabel('idle'),
+        runInProgress: false,
+        logs: selectedSession.logs.slice(-MAX_LOGS),
+        streamEntries: selectedSession.streamEntries.slice(-MAX_STREAM_ENTRIES),
+        selectedSessionKey: null,
+        liveOutput: '',
+        sessionId: selectedSession.sessionId,
+        sessionScopeKey: buildPaneSessionScopeKey(pane),
+        currentRequestText: latestUser?.text ?? null,
+        currentRequestAt: latestUser?.createdAt ?? null,
+        stopRequested: false,
+        stopRequestAvailable: false,
+        lastRunAt: selectedSession.updatedAt,
+        runningSince: null,
+        lastActivityAt: selectedSession.updatedAt,
+        lastFinishedAt: selectedSession.updatedAt,
+        lastError: null,
+        lastResponse: latestAssistant?.text ?? null
+      }
+    })
   }
 
   const copyPaneText = async (paneId: string, text: string | null, _successMessage: string): Promise<boolean> => {
@@ -4327,7 +4920,10 @@ function App() {
                   onUpdate={updatePane}
                   onProviderChange={handleProviderChange}
                   onModelChange={handleModelChange}
-                  onRun={(paneId) => void handleRun(paneId)}
+                  promptImageAttachments={paneImageAttachments[pane.id] ?? []}
+                  onAddPromptImages={(paneId, files, source) => void handleAddPromptImages(paneId, files, source)}
+                  onRemovePromptImage={handleRemovePromptImage}
+                  onRun={(paneId, promptOverride) => void handleRun(paneId, promptOverride)}
                   onStop={(paneId) => void handleStop(paneId)}
                   onShare={shareFromPane}
                   onShareToPane={(sourcePaneId, targetPaneId) =>
@@ -4336,10 +4932,13 @@ function App() {
                   onCopyOutput={(paneId) => void handleCopyOutput(paneId)}
                   onCopyProviderCommand={(paneId, text, successMessage) => handleCopyProviderCommand(paneId, text, successMessage)}
                   onCopyText={(paneId, text, successMessage) => handleCopyText(paneId, text, successMessage)}
+                  isFocusLayout={layout === 'focus'}
+                  onPreviewRunCommand={(paneId, promptOverride) => handlePreviewRunCommand(paneId, promptOverride)}
                   onDuplicate={handleDuplicatePane}
                   onStartNewSession={handleStartNewSession}
                   onResetSession={handleResetSession}
                   onSelectSession={handleSelectSession}
+                  onResumeSession={handleResumeSession}
                   onClearSelectedSessionHistory={handleClearSelectedSessionHistory}
                   onClearAllSessionHistory={handleClearAllSessionHistory}
                   onDelete={handleDeletePane}
@@ -4443,6 +5042,15 @@ function App() {
 }
 
 export default App
+
+
+
+
+
+
+
+
+
 
 
 

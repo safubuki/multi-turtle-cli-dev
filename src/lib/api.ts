@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   BootstrapPayload,
   LocalBrowseResponse,
   LocalBrowseRootsResponse,
@@ -6,12 +6,18 @@
   RemoteBrowseResponse,
   RemoteCreateDirectoryResponse,
   RemoteWorkspaceResponse,
+  PreviewRunCommandRequest,
+  PreviewRunCommandResponse,
   RunPaneRequest,
   RunPaneResponse,
   RunStreamEvent,
   ShellRunEvent,
   ShellRunRequest,
+  StagePromptImageRequest,
+  StagePromptImageResponse,
   SshConnectionOptions,
+  UnstagePromptImagesRequest,
+  UnstagePromptImagesResponse,
   SshInspectionResponse,
   SshKeyDeleteResponse,
   SshKeyGenerateResponse,
@@ -174,6 +180,16 @@ export async function runPaneStream(
   }
 }
 
+export function previewRunCommand(payload: PreviewRunCommandRequest): Promise<PreviewRunCommandResponse> {
+  return requestJson<PreviewRunCommandResponse>('/api/run/preview-command', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  })
+}
+
 export function stopPaneRun(paneId: string): Promise<StopRunResponse> {
   return requestJson<StopRunResponse>('/api/run/stop', {
     method: 'POST',
@@ -181,6 +197,21 @@ export function stopPaneRun(paneId: string): Promise<StopRunResponse> {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ paneId })
+  })
+}
+
+export function unstagePromptImages(localPaths: string[]): Promise<UnstagePromptImagesResponse> {
+  if (localPaths.length === 0) {
+    return Promise.resolve({ success: true })
+  }
+
+  const payload: UnstagePromptImagesRequest = { localPaths }
+  return requestJson<UnstagePromptImagesResponse>('/api/system/unstage-images', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
   })
 }
 
@@ -306,6 +337,16 @@ export function pickSaveFilePath(defaultName: string): Promise<{ success: boolea
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ defaultName })
+  })
+}
+
+export function stagePromptImage(payload: StagePromptImageRequest): Promise<StagePromptImageResponse> {
+  return requestJson<StagePromptImageResponse>('/api/system/stage-image', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
   })
 }
 

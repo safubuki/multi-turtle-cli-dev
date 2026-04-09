@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
+﻿import { isValidElement, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type ComponentProps, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
 import {
   AlertTriangle,
   ArrowDownLeft,
@@ -18,17 +18,31 @@ import {
   LoaderCircle,
   Maximize2,
   Play,
+  Plus,
   RefreshCcw,
   Settings2,
   Share2,
   Square,
+  SquareTerminal,
   Trash2,
   Wifi,
   X
 } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { LocalWorkspace, PaneLogEntry, PaneState, PaneStreamEntry, ProviderCatalogResponse, ProviderId, SharedContextItem, SshHost } from '../types'
+import type {
+  LocalWorkspace,
+  PaneLogEntry,
+  PaneState,
+  PaneStreamEntry,
+  PreviewRunCommandResponse,
+  PromptImageAttachment,
+  PromptImageAttachmentSource,
+  ProviderCatalogResponse,
+  ProviderId,
+  SharedContextItem,
+  SshHost
+} from '../types'
 
 interface TransferOptions {
   localPath?: string
@@ -45,11 +59,16 @@ interface TerminalPaneProps {
   sharedContext: SharedContextItem[]
   now: number
   isFocused: boolean
+  isFocusLayout: boolean
   onFocus: (paneId: string) => void
   onUpdate: (paneId: string, updates: Partial<PaneState>) => void
   onProviderChange: (paneId: string, provider: ProviderId) => void
   onModelChange: (paneId: string, model: string) => void
-  onRun: (paneId: string) => void
+  promptImageAttachments: PromptImageAttachment[]
+  onAddPromptImages: (paneId: string, files: File[], source: PromptImageAttachmentSource) => void
+  onRemovePromptImage: (paneId: string, attachmentId: string) => void
+  onPreviewRunCommand: (paneId: string, promptOverride?: string) => Promise<PreviewRunCommandResponse>
+  onRun: (paneId: string, promptOverride?: string) => void
   onStop: (paneId: string) => void
   onShare: (paneId: string) => void
   onShareToPane: (sourcePaneId: string, targetPaneId: string) => void
@@ -82,6 +101,7 @@ interface TerminalPaneProps {
   onTransferSshPath: (paneId: string, direction: 'upload' | 'download', options?: TransferOptions) => void
   shareTargets: Array<{ id: string; title: string }>
   onSelectSession: (paneId: string, sessionKey: string | null) => void
+  onResumeSession: (paneId: string, sessionKey: string | null) => void
   onClearSelectedSessionHistory: (paneId: string, sessionKey: string | null) => void
   onClearAllSessionHistory: (paneId: string) => void
 }
@@ -133,11 +153,31 @@ const UI = {
   instruction: 'AI\u6307\u793a\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09',
   currentRequest: '\u73fe\u5728\u51e6\u7406\u4e2d\u306e\u4f9d\u983c',
   latestRequest: '\u4eca\u56de\u306e\u4f9d\u983c',
+  previewCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u78ba\u8a8d',
+  previewCommandLoading: '\u30b3\u30de\u30f3\u30c9\u3092\u751f\u6210\u4e2d',
+  commandPreviewTitle: '\u5b9f\u884c\u30b3\u30de\u30f3\u30c9',
+  effectivePrompt: '\u5b9f\u969b\u306b\u6e21\u3059\u5165\u529b',
+  workingDirectory: '\u5b9f\u884c\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
+  previewNotes: '\u88dc\u8db3',
+  copyPreviewCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u30b3\u30d4\u30fc',
+  copyEffectivePrompt: '\u5165\u529b\u3092\u30b3\u30d4\u30fc',
+  copyLatestResult: '\u6700\u65b0\u7d50\u679c\u3092\u30b3\u30d4\u30fc',
   requestSentAt: '\u9001\u4fe1',
   outputForRequest: '\u5bfe\u5fdc\u3059\u308b\u4f9d\u983c',
+  requestExpand: '\u5168\u6587\u3092\u8868\u793a',
+  requestCollapse: '\u6298\u308a\u305f\u305f\u3080',
   workspaceUnset: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u672a\u8a2d\u5b9a',
   promptPlaceholder: '\u3084\u308a\u305f\u3044\u3053\u3068\u3092\u5165\u529b\u3057\u307e\u3059\u3002Ctrl+Enter \u3067\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002',
   stalledHint: '\u5fdc\u7b54\u5f85\u3061\u304c\u9577\u304f\u306a\u3063\u3066\u3044\u307e\u3059\u3002CLI \u306b\u3088\u3063\u3066\u306f\u6570\u5206\u304b\u304b\u308b\u3053\u3068\u304c\u3042\u308b\u305f\u3081\u3001\u5fc5\u8981\u306a\u3089\u505c\u6b62\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002',
+  promptImageHint: '＋ / ドラッグ&ドロップ / Ctrl+V で画像を追加できます。画像だけで実行することもできます。',
+  promptImageUnsupported: 'GitHub Copilot CLI は画像入力未対応です。Codex CLI または Gemini CLI を選択してください。',
+  promptImageAdd: '画像を追加',
+  promptImageRemove: '画像を外す',
+  promptImageHintCompact: '＋ / ドロップ / Ctrl+V で画像を追加できます。',
+  promptImageUnsupportedCompact: 'GitHub Copilot CLI では画像添付を使えません。',
+  promptImageUploading: '準備中',
+  promptImageReady: '添付済み',
+  promptImageError: '要確認',
   runningHint: 'CLI \u3092\u5b9f\u884c\u4e2d\u3067\u3059\u3002',
   updatingHint: 'AI \u3092\u66f4\u65b0\u4e2d\u3067\u3059\u3002',
   stopSending: '\u505c\u6b62\u8981\u6c42\u3092\u9001\u4fe1\u4e2d\u3067\u3059\u3002',
@@ -215,6 +255,9 @@ const UI = {
   sharedToPrefix: 'to :',
   noSharedContext: '\u5171\u6709\u6e08\u307f\u306e\u6587\u8108\u306f\u307e\u3060\u3042\u308a\u307e\u305b\u3093\u3002',
   selectedCount: '\u4ef6\u9078\u629e',
+  thisSessionHistory: '\u3053\u306e\u30bb\u30af\u30b7\u30e7\u30f3\u306e\u4f1a\u8a71\u5c65\u6b74',
+  resumeSelectedSession: 'この会話の続きから話す',
+  promptImagePreview: '添付画像を開く',
   runLogs: '\u5b9f\u884c\u30ed\u30b0',
   runLogsEmpty: '\u307e\u3060\u5b9f\u884c\u30ed\u30b0\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   refreshContents: '\u5185\u5bb9\u3092\u66f4\u65b0',
@@ -311,7 +354,7 @@ function formatStreamEntryForCopy(entry: PaneStreamEntry): string {
 function splitTrailingUrlPunctuation(value: string): { url: string; trailing: string } {
   let url = value
   let trailing = ''
-  const trailingChars = new Set([',', '.', ';', '!', '?', ')', ']', '}', '>', '`', '、', '。', '，', '．', '）', '］', '｝', '」', '』', '】'])
+  const trailingChars = new Set([',', '.', ';', '!', '?', ')', ']', '}', '>', '`', '、', '。', '！', '？', '」', '』', '）', '］', '｝', '＞'])
 
   while (url.length > 0) {
     const lastChar = url[url.length - 1] ?? ''
@@ -337,7 +380,7 @@ function normalizeLinkTarget(value: string): string {
 }
 
 function stripFileLineFragment(value: string): string {
-  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '')
+  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '').replace(/(\.[A-Za-z0-9]{1,12}):\d+(?::\d+)?$/i, '$1')
 }
 
 function isSafeExternalUrl(value: string): boolean {
@@ -386,7 +429,7 @@ function isLikelyFileLinkTarget(value: string): boolean {
   )
 }
 
-const FILE_PATH_TOKEN_PATTERN = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)?(?:[\w.-]+[\\/])*[\w.-]+\.[A-Za-z0-9]{1,12}(?:#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?)?/g
+const FILE_PATH_TOKEN_PATTERN = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)?(?:[\w.-]+[\\/])*[\w.-]+\.[A-Za-z0-9]{1,12}(?::\d+(?::\d+)?)?(?:#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?)?/g
 
 type MarkdownNode = {
   type: string
@@ -814,10 +857,15 @@ export function TerminalPane({
   sharedContext,
   now,
   isFocused,
+  isFocusLayout,
   onFocus,
   onUpdate,
   onProviderChange,
   onModelChange,
+  promptImageAttachments,
+  onAddPromptImages,
+  onRemovePromptImage,
+  onPreviewRunCommand,
   onRun,
   onStop,
   onShare,
@@ -848,12 +896,15 @@ export function TerminalPane({
   onTransferSshPath,
   shareTargets,
   onSelectSession,
+  onResumeSession,
   onClearSelectedSessionHistory,
   onClearAllSessionHistory
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
   const [isRunLogsExpanded, setIsRunLogsExpanded] = useState(false)
+  const [runLogsMode, setRunLogsMode] = useState<'logs' | 'conversation'>('logs')
   const [runLogsTab, setRunLogsTab] = useState<'conversation' | 'stream'>('conversation')
+  const [expandedPromptImageId, setExpandedPromptImageId] = useState<string | null>(null)
   const [isShellExpanded, setIsShellExpanded] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isVersionAccordionOpen, setIsVersionAccordionOpen] = useState(false)
@@ -862,16 +913,37 @@ export function TerminalPane({
   const menuRef = useRef<HTMLDetailsElement | null>(null)
   const promptRef = useRef<HTMLTextAreaElement | null>(null)
   const shellInputRef = useRef<HTMLInputElement | null>(null)
+  const [isPromptDropActive, setIsPromptDropActive] = useState(false)
+  const promptImageInputRef = useRef<HTMLInputElement | null>(null)
+  const promptDropDepthRef = useRef(0)
   const shellModalInputRef = useRef<HTMLInputElement | null>(null)
   const shellConsoleRef = useRef<HTMLDivElement | null>(null)
   const shellModalConsoleRef = useRef<HTMLDivElement | null>(null)
+  const outputSurfaceRef = useRef<HTMLDivElement | null>(null)
+  const outputContentRef = useRef<HTMLDivElement | null>(null)
+  const promptSyncFrameRef = useRef<number | null>(null)
+  const promptSyncedValueRef = useRef(pane.prompt)
+  const outputResetKeyRef = useRef<string | null>(null)
   const copyFeedbackTimerRef = useRef<number | null>(null)
+  const promptAppliedHeightRef = useRef(0)
   const [copiedControlKey, setCopiedControlKey] = useState<string | null>(null)
+  const [promptDraft, setPromptDraft] = useState(pane.prompt)
+  const [promptManualHeight, setPromptManualHeight] = useState<number | null>(null)
+  const [isRequestExpanded, setIsRequestExpanded] = useState(false)
+  const [isCommandPreviewOpen, setIsCommandPreviewOpen] = useState(false)
+  const [commandPreviewState, setCommandPreviewState] = useState<{
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    data: PreviewRunCommandResponse | null
+    error: string | null
+  }>({ status: 'idle', data: null, error: null })
 
   useEffect(() => {
     return () => {
       if (copyFeedbackTimerRef.current !== null) {
         window.clearTimeout(copyFeedbackTimerRef.current)
+      }
+      if (promptSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(promptSyncFrameRef.current)
       }
     }
   }, [])
@@ -905,18 +977,52 @@ export function TerminalPane({
   }, [isMenuOpen])
 
   useEffect(() => {
+    if (pane.prompt === promptSyncedValueRef.current) {
+      return
+    }
+
+    promptSyncedValueRef.current = pane.prompt
+    setPromptDraft(pane.prompt)
+  }, [pane.prompt])
+
+  useEffect(() => {
     const element = promptRef.current
     if (!element) {
       return
     }
 
-    element.style.height = '0px'
-    const nextHeight = Math.min(Math.max(element.scrollHeight, 118), 220)
+    const minHeight = isFocusLayout ? 232 : 186
+    const maxHeight = isFocusLayout ? 520 : 420
+    const autoHeight = Math.min(Math.max(element.scrollHeight, minHeight), maxHeight)
+    const nextHeight = promptManualHeight === null ? autoHeight : Math.max(promptManualHeight, minHeight)
+
+    promptAppliedHeightRef.current = nextHeight
     element.style.height = `${nextHeight}px`
-    element.style.overflowY = element.scrollHeight > 220 ? 'auto' : 'hidden'
-  }, [pane.prompt])
+    element.style.overflowY = element.scrollHeight > nextHeight ? 'auto' : 'hidden'
+  }, [isFocusLayout, promptDraft, promptManualHeight])
 
 
+
+  useEffect(() => {
+    const element = promptRef.current
+    if (!element || typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const nextHeight = Math.round(entries[0]?.contentRect.height ?? element.offsetHeight)
+      if (Math.abs(nextHeight - promptAppliedHeightRef.current) <= 2) {
+        return
+      }
+
+      setPromptManualHeight((current) => (current === nextHeight ? current : nextHeight))
+    })
+
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+    }
+  }, [])
 
   useEffect(() => {
     const elements = [shellConsoleRef.current, shellModalConsoleRef.current].filter(Boolean) as HTMLDivElement[]
@@ -924,6 +1030,32 @@ export function TerminalPane({
       element.scrollTop = element.scrollHeight
     }
   }, [pane.shellOutput, pane.shellCommand, isShellExpanded])
+
+  useEffect(() => {
+    if (!outputSurfaceRef.current || !outputContentRef.current || !pane.currentRequestAt || !getOutputText(pane).trim()) {
+      return
+    }
+
+    const outputResetKey = `${pane.currentRequestAt}`
+    if (outputResetKeyRef.current === outputResetKey) {
+      return
+    }
+
+    outputResetKeyRef.current = outputResetKey
+    window.requestAnimationFrame(() => {
+      const surface = outputSurfaceRef.current
+      const anchor = outputContentRef.current
+      if (!surface || !anchor) {
+        return
+      }
+
+      surface.scrollTo({ top: Math.max(0, anchor.offsetTop - 2) })
+    })
+  }, [pane.currentRequestAt, pane.lastResponse, pane.liveOutput.length])
+
+  useEffect(() => {
+    setIsRequestExpanded(false)
+  }, [pane.currentRequestAt, pane.currentRequestText])
 
   useEffect(() => {
     if (!pane.sshPasswordPulseAt) {
@@ -968,10 +1100,20 @@ export function TerminalPane({
   const isRunInProgress = pane.runInProgress
   const isBusy = isRunInProgress || hasRunningStatus || isProviderUpdating
   const isStalled = isRunInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > 120_000
-  const canRun = pane.prompt.trim().length > 0 && (pane.workspaceMode === 'local' ? pane.localWorkspacePath.trim().length > 0 : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0)
+  const isPromptImageSupported = pane.provider !== 'copilot'
+  const hasUploadingPromptImages = promptImageAttachments.some((attachment) => attachment.status === 'uploading')
+  const hasPromptImageErrors = promptImageAttachments.some((attachment) => attachment.status === 'error')
+  const hasPromptInput = promptDraft.trim().length > 0 || promptImageAttachments.length > 0
+  const hasWorkspaceTarget = pane.workspaceMode === 'local'
+    ? pane.localWorkspacePath.trim().length > 0
+    : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0
+  const canRun = hasPromptInput && hasWorkspaceTarget && !hasUploadingPromptImages && !hasPromptImageErrors && (isPromptImageSupported || promptImageAttachments.length === 0)
+  const defaultComposerHintText = isPromptImageSupported ? UI.promptImageHintCompact : UI.promptImageUnsupportedCompact
+  const promptImageErrorText = promptImageAttachments.find((attachment) => attachment.status === 'error')?.error || UI.promptImageError
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
   const currentRequestText = pane.currentRequestText?.trim() ?? ''
+  const shouldCollapseCurrentRequest = currentRequestText.split(/\r?\n/).length > 5 || currentRequestText.length > 280
   const hasCurrentRequest = currentRequestText.length > 0
   const requestLabel = isRunInProgress ? UI.currentRequest : UI.latestRequest
   const requestPreview = hasCurrentRequest ? summarizePromptPreview(currentRequestText) : ''
@@ -1004,8 +1146,8 @@ export function TerminalPane({
   const fallbackArchivedSession = !currentSessionAvailable ? pane.sessionHistory[0] ?? null : null
   const selectedArchivedSession = pane.selectedSessionKey ? pane.sessionHistory.find((session) => session.key === pane.selectedSessionKey) ?? fallbackArchivedSession : fallbackArchivedSession
   const visibleSession = selectedArchivedSession
-    ? { key: selectedArchivedSession.key, label: selectedArchivedSession.label, logs: selectedArchivedSession.logs, streamEntries: selectedArchivedSession.streamEntries, updatedAt: selectedArchivedSession.updatedAt, status: selectedArchivedSession.status }
-    : { key: null, label: pane.sessionId ? `${UI.currentPrefix}${pane.sessionId.slice(0, 8)}` : UI.currentSession, logs: pane.logs, streamEntries: pane.streamEntries, updatedAt: pane.lastActivityAt ?? pane.lastRunAt, status: pane.status }
+    ? { key: selectedArchivedSession.key, label: selectedArchivedSession.label, sessionId: selectedArchivedSession.sessionId, logs: selectedArchivedSession.logs, streamEntries: selectedArchivedSession.streamEntries, updatedAt: selectedArchivedSession.updatedAt, status: selectedArchivedSession.status }
+    : { key: null, label: pane.sessionId ? `${UI.currentPrefix}${pane.sessionId.slice(0, 8)}` : UI.currentSession, sessionId: pane.sessionId, logs: pane.logs, streamEntries: pane.streamEntries, updatedAt: pane.lastActivityAt ?? pane.lastRunAt, status: pane.status }
   const sessionOptions = [
     ...(currentSessionAvailable ? [{ key: '__current__', label: pane.sessionId ? `${UI.currentPrefix}${pane.sessionId.slice(0, 8)}` : UI.currentSession }] : []),
     ...pane.sessionHistory.map((session) => ({ key: session.key, label: session.label }))
@@ -1013,16 +1155,32 @@ export function TerminalPane({
   const hasSessionRecords = sessionOptions.length > 0
   const hasVisibleConversation = visibleSession.logs.length > 0
   const hasVisibleStream = visibleSession.streamEntries.length > 0
+  const canResumeVisibleSession = Boolean(visibleSession.key && visibleSession.sessionId)
+  const selectedPromptImage = expandedPromptImageId
+    ? promptImageAttachments.find((attachment) => attachment.id === expandedPromptImageId) ?? null
+    : null
   const hasVisibleSessionContent = hasVisibleConversation || hasVisibleStream
   const visibleConversationEntries = useMemo(() => [...visibleSession.logs].reverse(), [visibleSession.logs])
   const visibleStreamEntries = useMemo(() => [...visibleSession.streamEntries].reverse(), [visibleSession.streamEntries])
   const conversationCopyText = visibleConversationEntries.map((entry) => formatConversationEntryForCopy(entry, pane.provider)).join('\n\n').trim()
   const streamCopyText = visibleStreamEntries.map((entry) => formatStreamEntryForCopy(entry)).join('\n\n').trim()
-  const activeRunLogsCopyText = runLogsTab === 'conversation' ? conversationCopyText : streamCopyText
-  const activeRunLogsCopyLabel = runLogsTab === 'conversation' ? UI.copyConversationAll : UI.copyStreamAll
-  const activeRunLogsCopyMessage = runLogsTab === 'conversation'
-    ? '会話履歴をクリップボードにコピーしました'
-    : 'ストリームをクリップボードにコピーしました'
+  const activeRunLogsTab = runLogsMode === 'conversation'
+    ? 'conversation'
+    : runLogsTab === 'stream' && hasVisibleStream
+      ? 'stream'
+      : hasVisibleConversation
+        ? 'conversation'
+        : 'stream'
+  const shouldShowRunLogsTabs = runLogsMode === 'logs' && hasVisibleConversation && hasVisibleStream
+  const runLogsModalTitle = runLogsMode === 'conversation' ? UI.thisSessionHistory : UI.runLogs
+  const activeRunLogsCopyText = activeRunLogsTab === 'conversation' ? conversationCopyText : streamCopyText
+  const activeRunLogsCopyLabel = activeRunLogsTab === 'conversation' ? UI.copyConversationAll : UI.copyStreamAll
+  const activeRunLogsCopyMessage = activeRunLogsTab === 'conversation'
+    ? '\u4f1a\u8a71\u5c65\u6b74\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f'
+    : '\u30b9\u30c8\u30ea\u30fc\u30e0\u3092\u30af\u30ea\u30c3\u30d7\u30dc\u30fc\u30c9\u306b\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f'
+  const previewCommandText = commandPreviewState.data?.commandLine ?? ''
+  const previewPromptText = commandPreviewState.data?.effectivePrompt ?? ''
+  const previewNotes = commandPreviewState.data?.notes ?? []
   const incomingShareSources = useMemo(() => {
     const sourceMap = new Map<string, { id: string; title: string; count: number }>()
 
@@ -1180,15 +1338,163 @@ export function TerminalPane({
     onUpdate(pane.id, { autoShareTargetIds: nextTargetIds })
   }
 
+  const flushPromptSync = (nextValue = promptDraft) => {
+    if (promptSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(promptSyncFrameRef.current)
+      promptSyncFrameRef.current = null
+    }
+
+    if (promptSyncedValueRef.current === nextValue) {
+      return
+    }
+
+    promptSyncedValueRef.current = nextValue
+    onUpdate(pane.id, { prompt: nextValue })
+  }
+
+  const schedulePromptSync = (nextValue: string) => {
+    if (promptSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(promptSyncFrameRef.current)
+    }
+
+    promptSyncFrameRef.current = window.requestAnimationFrame(() => {
+      promptSyncFrameRef.current = null
+      if (promptSyncedValueRef.current === nextValue) {
+        return
+      }
+
+      promptSyncedValueRef.current = nextValue
+      onUpdate(pane.id, { prompt: nextValue })
+    })
+  }
+
+  const handlePromptDraftChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const nextValue = event.target.value
+    setPromptDraft(nextValue)
+    schedulePromptSync(nextValue)
+  }
+
+  const capturePromptManualHeight = () => {
+    const element = promptRef.current
+    if (!element) {
+      return
+    }
+
+    const nextHeight = Math.round(element.offsetHeight)
+    if (Math.abs(nextHeight - promptAppliedHeightRef.current) <= 2) {
+      return
+    }
+
+    setPromptManualHeight(nextHeight)
+  }
+
   const handleRunRequest = () => {
     if (!canRun || isBusy) {
       return
     }
 
-    onRun(pane.id)
+    flushPromptSync()
+    onRun(pane.id, promptDraft)
     window.requestAnimationFrame(() => {
       promptRef.current?.focus()
     })
+  }
+
+  const handleOpenCommandPreview = async () => {
+    flushPromptSync()
+    setIsCommandPreviewOpen(true)
+    setCommandPreviewState({ status: 'loading', data: null, error: null })
+
+    try {
+      const preview = await onPreviewRunCommand(pane.id, promptDraft)
+      setCommandPreviewState({ status: 'ready', data: preview, error: null })
+    } catch (error) {
+      setCommandPreviewState({
+        status: 'error',
+        data: null,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  const getPromptTransferFiles = (fileList: FileList | null): File[] => Array.from(fileList ?? [])
+
+  const resetPromptDropState = () => {
+    promptDropDepthRef.current = 0
+    setIsPromptDropActive(false)
+  }
+
+  const handlePromptImageButtonClick = () => {
+    promptImageInputRef.current?.click()
+  }
+
+  const handlePromptImageInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? [])
+    if (files.length > 0) {
+      onAddPromptImages(pane.id, files, 'picker')
+    }
+    event.target.value = ''
+  }
+
+  const handlePromptDragEnter = (event: ReactDragEvent<HTMLElement>) => {
+    const files = getPromptTransferFiles(event.dataTransfer.files)
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    promptDropDepthRef.current += 1
+    setIsPromptDropActive(true)
+  }
+
+  const handlePromptDragOver = (event: ReactDragEvent<HTMLElement>) => {
+    const files = getPromptTransferFiles(event.dataTransfer.files)
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    if (!isPromptDropActive) {
+      setIsPromptDropActive(true)
+    }
+  }
+
+  const handlePromptDragLeave = (event: ReactDragEvent<HTMLElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      resetPromptDropState()
+      return
+    }
+
+    promptDropDepthRef.current = Math.max(0, promptDropDepthRef.current - 1)
+    if (promptDropDepthRef.current === 0) {
+      setIsPromptDropActive(false)
+    }
+  }
+
+  const handlePromptDrop = (event: ReactDragEvent<HTMLElement>) => {
+    const files = getPromptTransferFiles(event.dataTransfer.files)
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    resetPromptDropState()
+    onAddPromptImages(pane.id, files, 'drop')
+  }
+
+  const handlePromptPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    onAddPromptImages(pane.id, files, 'clipboard')
   }
 
   const handleOpenLinkedPath = (targetPath: string) => {
@@ -1196,6 +1502,14 @@ export function TerminalPane({
   }
 
   const handleOpenRunLogs = () => {
+    setRunLogsMode('logs')
+    setRunLogsTab('conversation')
+    setIsRunLogsExpanded(true)
+  }
+
+  const handleOpenCurrentSessionHistory = () => {
+    onSelectSession(pane.id, null)
+    setRunLogsMode('conversation')
     setRunLogsTab('conversation')
     setIsRunLogsExpanded(true)
   }
@@ -1424,52 +1738,122 @@ export function TerminalPane({
                   ))}
                 </div>
               )}
+              <button type="button" className={copiedControlKey === `output-${pane.id}` ? 'icon-button is-copied' : 'icon-button'} disabled={!outputText} onClick={() => void handleCopyWithFeedback(`output-${pane.id}`, outputText, '\u6700\u65b0\u7d50\u679c\u3092\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f')} title={UI.copyLatestResult} aria-label={UI.copyLatestResult}>{copiedControlKey === `output-${pane.id}` ? <CheckCircle2 size={16} /> : <Copy size={16} />}</button>
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(true)} title={UI.outputExpand}><Maximize2 size={16} /></button>
             </div>
           </div>
-          <div className={`output-surface console-output ${isRunInProgress ? 'is-streaming' : ''}`} aria-label="output-console">
-            {hasOutput ? (
-              <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} onOpenFile={handleOpenLinkedPath} />
-            ) : isWaitingForFreshOutput ? (
-              <div className="output-loading-state" aria-live="polite">
-                <div className="output-loading-head">
-                  <LoaderCircle size={16} className="spin" />
-                  <strong>{UI.outputGenerating}</strong>
+          <div ref={outputSurfaceRef} className={`output-surface console-output ${isRunInProgress ? 'is-streaming' : ''}`} aria-label="output-console">
+            {hasCurrentRequest ? (
+              <div className={`request-context-card ${isRunInProgress ? 'is-live' : ''}`}>
+                <div className="request-context-head">
+                  <strong>{requestLabel}</strong>
+                  {pane.currentRequestAt ? <span>{`${UI.requestSentAt}: ${formatClock(pane.currentRequestAt)}`}</span> : null}
                 </div>
-                {hasCurrentRequest ? <p className="output-loading-request">{`${UI.outputForRequest}: ${requestPreview}`}</p> : null}
-                <p className="output-loading-copy">{UI.outputGeneratingHint}</p>
-                <div className="output-loading-bars" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
+                <div className={shouldCollapseCurrentRequest && !isRequestExpanded ? 'request-context-body-wrap is-collapsed' : 'request-context-body-wrap'}>
+                  <p className="request-context-body">{pane.currentRequestText}</p>
                 </div>
+                {shouldCollapseCurrentRequest ? (
+                  <div className="request-context-actions">
+                    <button
+                      type="button"
+                      className="ghost-button compact-ghost request-context-toggle"
+                      onClick={() => setIsRequestExpanded((current) => !current)}
+                    >
+                      {isRequestExpanded ? UI.requestCollapse : UI.requestExpand}
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            ) : (
-              <p className="panel-placeholder">{UI.outputPlaceholder}</p>
-            )}
+            ) : null}
+            <div ref={outputContentRef} className="output-result-block">
+              {hasOutput ? (
+                <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} onOpenFile={handleOpenLinkedPath} />
+              ) : isWaitingForFreshOutput ? (
+                <div className="output-loading-state" aria-live="polite">
+                  <div className="output-loading-head">
+                    <LoaderCircle size={16} className="spin" />
+                    <strong>{UI.outputGenerating}</strong>
+                  </div>
+                  {hasCurrentRequest ? <p className="output-loading-request">{`${UI.outputForRequest}: ${requestPreview}`}</p> : null}
+                  <p className="output-loading-copy">{UI.outputGeneratingHint}</p>
+                  <div className="output-loading-bars" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              ) : (
+                <p className="panel-placeholder">{UI.outputPlaceholder}</p>
+              )}
+            </div>
           </div>
         </section>
 
-        <section className="composer-panel minimal-composer">
+        <section
+          className={`composer-panel minimal-composer ${isPromptDropActive ? 'is-drop-active' : ''}`}
+          onDragEnter={handlePromptDragEnter}
+          onDragOver={handlePromptDragOver}
+          onDragLeave={handlePromptDragLeave}
+          onDrop={handlePromptDrop}
+        >
           <div className="panel-header slim">
             <div>
               <h3>{UI.instruction}</h3>
-              <p>{pane.workspaceMode === 'local' ? pane.localWorkspacePath || UI.workspaceUnset : pane.remoteWorkspacePath || UI.sshUnset}</p>
             </div>
           </div>
-          {hasCurrentRequest ? (
-            <div className={`request-context-card ${isRunInProgress ? 'is-live' : ''}`}>
-              <div className="request-context-head">
-                <strong>{requestLabel}</strong>
-                {pane.currentRequestAt ? <span>{`${UI.requestSentAt} ${formatClock(pane.currentRequestAt)}`}</span> : null}
-              </div>
-              <p className="request-context-body">{pane.currentRequestText}</p>
+          <input
+            ref={promptImageInputRef}
+            className="prompt-image-input"
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handlePromptImageInputChange}
+          />
+          {promptImageAttachments.length > 0 ? (
+            <div className="prompt-image-strip" aria-label="attached-images">
+              {promptImageAttachments.map((attachment) => {
+                const attachmentStatusText = attachment.status === 'uploading'
+                  ? UI.promptImageUploading
+                  : attachment.status === 'error'
+                    ? attachment.error || UI.promptImageError
+                    : null
+
+                return (
+                  <div key={attachment.id} className={`prompt-image-chip status-${attachment.status}`}>
+                    <button
+                      type="button"
+                      className="prompt-image-preview-button"
+                      onClick={() => setExpandedPromptImageId(attachment.id)}
+                      title={`${UI.promptImagePreview}: ${attachment.fileName}`}
+                      aria-label={`${UI.promptImagePreview}: ${attachment.fileName}`}
+                    >
+                      <div className="prompt-image-thumb">
+                        <img src={attachment.previewUrl} alt={attachment.fileName} loading="lazy" />
+                      </div>
+                      <div className="prompt-image-meta">
+                        <strong>{attachment.fileName}</strong>
+                        {attachmentStatusText ? <span>{attachmentStatusText}</span> : null}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button compact-icon-button prompt-image-remove-button"
+                      onClick={() => onRemovePromptImage(pane.id, attachment.id)}
+                      title={UI.promptImageRemove}
+                      aria-label={UI.promptImageRemove}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           ) : null}
           <textarea
             ref={promptRef}
-            value={pane.prompt}
-            onChange={(event) => onUpdate(pane.id, { prompt: event.target.value })}
+            value={promptDraft}
+            onChange={handlePromptDraftChange}
+            onPaste={handlePromptPaste}
             onKeyDown={(event) => {
               if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canRun && !isBusy) {
                 event.preventDefault()
@@ -1477,22 +1861,54 @@ export function TerminalPane({
               }
             }}
             placeholder={UI.promptPlaceholder}
+            onBlur={() => flushPromptSync()}
+            onMouseUp={capturePromptManualHeight}
+            onTouchEnd={capturePromptManualHeight}
           />
           <div className="composer-footer">
-            <div className="composer-hint">
-              {isRunInProgress || pane.stopRequested ? (
-                <><LoaderCircle size={16} className="spin" /><span>{runningHintText}</span></>
-              ) : isProviderUpdating ? (
-                <><LoaderCircle size={16} className="spin" /><span>{UI.updatingHint}</span></>
-              ) : hasRunningStatus ? (
-                <><LoaderCircle size={16} className="spin" /><span>{pane.statusText}</span></>
-              ) : pane.lastError ? (
-                <><AlertTriangle size={16} /><span>{pane.lastError}</span></>
-              ) : (
-                <span>{workspaceLabel}</span>
-              )}
+            <div className="composer-footer-leading">
+              <button type="button" className="secondary-button composer-session-button" disabled={!hasSessionRecords} onClick={handleOpenCurrentSessionHistory}><History size={15} />{UI.thisSessionHistory}</button>
+              <div className={isRunInProgress || pane.stopRequested || isProviderUpdating || hasRunningStatus || pane.lastError || hasUploadingPromptImages || hasPromptImageErrors ? 'composer-hint' : 'composer-hint is-passive'}>
+                {isRunInProgress || pane.stopRequested ? (
+                  <><LoaderCircle size={16} className="spin" /><span>{runningHintText}</span></>
+                ) : isProviderUpdating ? (
+                  <><LoaderCircle size={16} className="spin" /><span>{UI.updatingHint}</span></>
+                ) : hasRunningStatus ? (
+                  <><LoaderCircle size={16} className="spin" /><span>{pane.statusText}</span></>
+                ) : pane.lastError ? (
+                  <><AlertTriangle size={16} /><span>{pane.lastError}</span></>
+                ) : hasUploadingPromptImages ? (
+                  <><LoaderCircle size={16} className="spin" /><span>{UI.promptImageUploading}</span></>
+                ) : hasPromptImageErrors ? (
+                  <><AlertTriangle size={16} /><span>{promptImageErrorText}</span></>
+                ) : (
+                  <span>{defaultComposerHintText}</span>
+                )}
+              </div>
             </div>
             <div className="composer-actions">
+              <button
+                type="button"
+                className="secondary-button composer-command-button"
+                disabled={commandPreviewState.status === 'loading'}
+                onClick={() => void handleOpenCommandPreview()}
+                title={UI.previewCommand}
+              >
+                {commandPreviewState.status === 'loading' ? <LoaderCircle size={16} className="spin" /> : <SquareTerminal size={16} />}
+                {commandPreviewState.status === 'loading' ? UI.previewCommandLoading : UI.previewCommand}
+              </button>
+              {!canOfferStop ? (
+                <button
+                  type="button"
+                  className="secondary-button composer-upload-button"
+                  disabled={!isPromptImageSupported}
+                  onClick={handlePromptImageButtonClick}
+                  title={UI.promptImageAdd}
+                >
+                  <Plus size={16} />
+                  {UI.promptImageAdd}
+                </button>
+              ) : null}
               {canOfferStop ? (
                 <button type="button" className="danger-button stable-run-button" disabled={pane.stopRequested} onClick={() => onStop(pane.id)}><Square size={16} />{stopButtonLabel}</button>
               ) : (
@@ -1746,7 +2162,7 @@ export function TerminalPane({
 
                         <div className="inline-actions wrap-actions compact-utility-row ssh-key-actions ssh-key-primary-actions">
                           <button type="button" className="secondary-button ssh-soft-button accent" disabled={pane.sshActionState === 'running'} onClick={() => onGenerateSshKey(pane.id)}><KeyRound size={16} />{UI.generateKey}</button>
-                          <span className="ssh-action-separator" aria-hidden="true">→</span>
+                          <span className="ssh-action-separator" aria-hidden="true">/</span>
                           <button type="button" className="secondary-button ssh-soft-button accent" disabled={pane.sshActionState === 'running' || !pane.sshPublicKeyText.trim() || !pane.sshHost.trim()} onClick={() => onInstallSshPublicKey(pane.id)}><ArrowUpRight size={16} />{UI.installKey}</button>
                         </div>
 
@@ -1908,11 +2324,98 @@ export function TerminalPane({
         </div>
       )}
 
+      {isCommandPreviewOpen ? (
+        <div className="output-modal-backdrop" onClick={() => setIsCommandPreviewOpen(false)}>
+          <div className="output-modal command-preview-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-header slim">
+              <div><h3>{UI.commandPreviewTitle}</h3><p>{pane.title}</p></div>
+              <button type="button" className="icon-button" onClick={() => setIsCommandPreviewOpen(false)} title={UI.close}><X size={16} /></button>
+            </div>
+            <div className="output-modal-body command-preview-modal-body">
+              {commandPreviewState.status === 'loading' ? (
+                <div className="command-preview-loading" aria-live="polite">
+                  <LoaderCircle size={18} className="spin" />
+                  <span>{UI.previewCommandLoading}</span>
+                </div>
+              ) : commandPreviewState.status === 'error' ? (
+                <p className="panel-placeholder compact-error">{commandPreviewState.error ?? UI.versionCheckError}</p>
+              ) : commandPreviewState.data ? (
+                <div className="command-preview-grid">
+                  <section className="command-preview-field">
+                    <div className="command-preview-field-head">
+                      <strong>{UI.commandPreviewTitle}</strong>
+                      <button
+                        type="button"
+                        className={copiedControlKey === `preview-command-${pane.id}` ? 'icon-button compact-icon-button is-copied' : 'icon-button compact-icon-button'}
+                        onClick={() => void handleCopyWithFeedback(`preview-command-${pane.id}`, previewCommandText, '実行コマンドをコピーしました')}
+                        title={UI.copyPreviewCommand}
+                        aria-label={UI.copyPreviewCommand}
+                      >
+                        {copiedControlKey === `preview-command-${pane.id}` ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                      </button>
+                    </div>
+                    <pre className="command-preview-block">{previewCommandText}</pre>
+                  </section>
+
+                  <section className="command-preview-field">
+                    <div className="command-preview-field-head">
+                      <strong>{UI.workingDirectory}</strong>
+                    </div>
+                    <pre className="command-preview-block">{commandPreviewState.data.workingDirectory}</pre>
+                  </section>
+
+                  <section className="command-preview-field">
+                    <div className="command-preview-field-head">
+                      <strong>{UI.effectivePrompt}</strong>
+                      <button
+                        type="button"
+                        className={copiedControlKey === `preview-prompt-${pane.id}` ? 'icon-button compact-icon-button is-copied' : 'icon-button compact-icon-button'}
+                        onClick={() => void handleCopyWithFeedback(`preview-prompt-${pane.id}`, previewPromptText, '実際に渡す入力をコピーしました')}
+                        title={UI.copyEffectivePrompt}
+                        aria-label={UI.copyEffectivePrompt}
+                      >
+                        {copiedControlKey === `preview-prompt-${pane.id}` ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                      </button>
+                    </div>
+                    <pre className="command-preview-block prompt">{previewPromptText}</pre>
+                  </section>
+
+                  {previewNotes.length > 0 ? (
+                    <section className="command-preview-field">
+                      <div className="command-preview-field-head">
+                        <strong>{UI.previewNotes}</strong>
+                      </div>
+                      <ul className="command-preview-notes">
+                        {previewNotes.map((note) => <li key={note}>{note}</li>)}
+                      </ul>
+                    </section>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {selectedPromptImage ? (
+        <div className="output-modal-backdrop" onClick={() => setExpandedPromptImageId(null)}>
+          <div className="output-modal prompt-image-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-header slim">
+              <div><h3>{selectedPromptImage.fileName}</h3><p>{UI.promptImagePreview}</p></div>
+              <button type="button" className="icon-button" onClick={() => setExpandedPromptImageId(null)} title={UI.close}><X size={16} /></button>
+            </div>
+            <div className="output-modal-body prompt-image-modal-body">
+              <img className="prompt-image-modal-image" src={selectedPromptImage.previewUrl} alt={selectedPromptImage.fileName} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {isRunLogsExpanded && (
         <div className="output-modal-backdrop">
           <div className="output-modal run-logs-modal" onClick={(event) => event.stopPropagation()}>
             <div className="panel-header slim">
-              <div><h3>{UI.runLogs}</h3><p>{pane.title}</p></div>
+              <div><h3>{runLogsModalTitle}</h3><p>{pane.title}</p></div>
               <button type="button" className="icon-button" onClick={() => setIsRunLogsExpanded(false)} title={UI.close}><X size={16} /></button>
             </div>
             <div className="output-modal-body run-logs-modal-body">
@@ -1927,32 +2430,35 @@ export function TerminalPane({
                         </select>
                       </label>
                     )}
-                    <div className="run-logs-tab-row" role="tablist" aria-label={UI.runLogs}>
-                      <button type="button" role="tab" aria-selected={runLogsTab === 'conversation'} className={runLogsTab === 'conversation' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('conversation')}>
-                        <span>{UI.conversation}</span>
-                        <span>{visibleSession.logs.length}</span>
-                      </button>
-                      <button type="button" role="tab" aria-selected={runLogsTab === 'stream'} className={runLogsTab === 'stream' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('stream')}>
-                        <span>{UI.stream}</span>
-                        <span>{visibleSession.streamEntries.length}</span>
-                      </button>
-                    </div>
+                    {shouldShowRunLogsTabs ? (
+                      <div className="run-logs-tab-row" role="tablist" aria-label={UI.runLogs}>
+                        <button type="button" role="tab" aria-selected={activeRunLogsTab === 'conversation'} className={activeRunLogsTab === 'conversation' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('conversation')}>
+                          <span>{UI.conversation}</span>
+                          <span>{visibleSession.logs.length}</span>
+                        </button>
+                        <button type="button" role="tab" aria-selected={activeRunLogsTab === 'stream'} className={activeRunLogsTab === 'stream' ? 'switch-button active run-logs-tab-button' : 'switch-button run-logs-tab-button'} onClick={() => setRunLogsTab('stream')}>
+                          <span>{UI.stream}</span>
+                          <span>{visibleSession.streamEntries.length}</span>
+                        </button>
+                      </div>
+                    ) : null}
                     <div className="run-logs-action-row">
                       <button
                         type="button"
-                        className={copiedControlKey === `run-logs-${runLogsTab}` ? 'secondary-button is-copied' : 'secondary-button'}
+                        className={copiedControlKey === `run-logs-${activeRunLogsTab}` ? 'secondary-button is-copied' : 'secondary-button'}
                         disabled={!activeRunLogsCopyText}
-                        onClick={() => void handleCopyWithFeedback(`run-logs-${runLogsTab}`, activeRunLogsCopyText, activeRunLogsCopyMessage)}
+                        onClick={() => void handleCopyWithFeedback(`run-logs-${activeRunLogsTab}`, activeRunLogsCopyText, activeRunLogsCopyMessage)}
                       >
-                        {copiedControlKey === `run-logs-${runLogsTab}` ? <CheckCircle2 size={15} /> : <Copy size={15} />}
-                        {copiedControlKey === `run-logs-${runLogsTab}` ? 'コピー済み' : activeRunLogsCopyLabel}
+                        {copiedControlKey === `run-logs-${activeRunLogsTab}` ? <CheckCircle2 size={15} /> : <Copy size={15} />}
+                        {copiedControlKey === `run-logs-${activeRunLogsTab}` ? 'コピー済み' : activeRunLogsCopyLabel}
                       </button>
+                      <button type="button" className="secondary-button" disabled={isBusy || !canResumeVisibleSession} onClick={() => { onResumeSession(pane.id, visibleSession.key); setIsRunLogsExpanded(false) }}><History size={15} />{UI.resumeSelectedSession}</button>
                       <button type="button" className="secondary-button" disabled={isBusy || !hasVisibleSessionContent} onClick={() => onClearSelectedSessionHistory(pane.id, visibleSession.key)}><Trash2 size={15} />{UI.clearSelectedSessionHistory}</button>
                       <button type="button" className="danger-button" disabled={isBusy || !hasSessionRecords} onClick={() => onClearAllSessionHistory(pane.id)}><Trash2 size={15} />{UI.clearAllSessionHistory}</button>
                     </div>
                   </div>
                   <div className="session-log-meta"><strong>{visibleSession.label}</strong><span>{formatClock(visibleSession.updatedAt)}</span></div>
-                  {runLogsTab === 'conversation' ? (
+                  {activeRunLogsTab === 'conversation' ? (
                     hasVisibleConversation ? (
                       <div className="history-panel run-logs-panel">
                         <div className="section-headline compact-headline"><strong>{UI.conversation}</strong><span>{visibleSession.logs.length}</span></div>
@@ -2048,4 +2554,18 @@ export function TerminalPane({
     </>
   )
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

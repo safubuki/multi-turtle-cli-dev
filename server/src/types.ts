@@ -131,6 +131,13 @@ export interface SharedContextPayload {
   detail: string
 }
 
+export interface RunImageAttachment {
+  fileName: string
+  mimeType: string
+  size: number
+  localPath: string
+}
+
 export interface RunRequestBody {
   paneId: string
   provider: ProviderId
@@ -143,6 +150,16 @@ export interface RunRequestBody {
   sessionId: string | null
   memory: MemoryEntry[]
   sharedContext: SharedContextPayload[]
+  imageAttachments: RunImageAttachment[]
+}
+
+export interface PreviewRunCommandResponse {
+  success: boolean
+  commandLine: string
+  stdinPrompt: string | null
+  effectivePrompt: string
+  workingDirectory: string
+  notes: string[]
 }
 
 export type RunStreamEvent =
