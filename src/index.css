@@ -1506,17 +1506,17 @@ textarea {
 .prompt-image-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 .prompt-image-chip {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
-  max-width: min(100%, 320px);
-  padding: 6px 8px 6px 6px;
+  max-width: min(100%, 300px);
+  padding: 4px 6px 4px 4px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.04);
@@ -1532,9 +1532,24 @@ textarea {
   background: rgba(255, 127, 127, 0.08);
 }
 
+.prompt-image-preview-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .prompt-image-thumb {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 999px;
   overflow: hidden;
   flex: 0 0 auto;
@@ -1552,7 +1567,7 @@ textarea {
 .prompt-image-meta {
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .prompt-image-meta strong,
@@ -1564,12 +1579,14 @@ textarea {
 }
 
 .prompt-image-meta strong {
-  font-size: 0.82rem;
+  font-size: 0.78rem;
+  line-height: 1.15;
 }
 
 .prompt-image-meta span {
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 0.69rem;
+  line-height: 1.1;
 }
 
 .prompt-image-chip.status-error .prompt-image-meta span {
@@ -1577,8 +1594,9 @@ textarea {
 }
 
 .prompt-image-remove-button {
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
 }
 
 .composer-image-hint {
@@ -1597,8 +1615,22 @@ textarea {
 }
 
 .composer-footer {
+  align-items: center;
   justify-content: space-between;
   margin-top: 10px;
+  gap: 10px;
+}
+
+.composer-footer-leading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-session-button {
+  flex: 0 0 auto;
 }
 
 .composer-actions {
@@ -1620,7 +1652,11 @@ textarea {
   flex: 1 1 auto;
   min-width: 0;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 0.82rem;
+}
+
+.composer-hint.is-passive {
+  color: rgba(122, 225, 171, 0.84);
 }
 
 .composer-hint > span {
@@ -2767,6 +2803,25 @@ textarea {
 .output-modal-footer {
   display: flex;
   justify-content: flex-end;
+}
+
+.prompt-image-modal {
+  width: min(880px, 100%);
+}
+
+.prompt-image-modal-body {
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.prompt-image-modal-image {
+  display: block;
+  max-width: 100%;
+  max-height: min(78vh, 820px);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  object-fit: contain;
 }
 
 @media (max-width: 1180px) {

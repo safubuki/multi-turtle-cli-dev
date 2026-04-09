@@ -76,6 +76,14 @@ export function assertPromptImagePath(localPath: string): string {
   throw new Error(`Prompt image path is outside the runtime directory: ${localPath}`)
 }
 
+export async function removePromptImages(localPaths: string[]): Promise<void> {
+  const uniquePaths = [...new Set(localPaths.map((entry) => entry.trim()).filter(Boolean))]
+  await Promise.all(uniquePaths.map(async (localPath) => {
+    const resolvedPath = assertPromptImagePath(localPath)
+    await fs.rm(resolvedPath, { force: true })
+  }))
+}
+
 export async function stagePromptImage(params: {
   fileName: string
   mimeType: string

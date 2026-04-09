@@ -34,6 +34,7 @@ import {
   runShellStream,
   stagePromptImage,
   stopPaneRun,
+  unstagePromptImages,
   stopShellRun,
   transferSshPath,
 } from './lib/api'
@@ -90,6 +91,7 @@ const STORAGE_KEYS = {
 const MAX_LOGS = 24
 const MAX_STREAM_ENTRIES = 80
 const MAX_SESSION_HISTORY = 18
+const MAX_SESSION_LABEL_LENGTH = 40
 const MAX_LIVE_OUTPUT = 64_000
 const MAX_SHELL_OUTPUT = 48_000
 const MAX_SHARED_CONTEXT = 16
@@ -738,7 +740,69 @@ function hasSessionContent(pane: Pick<PaneState, 'logs' | 'streamEntries' | 'ses
   )
 }
 
-function buildSessionLabel(sessionId: string | null, createdAt: number): string {
+function clipSessionLabelText(text: string): string {
+  if (text.length <= MAX_SESSION_LABEL_LENGTH) {
+    return text
+  }
+
+  return `${text.slice(0, MAX_SESSION_LABEL_LENGTH - 1).trimEnd()}...`
+}
+
+function getSessionTopicCandidate(logs: PaneLogEntry[]): string | null {
+  const firstUserEntry = logs.find((entry) => entry.role === 'user' && entry.text.trim())
+  if (!firstUserEntry) {
+    return null
+  }
+
+  const normalizedLines = firstUserEntry.text
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  let imageCount = 0
+  let insideImageBlock = false
+  const contentLines: string[] = []
+
+  for (const line of normalizedLines) {
+    if (line === '[\u6dfb\u4ed8\u753b\u50cf]') {
+      insideImageBlock = true
+      continue
+    }
+
+    if (insideImageBlock && /^-\s+/.test(line)) {
+      imageCount += 1
+      continue
+    }
+
+    insideImageBlock = false
+    if (imageCount > 0 && line === '\u6dfb\u4ed8\u753b\u50cf\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002') {
+      continue
+    }
+
+    contentLines.push(line)
+  }
+
+  const normalizedText = contentLines.join(' ').replace(/\s+/g, ' ').trim()
+  if (normalizedText) {
+    return clipSessionLabelText(normalizedText)
+  }
+
+  if (imageCount > 0) {
+    return imageCount === 1
+      ? '\u753b\u50cf\u306b\u3064\u3044\u3066\u306e\u4f1a\u8a71'
+      : `\u753b\u50cf ${imageCount} \u679a\u306b\u3064\u3044\u3066\u306e\u4f1a\u8a71`
+  }
+
+  return null
+}
+
+function buildSessionLabel(sessionId: string | null, createdAt: number, logs: PaneLogEntry[]): string {
+  const topicCandidate = getSessionTopicCandidate(logs)
+  if (topicCandidate) {
+    return topicCandidate
+  }
+
   if (sessionId) {
     return `\u30bb\u30c3\u30b7\u30e7\u30f3 ${sessionId.slice(0, 8)}`
   }
@@ -749,15 +813,16 @@ function buildSessionLabel(sessionId: string | null, createdAt: number): string 
 function createArchivedSessionRecord(pane: PaneState): PaneSessionRecord {
   const createdAt = pane.lastRunAt ?? pane.lastActivityAt ?? pane.lastFinishedAt ?? Date.now()
   const updatedAt = pane.lastActivityAt ?? pane.lastFinishedAt ?? createdAt
+  const logs = pane.logs.slice(-MAX_LOGS)
 
   return {
     key: createId('session'),
-    label: buildSessionLabel(pane.sessionId, createdAt),
+    label: buildSessionLabel(pane.sessionId, createdAt, logs),
     sessionId: pane.sessionId,
     createdAt,
     updatedAt,
     status: pane.status,
-    logs: pane.logs.slice(-MAX_LOGS),
+    logs,
     streamEntries: pane.streamEntries.slice(-MAX_STREAM_ENTRIES)
   }
 }
@@ -1318,21 +1383,25 @@ function normalizeRemoteDirectoryEntry(rawEntry: Partial<RemoteDirectoryEntry> |
 }
 
 function normalizeSessionRecord(rawRecord: Partial<PaneSessionRecord> | null | undefined): PaneSessionRecord | null {
-  if (!rawRecord?.key || !rawRecord.label) {
+  if (!rawRecord?.key) {
     return null
   }
 
+  const logs = Array.isArray(rawRecord.logs) ? rawRecord.logs.slice(-MAX_LOGS) : []
+  const createdAt = typeof rawRecord.createdAt === 'number' ? rawRecord.createdAt : Date.now()
+  const sessionId = typeof rawRecord.sessionId === 'string' ? rawRecord.sessionId : null
+
   return {
     key: rawRecord.key,
-    label: rawRecord.label,
-    sessionId: typeof rawRecord.sessionId === 'string' ? rawRecord.sessionId : null,
-    createdAt: typeof rawRecord.createdAt === 'number' ? rawRecord.createdAt : Date.now(),
+    label: buildSessionLabel(sessionId, createdAt, logs),
+    sessionId,
+    createdAt,
     updatedAt: typeof rawRecord.updatedAt === 'number' ? rawRecord.updatedAt : null,
     status:
       rawRecord.status === 'completed' || rawRecord.status === 'attention' || rawRecord.status === 'error' || rawRecord.status === 'running' || rawRecord.status === 'updating'
         ? rawRecord.status
         : 'idle',
-    logs: Array.isArray(rawRecord.logs) ? rawRecord.logs.slice(-MAX_LOGS) : [],
+    logs,
     streamEntries: Array.isArray(rawRecord.streamEntries) ? rawRecord.streamEntries.slice(-MAX_STREAM_ENTRIES) : []
   }
 }
@@ -1507,6 +1576,7 @@ function App() {
   const matrixTileRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const paneCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const paneImageAttachmentsRef = useRef<Record<string, PromptImageAttachment[]>>({})
+  const promptImageCleanupPathsRef = useRef<Record<string, string[]>>({})
   const matrixTileRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const paneCardRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const refreshBootstrapInFlightRef = useRef(false)
@@ -1521,6 +1591,35 @@ function App() {
     if (attachment.previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(attachment.previewUrl)
     }
+  }
+
+  const cleanupPromptImageFiles = (localPaths: string[]) => {
+    const normalizedPaths = [...new Set(localPaths.map((entry) => entry.trim()).filter(Boolean))]
+    if (normalizedPaths.length === 0) {
+      return
+    }
+
+    void unstagePromptImages(normalizedPaths).catch(() => undefined)
+  }
+
+  const queuePromptImageCleanup = (paneId: string, localPaths: string[]) => {
+    const normalizedPaths = [...new Set(localPaths.map((entry) => entry.trim()).filter(Boolean))]
+    if (normalizedPaths.length === 0) {
+      return
+    }
+
+    const existing = promptImageCleanupPathsRef.current[paneId] ?? []
+    promptImageCleanupPathsRef.current[paneId] = [...new Set([...existing, ...normalizedPaths])]
+  }
+
+  const flushQueuedPromptImageCleanup = (paneId: string) => {
+    const queuedPaths = promptImageCleanupPathsRef.current[paneId] ?? []
+    if (queuedPaths.length === 0) {
+      return
+    }
+
+    delete promptImageCleanupPathsRef.current[paneId]
+    cleanupPromptImageFiles(queuedPaths)
   }
 
   const updatePanePromptImages = (
@@ -1547,9 +1646,13 @@ function App() {
     })
   }
 
-  const clearPanePromptImages = (paneId: string) => {
+  const clearPanePromptImages = (paneId: string, options: { cleanupFiles?: boolean } = {}) => {
+    const existing = paneImageAttachmentsRef.current[paneId] ?? []
+    if (options.cleanupFiles !== false) {
+      cleanupPromptImageFiles(existing.flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
+    }
+
     setPaneImageAttachments((current) => {
-      const existing = current[paneId] ?? []
       for (const attachment of existing) {
         revokePromptImagePreview(attachment)
       }
@@ -1564,10 +1667,15 @@ function App() {
     })
   }
 
-  const clearMultiplePanePromptImages = (paneIds: string[]) => {
+  const clearMultiplePanePromptImages = (paneIds: string[], options: { cleanupFiles?: boolean } = {}) => {
     const paneIdSet = new Set(paneIds)
     if (paneIdSet.size === 0) {
       return
+    }
+
+    if (options.cleanupFiles !== false) {
+      const localPaths = [...paneIdSet].flatMap((paneId) => (paneImageAttachmentsRef.current[paneId] ?? []).flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
+      cleanupPromptImageFiles(localPaths)
     }
 
     setPaneImageAttachments((current) => {
@@ -1607,6 +1715,11 @@ function App() {
       for (const controller of Object.values(shellControllersRef.current)) {
         controller.abort()
       }
+      const pendingPaths = Object.values(promptImageCleanupPathsRef.current).flat()
+      cleanupPromptImageFiles([
+        ...pendingPaths,
+        ...Object.values(paneImageAttachmentsRef.current).flatMap((attachments) => attachments.flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
+      ])
       for (const attachments of Object.values(paneImageAttachmentsRef.current)) {
         for (const attachment of attachments) {
           revokePromptImagePreview(attachment)
@@ -2098,6 +2211,10 @@ function App() {
     const targetAttachment = existing.find((attachment) => attachment.id === attachmentId)
     if (!targetAttachment) {
       return
+    }
+
+    if (targetAttachment.localPath) {
+      cleanupPromptImageFiles([targetAttachment.localPath])
     }
 
     revokePromptImagePreview(targetAttachment)
@@ -2641,7 +2758,8 @@ function App() {
       attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
       streamEntries: appendStreamEntry([], 'system', `開始: ${currentPane.provider} / ${target.label}`, startedAt)
     }))
-    clearPanePromptImages(paneId)
+    queuePromptImageCleanup(paneId, readyImageAttachments.map((attachment) => attachment.localPath))
+    clearPanePromptImages(paneId, { cleanupFiles: false })
 
     try {
       await runPaneStream(
@@ -2722,6 +2840,7 @@ function App() {
     } finally {
       delete controllersRef.current[paneId]
       stopRequestedRef.current.delete(paneId)
+      flushQueuedPromptImageCleanup(paneId)
     }
   }
 
@@ -2987,6 +3106,46 @@ function App() {
       ...pane,
       selectedSessionKey: sessionKey
     }))
+  }
+
+  const handleResumeSession = (paneId: string, sessionKey: string | null) => {
+    if (!sessionKey) {
+      return
+    }
+
+    mutatePane(paneId, (pane) => {
+      const selectedSession = pane.sessionHistory.find((session) => session.key === sessionKey)
+      if (!selectedSession?.sessionId) {
+        return pane
+      }
+
+      const latestUser = [...selectedSession.logs].reverse().find((entry) => entry.role === 'user') ?? null
+      const latestAssistant = [...selectedSession.logs].reverse().find((entry) => entry.role === 'assistant') ?? null
+
+      return {
+        ...pane,
+        prompt: '',
+        status: 'idle',
+        statusText: statusLabel('idle'),
+        runInProgress: false,
+        logs: selectedSession.logs.slice(-MAX_LOGS),
+        streamEntries: selectedSession.streamEntries.slice(-MAX_STREAM_ENTRIES),
+        selectedSessionKey: null,
+        liveOutput: '',
+        sessionId: selectedSession.sessionId,
+        sessionScopeKey: buildPaneSessionScopeKey(pane),
+        currentRequestText: latestUser?.text ?? null,
+        currentRequestAt: latestUser?.createdAt ?? null,
+        stopRequested: false,
+        stopRequestAvailable: false,
+        lastRunAt: selectedSession.updatedAt,
+        runningSince: null,
+        lastActivityAt: selectedSession.updatedAt,
+        lastFinishedAt: selectedSession.updatedAt,
+        lastError: null,
+        lastResponse: latestAssistant?.text ?? null
+      }
+    })
   }
 
   const copyPaneText = async (paneId: string, text: string | null, _successMessage: string): Promise<boolean> => {
@@ -4695,6 +4854,7 @@ function App() {
                   onStartNewSession={handleStartNewSession}
                   onResetSession={handleResetSession}
                   onSelectSession={handleSelectSession}
+                  onResumeSession={handleResumeSession}
                   onClearSelectedSessionHistory={handleClearSelectedSessionHistory}
                   onClearAllSessionHistory={handleClearAllSessionHistory}
                   onDelete={handleDeletePane}

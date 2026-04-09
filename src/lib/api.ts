@@ -14,6 +14,8 @@ import type {
   StagePromptImageRequest,
   StagePromptImageResponse,
   SshConnectionOptions,
+  UnstagePromptImagesRequest,
+  UnstagePromptImagesResponse,
   SshInspectionResponse,
   SshKeyDeleteResponse,
   SshKeyGenerateResponse,
@@ -183,6 +185,21 @@ export function stopPaneRun(paneId: string): Promise<StopRunResponse> {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ paneId })
+  })
+}
+
+export function unstagePromptImages(localPaths: string[]): Promise<UnstagePromptImagesResponse> {
+  if (localPaths.length === 0) {
+    return Promise.resolve({ success: true })
+  }
+
+  const payload: UnstagePromptImagesRequest = { localPaths }
+  return requestJson<UnstagePromptImagesResponse>('/api/system/unstage-images', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
   })
 }
 

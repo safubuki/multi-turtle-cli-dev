@@ -4,7 +4,7 @@ import express from 'express'
 import { startCliRun } from './cliRunner.js'
 import { startShellRun } from './shellRunner.js'
 import { pickFolderDialog, pickSaveFileDialog } from './nativeDialog.js'
-import { assertPromptImagePath, stagePromptImage as stageRuntimePromptImage } from './promptImages.js'
+import { assertPromptImagePath, removePromptImages as removeRuntimePromptImages, stagePromptImage as stageRuntimePromptImage } from './promptImages.js'
 import { getProviderCatalogs } from './providerCatalog.js'
 import {
   browseRemoteDirectory,
@@ -342,6 +342,26 @@ app.post('/api/system/stage-image', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'image staging failed',
+      details: String(error)
+    })
+  }
+})
+
+app.post('/api/system/unstage-images', async (req, res) => {
+  try {
+    const { localPaths } = req.body as { localPaths?: string[] }
+    const normalizedPaths = Array.isArray(localPaths)
+      ? localPaths.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : []
+
+    await removeRuntimePromptImages(normalizedPaths)
+    res.json({
+      success: true
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'image cleanup failed',
       details: String(error)
     })
   }

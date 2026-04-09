@@ -185,6 +185,14 @@ export interface StagePromptImageResponse {
   attachment: RunImageAttachment
 }
 
+export interface UnstagePromptImagesRequest {
+  localPaths: string[]
+}
+
+export interface UnstagePromptImagesResponse {
+  success: boolean
+}
+
 export interface PaneStreamEntry {
   id: string
   kind: 'status' | 'tool' | 'stderr' | 'system'

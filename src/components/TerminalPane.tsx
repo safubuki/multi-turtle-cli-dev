@@ -97,6 +97,7 @@ interface TerminalPaneProps {
   onTransferSshPath: (paneId: string, direction: 'upload' | 'download', options?: TransferOptions) => void
   shareTargets: Array<{ id: string; title: string }>
   onSelectSession: (paneId: string, sessionKey: string | null) => void
+  onResumeSession: (paneId: string, sessionKey: string | null) => void
   onClearSelectedSessionHistory: (paneId: string, sessionKey: string | null) => void
   onClearAllSessionHistory: (paneId: string) => void
 }
@@ -157,6 +158,8 @@ const UI = {
   promptImageUnsupported: 'GitHub Copilot CLI は画像入力未対応です。Codex CLI または Gemini CLI を選択してください。',
   promptImageAdd: '画像を追加',
   promptImageRemove: '画像を外す',
+  promptImageHintCompact: '＋ / ドロップ / Ctrl+V で画像を追加できます。',
+  promptImageUnsupportedCompact: 'GitHub Copilot CLI では画像添付を使えません。',
   promptImageUploading: '準備中',
   promptImageReady: '添付済み',
   promptImageError: '要確認',
@@ -237,6 +240,9 @@ const UI = {
   sharedToPrefix: 'to :',
   noSharedContext: '\u5171\u6709\u6e08\u307f\u306e\u6587\u8108\u306f\u307e\u3060\u3042\u308a\u307e\u305b\u3093\u3002',
   selectedCount: '\u4ef6\u9078\u629e',
+  thisSessionHistory: 'このセッションの履歴',
+  resumeSelectedSession: 'この会話の続きから話す',
+  promptImagePreview: '添付画像を開く',
   runLogs: '\u5b9f\u884c\u30ed\u30b0',
   runLogsEmpty: '\u307e\u3060\u5b9f\u884c\u30ed\u30b0\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   refreshContents: '\u5185\u5bb9\u3092\u66f4\u65b0',
@@ -873,12 +879,14 @@ export function TerminalPane({
   onTransferSshPath,
   shareTargets,
   onSelectSession,
+  onResumeSession,
   onClearSelectedSessionHistory,
   onClearAllSessionHistory
 }: TerminalPaneProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
   const [isRunLogsExpanded, setIsRunLogsExpanded] = useState(false)
   const [runLogsTab, setRunLogsTab] = useState<'conversation' | 'stream'>('conversation')
+  const [expandedPromptImageId, setExpandedPromptImageId] = useState<string | null>(null)
   const [isShellExpanded, setIsShellExpanded] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isVersionAccordionOpen, setIsVersionAccordionOpen] = useState(false)
@@ -1004,6 +1012,8 @@ export function TerminalPane({
     ? pane.localWorkspacePath.trim().length > 0
     : pane.sshHost.trim().length > 0 && pane.remoteWorkspacePath.trim().length > 0
   const canRun = hasPromptInput && hasWorkspaceTarget && !hasUploadingPromptImages && !hasPromptImageErrors && (isPromptImageSupported || promptImageAttachments.length === 0)
+  const defaultComposerHintText = isPromptImageSupported ? UI.promptImageHintCompact : UI.promptImageUnsupportedCompact
+  const promptImageErrorText = promptImageAttachments.find((attachment) => attachment.status === 'error')?.error || UI.promptImageError
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
   const currentRequestText = pane.currentRequestText?.trim() ?? ''
@@ -1039,8 +1049,8 @@ export function TerminalPane({
   const fallbackArchivedSession = !currentSessionAvailable ? pane.sessionHistory[0] ?? null : null
   const selectedArchivedSession = pane.selectedSessionKey ? pane.sessionHistory.find((session) => session.key === pane.selectedSessionKey) ?? fallbackArchivedSession : fallbackArchivedSession
   const visibleSession = selectedArchivedSession
-    ? { key: selectedArchivedSession.key, label: selectedArchivedSession.label, logs: selectedArchivedSession.logs, streamEntries: selectedArchivedSession.streamEntries, updatedAt: selectedArchivedSession.updatedAt, status: selectedArchivedSession.status }
-    : { key: null, label: pane.sessionId ? `${UI.currentPrefix}${pane.sessionId.slice(0, 8)}` : UI.currentSession, logs: pane.logs, streamEntries: pane.streamEntries, updatedAt: pane.lastActivityAt ?? pane.lastRunAt, status: pane.status }
+    ? { key: selectedArchivedSession.key, label: selectedArchivedSession.label, sessionId: selectedArchivedSession.sessionId, logs: selectedArchivedSession.logs, streamEntries: selectedArchivedSession.streamEntries, updatedAt: selectedArchivedSession.updatedAt, status: selectedArchivedSession.status }
+    : { key: null, label: pane.sessionId ? `${UI.currentPrefix}${pane.sessionId.slice(0, 8)}` : UI.currentSession, sessionId: pane.sessionId, logs: pane.logs, streamEntries: pane.streamEntries, updatedAt: pane.lastActivityAt ?? pane.lastRunAt, status: pane.status }
   const sessionOptions = [
     ...(currentSessionAvailable ? [{ key: '__current__', label: pane.sessionId ? `${UI.currentPrefix}${pane.sessionId.slice(0, 8)}` : UI.currentSession }] : []),
     ...pane.sessionHistory.map((session) => ({ key: session.key, label: session.label }))
@@ -1048,6 +1058,10 @@ export function TerminalPane({
   const hasSessionRecords = sessionOptions.length > 0
   const hasVisibleConversation = visibleSession.logs.length > 0
   const hasVisibleStream = visibleSession.streamEntries.length > 0
+  const canResumeVisibleSession = Boolean(visibleSession.key && visibleSession.sessionId)
+  const selectedPromptImage = expandedPromptImageId
+    ? promptImageAttachments.find((attachment) => attachment.id === expandedPromptImageId) ?? null
+    : null
   const hasVisibleSessionContent = hasVisibleConversation || hasVisibleStream
   const visibleConversationEntries = useMemo(() => [...visibleSession.logs].reverse(), [visibleSession.logs])
   const visibleStreamEntries = useMemo(() => [...visibleSession.streamEntries].reverse(), [visibleSession.streamEntries])
@@ -1315,6 +1329,12 @@ export function TerminalPane({
     setIsRunLogsExpanded(true)
   }
 
+  const handleOpenCurrentSessionHistory = () => {
+    onSelectSession(pane.id, null)
+    setRunLogsTab('conversation')
+    setIsRunLogsExpanded(true)
+  }
+
   const flashCopiedControl = (controlKey: string) => {
     if (copyFeedbackTimerRef.current !== null) {
       window.clearTimeout(copyFeedbackTimerRef.current)
@@ -1543,6 +1563,15 @@ export function TerminalPane({
             </div>
           </div>
           <div className={`output-surface console-output ${isRunInProgress ? 'is-streaming' : ''}`} aria-label="output-console">
+            {hasCurrentRequest ? (
+              <div className={`request-context-card ${isRunInProgress ? 'is-live' : ''}`}>
+                <div className="request-context-head">
+                  <strong>{requestLabel}</strong>
+                  {pane.currentRequestAt ? <span>{`${UI.requestSentAt}: ${formatClock(pane.currentRequestAt)}`}</span> : null}
+                </div>
+                <p className="request-context-body">{pane.currentRequestText}</p>
+              </div>
+            ) : null}
             {hasOutput ? (
               <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output`} onOpenFile={handleOpenLinkedPath} />
             ) : isWaitingForFreshOutput ? (
@@ -1575,18 +1604,8 @@ export function TerminalPane({
           <div className="panel-header slim">
             <div>
               <h3>{UI.instruction}</h3>
-              <p>{pane.workspaceMode === 'local' ? pane.localWorkspacePath || UI.workspaceUnset : pane.remoteWorkspacePath || UI.sshUnset}</p>
             </div>
           </div>
-          {hasCurrentRequest ? (
-            <div className={`request-context-card ${isRunInProgress ? 'is-live' : ''}`}>
-              <div className="request-context-head">
-                <strong>{requestLabel}</strong>
-                {pane.currentRequestAt ? <span>{`${UI.requestSentAt} ${formatClock(pane.currentRequestAt)}`}</span> : null}
-              </div>
-              <p className="request-context-body">{pane.currentRequestText}</p>
-            </div>
-          ) : null}
           <input
             ref={promptImageInputRef}
             className="prompt-image-input"
@@ -1597,37 +1616,44 @@ export function TerminalPane({
           />
           {promptImageAttachments.length > 0 ? (
             <div className="prompt-image-strip" aria-label="attached-images">
-              {promptImageAttachments.map((attachment) => (
-                <div key={attachment.id} className={`prompt-image-chip status-${attachment.status}`}>
-                  <div className="prompt-image-thumb">
-                    <img src={attachment.previewUrl} alt={attachment.fileName} loading="lazy" />
+              {promptImageAttachments.map((attachment) => {
+                const attachmentStatusText = attachment.status === 'uploading'
+                  ? UI.promptImageUploading
+                  : attachment.status === 'error'
+                    ? attachment.error || UI.promptImageError
+                    : null
+
+                return (
+                  <div key={attachment.id} className={`prompt-image-chip status-${attachment.status}`}>
+                    <button
+                      type="button"
+                      className="prompt-image-preview-button"
+                      onClick={() => setExpandedPromptImageId(attachment.id)}
+                      title={`${UI.promptImagePreview}: ${attachment.fileName}`}
+                      aria-label={`${UI.promptImagePreview}: ${attachment.fileName}`}
+                    >
+                      <div className="prompt-image-thumb">
+                        <img src={attachment.previewUrl} alt={attachment.fileName} loading="lazy" />
+                      </div>
+                      <div className="prompt-image-meta">
+                        <strong>{attachment.fileName}</strong>
+                        {attachmentStatusText ? <span>{attachmentStatusText}</span> : null}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button compact-icon-button prompt-image-remove-button"
+                      onClick={() => onRemovePromptImage(pane.id, attachment.id)}
+                      title={UI.promptImageRemove}
+                      aria-label={UI.promptImageRemove}
+                    >
+                      <X size={13} />
+                    </button>
                   </div>
-                  <div className="prompt-image-meta">
-                    <strong>{attachment.fileName}</strong>
-                    <span>
-                      {attachment.status === 'uploading'
-                        ? UI.promptImageUploading
-                        : attachment.status === 'error'
-                          ? attachment.error || UI.promptImageError
-                          : UI.promptImageReady}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    className="icon-button compact-icon-button prompt-image-remove-button"
-                    onClick={() => onRemovePromptImage(pane.id, attachment.id)}
-                    title={UI.promptImageRemove}
-                    aria-label={UI.promptImageRemove}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ) : null}
-          <p className={`composer-image-hint ${!isPromptImageSupported ? 'is-disabled' : ''}`}>
-            {isPromptImageSupported ? UI.promptImageHint : UI.promptImageUnsupported}
-          </p>
           <textarea
             ref={promptRef}
             value={pane.prompt}
@@ -1642,22 +1668,25 @@ export function TerminalPane({
             placeholder={UI.promptPlaceholder}
           />
           <div className="composer-footer">
-            <div className="composer-hint">
-              {isRunInProgress || pane.stopRequested ? (
-                <><LoaderCircle size={16} className="spin" /><span>{runningHintText}</span></>
-              ) : isProviderUpdating ? (
-                <><LoaderCircle size={16} className="spin" /><span>{UI.updatingHint}</span></>
-              ) : hasRunningStatus ? (
-                <><LoaderCircle size={16} className="spin" /><span>{pane.statusText}</span></>
-              ) : pane.lastError ? (
-                <><AlertTriangle size={16} /><span>{pane.lastError}</span></>
-              ) : hasUploadingPromptImages ? (
-                <><LoaderCircle size={16} className="spin" /><span>{UI.promptImageUploading}</span></>
-              ) : !isPromptImageSupported ? (
-                <><AlertTriangle size={16} /><span>{UI.promptImageUnsupported}</span></>
-              ) : (
-                <span>{workspaceLabel}</span>
-              )}
+            <div className="composer-footer-leading">
+              <button type="button" className="secondary-button composer-session-button" disabled={!hasSessionRecords} onClick={handleOpenCurrentSessionHistory}><History size={15} />{UI.thisSessionHistory}</button>
+              <div className={isRunInProgress || pane.stopRequested || isProviderUpdating || hasRunningStatus || pane.lastError || hasUploadingPromptImages || hasPromptImageErrors ? 'composer-hint' : 'composer-hint is-passive'}>
+                {isRunInProgress || pane.stopRequested ? (
+                  <><LoaderCircle size={16} className="spin" /><span>{runningHintText}</span></>
+                ) : isProviderUpdating ? (
+                  <><LoaderCircle size={16} className="spin" /><span>{UI.updatingHint}</span></>
+                ) : hasRunningStatus ? (
+                  <><LoaderCircle size={16} className="spin" /><span>{pane.statusText}</span></>
+                ) : pane.lastError ? (
+                  <><AlertTriangle size={16} /><span>{pane.lastError}</span></>
+                ) : hasUploadingPromptImages ? (
+                  <><LoaderCircle size={16} className="spin" /><span>{UI.promptImageUploading}</span></>
+                ) : hasPromptImageErrors ? (
+                  <><AlertTriangle size={16} /><span>{promptImageErrorText}</span></>
+                ) : (
+                  <span>{defaultComposerHintText}</span>
+                )}
+              </div>
             </div>
             <div className="composer-actions">
               {!canOfferStop ? (
@@ -2087,6 +2116,20 @@ export function TerminalPane({
         </div>
       )}
 
+      {selectedPromptImage ? (
+        <div className="output-modal-backdrop" onClick={() => setExpandedPromptImageId(null)}>
+          <div className="output-modal prompt-image-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-header slim">
+              <div><h3>{selectedPromptImage.fileName}</h3><p>{UI.promptImagePreview}</p></div>
+              <button type="button" className="icon-button" onClick={() => setExpandedPromptImageId(null)} title={UI.close}><X size={16} /></button>
+            </div>
+            <div className="output-modal-body prompt-image-modal-body">
+              <img className="prompt-image-modal-image" src={selectedPromptImage.previewUrl} alt={selectedPromptImage.fileName} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {isRunLogsExpanded && (
         <div className="output-modal-backdrop">
           <div className="output-modal run-logs-modal" onClick={(event) => event.stopPropagation()}>
@@ -2126,6 +2169,7 @@ export function TerminalPane({
                         {copiedControlKey === `run-logs-${runLogsTab}` ? <CheckCircle2 size={15} /> : <Copy size={15} />}
                         {copiedControlKey === `run-logs-${runLogsTab}` ? 'コピー済み' : activeRunLogsCopyLabel}
                       </button>
+                      <button type="button" className="secondary-button" disabled={isBusy || !canResumeVisibleSession} onClick={() => { onResumeSession(pane.id, visibleSession.key); setIsRunLogsExpanded(false) }}><History size={15} />{UI.resumeSelectedSession}</button>
                       <button type="button" className="secondary-button" disabled={isBusy || !hasVisibleSessionContent} onClick={() => onClearSelectedSessionHistory(pane.id, visibleSession.key)}><Trash2 size={15} />{UI.clearSelectedSessionHistory}</button>
                       <button type="button" className="danger-button" disabled={isBusy || !hasSessionRecords} onClick={() => onClearAllSessionHistory(pane.id)}><Trash2 size={15} />{UI.clearAllSessionHistory}</button>
                     </div>
