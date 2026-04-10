@@ -48,9 +48,6 @@ export function listLocalBrowseRoots(): LocalBrowseRoot[] {
   const home = os.homedir()
 
   pushBrowseRoot(results, seen, '\u30db\u30fc\u30e0', home)
-  pushBrowseRoot(results, seen, '\u30c7\u30b9\u30af\u30c8\u30c3\u30d7', path.join(home, 'Desktop'))
-  pushBrowseRoot(results, seen, '\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8', path.join(home, 'Documents'))
-  pushBrowseRoot(results, seen, '\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9', path.join(home, 'Downloads'))
 
   if (process.platform === 'win32') {
     for (let code = 67; code <= 90; code += 1) {

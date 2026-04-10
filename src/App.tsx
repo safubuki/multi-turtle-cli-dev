@@ -9,6 +9,7 @@ import {
   SplitSquareHorizontal,
   Trash2,
   Wifi,
+  X,
   XCircle
 } from 'lucide-react'
 import { TerminalPane } from './components/TerminalPane'
@@ -436,6 +437,14 @@ function buildRemoteWorkspacePickerRoots(remoteRoots: string[], homeDirectory: s
       label: rootPath === homeDirectory || rootPath === '~' ? 'Home' : getPathLabel(rootPath),
       path: rootPath
     }))
+}
+
+function isLocalWorkspacePickerRootVisible(root: LocalBrowseRoot): boolean {
+  const hiddenNames = new Set(['desktop', 'documents', 'downloads', '\u30c7\u30b9\u30af\u30c8\u30c3\u30d7', '\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8', '\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9'])
+  const label = root.label.trim().toLowerCase()
+  const pathParts = normalizeComparablePath(root.path).toLowerCase().split('/').filter(Boolean)
+  const lastPathPart = pathParts[pathParts.length - 1] ?? ''
+  return !hiddenNames.has(label) && !hiddenNames.has(lastPathPart)
 }
 
 function isWorkspacePickerRootActive(workspacePicker: WorkspacePickerState, rootPath: string): boolean {
@@ -3480,7 +3489,7 @@ function App() {
           label: entry.label,
           path: entry.path
         })),
-        roots: rootsPayload.roots,
+        roots: rootsPayload.roots.filter(isLocalWorkspacePickerRootVisible),
         loading: false,
         error: null
       })
@@ -3682,39 +3691,6 @@ function App() {
           : current
       )
     }
-  }
-
-  const handleRemoveLocalWorkspace = (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const targetWorkspace = localWorkspacesRef.current.find((item) => item.path === pane.localWorkspacePath)
-    if (!targetWorkspace || targetWorkspace.source !== 'manual') {
-      return
-    }
-
-    const nextWorkspaces = mergeLocalWorkspaces(
-      bootstrap?.localWorkspaces ?? [],
-      getManualWorkspaces(localWorkspacesRef.current).filter((item) => item.path !== targetWorkspace.path)
-    )
-    const fallbackPath = nextWorkspaces[0]?.path ?? ''
-
-    setLocalWorkspaces(nextWorkspaces)
-    setPanes((current) =>
-      current.map((item) =>
-        item.localWorkspacePath === targetWorkspace.path
-          ? {
-              ...item,
-              localWorkspacePath: fallbackPath,
-              localBrowserPath: '',
-              localBrowserEntries: [],
-              localShellPath: fallbackPath
-            }
-          : item
-      )
-    )
   }
 
   const handleOpenWorkspace = async (paneId: string) => {
@@ -4954,7 +4930,6 @@ function App() {
                   onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
                   onAddLocalWorkspace={(paneId) => void handleAddLocalWorkspace(paneId)}
                   onOpenRemoteWorkspacePicker={(paneId) => void handleOpenRemoteWorkspacePicker(paneId)}
-                  onRemoveLocalWorkspace={handleRemoveLocalWorkspace}
                   onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
                   onGenerateSshKey={(paneId) => void handleGenerateSshKey(paneId)}
                   onDeleteSshKey={(paneId) => void handleDeleteSshKey(paneId)}
@@ -4978,26 +4953,26 @@ function App() {
                 <h3>{workspacePicker.mode === 'local' ? '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e' : '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7/\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u9078\u629e'}</h3>
                 <p className="workspace-picker-current-path">{workspacePicker.path || (workspacePicker.mode === 'local' ? '\u4f7f\u3044\u305f\u3044\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002' : '\u4f7f\u3044\u305f\u3044\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002')}</p>
               </div>
-              <button type="button" className="secondary-button" onClick={() => setWorkspacePicker(null)}>{'\u9589\u3058\u308b'}</button>
+              <button type="button" className="icon-button" onClick={() => setWorkspacePicker(null)} title="閉じる" aria-label="閉じる"><X size={16} /></button>
             </div>
 
             <div className="workspace-picker-toolbar">
               <div className="workspace-picker-roots">
-                {workspacePicker.roots.map((root) => (
+                {workspacePicker.roots.filter((root) => workspacePicker.mode !== 'local' || isLocalWorkspacePickerRootVisible(root)).map((root) => (
                   <button key={root.path} type="button" className={isWorkspacePickerRootActive(workspacePicker, root.path) ? 'switch-button active' : 'switch-button'} onClick={() => void handleBrowseWorkspacePicker(root.path)}>
                     {root.label}
                   </button>
                 ))}
+                {workspacePickerParentPath && (
+                  <button type="button" className="switch-button workspace-picker-up-button" disabled={workspacePicker.loading} onClick={() => void handleBrowseWorkspacePicker(workspacePickerParentPath)}>
+                    {'\u4e00\u3064\u4e0a\u3078'}
+                  </button>
+                )}
               </div>
               <div className="workspace-picker-actions">
                 <button type="button" className="secondary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleCreateWorkspacePickerDirectory()}>
                   {'\u65b0\u3057\u3044\u30d5\u30a9\u30eb\u30c0'}
                 </button>
-                {workspacePickerParentPath && (
-                  <button type="button" className="secondary-button" disabled={workspacePicker.loading} onClick={() => void handleBrowseWorkspacePicker(workspacePickerParentPath)}>
-                    {'\u4e00\u3064\u4e0a\u3078'}
-                  </button>
-                )}
                 <button type="button" className="secondary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleBrowseWorkspacePicker(workspacePicker.path)}>
                   {'\u518d\u8aad\u8fbc'}
                 </button>

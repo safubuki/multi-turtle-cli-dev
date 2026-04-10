@@ -91,7 +91,6 @@ interface TerminalPaneProps {
   onOpenPath: (paneId: string, path: string, resourceType: 'folder' | 'file') => void
   onAddLocalWorkspace: (paneId: string) => void
   onOpenRemoteWorkspacePicker: (paneId: string) => void
-  onRemoveLocalWorkspace: (paneId: string) => void
   onBrowseLocal: (paneId: string, path: string) => void
   onGenerateSshKey: (paneId: string) => void
   onDeleteSshKey: (paneId: string) => void
@@ -199,7 +198,6 @@ const UI = {
   currentWorkspace: '\u73fe\u5728\u306e\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   chooseWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
   chooseRemoteWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
-  removeFromList: '\u4e00\u89a7\u304b\u3089\u5916\u3059',
   savedWorkspaces: '\u767b\u9332\u6e08\u307f\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   folderContents: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u306e\u5185\u5bb9',
   browseLoading: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
@@ -240,7 +238,7 @@ const UI = {
   remoteList: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7',
   remoteLoading: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
   remoteEmpty: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
-  oneLevelUp: '\u4e00\u3064\u524d\u3078',
+  oneLevelUp: '\u4e00\u3064\u4e0a\u3078',
   emptyFolder: '\u3053\u306e\u5834\u6240\u306b\u8868\u793a\u3067\u304d\u308b\u9805\u76ee\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   createFolder: '\u30d5\u30a9\u30eb\u30c0\u4f5c\u6210',
   receive: '\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9',
@@ -895,7 +893,6 @@ export function TerminalPane({
   onOpenPath,
   onAddLocalWorkspace,
   onOpenRemoteWorkspacePicker,
-  onRemoveLocalWorkspace,
   onBrowseLocal,
   onGenerateSshKey,
   onDeleteSshKey,
@@ -1102,7 +1099,6 @@ export function TerminalPane({
   const isRemoteConnected = Boolean(pane.sshHost.trim() && (pane.remoteBrowserPath.trim() || pane.remoteHomeDirectory))
   const availableRemoteProviders = isRemoteConnected ? pane.remoteAvailableProviders : (['codex', 'copilot', 'gemini'] as ProviderId[])
   const selectedLocalWorkspace = localWorkspaces.find((workspace) => workspace.path === pane.localWorkspacePath)
-  const canRemoveLocalWorkspace = selectedLocalWorkspace?.source === 'manual'
   const hasRunningStatus = pane.status === 'running'
   const isProviderUpdating = pane.status === 'updating'
   const isRunInProgress = pane.runInProgress
@@ -2086,11 +2082,6 @@ export function TerminalPane({
                       </>
                     ) : null}
                   </div>
-                  {canRemoveLocalWorkspace && (
-                    <div className="inline-actions wrap-actions compact-utility-row workspace-secondary-actions">
-                      <button type="button" className="danger-button" onClick={() => onRemoveLocalWorkspace(pane.id)}><Trash2 size={16} />{UI.removeFromList}</button>
-                    </div>
-                  )}
                   <div className="browser-panel workspace-browser-shell">
                     <div className="section-headline compact-headline browser-headline">
                       <div><strong>{UI.folderContents}</strong></div>
