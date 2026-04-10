@@ -4954,7 +4954,6 @@ function App() {
                   onOpenPath={(paneId, path, resourceType) => void handleOpenPathInVsCode(paneId, path, resourceType)}
                   onAddLocalWorkspace={(paneId) => void handleAddLocalWorkspace(paneId)}
                   onOpenRemoteWorkspacePicker={(paneId) => void handleOpenRemoteWorkspacePicker(paneId)}
-                  onSelectLocalWorkspace={(paneId, workspacePath) => void handleSelectLocalWorkspace(paneId, workspacePath)}
                   onRemoveLocalWorkspace={handleRemoveLocalWorkspace}
                   onBrowseLocal={(paneId, path) => void handleBrowseLocal(paneId, path)}
                   onGenerateSshKey={(paneId) => void handleGenerateSshKey(paneId)}

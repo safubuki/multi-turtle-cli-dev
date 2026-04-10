@@ -91,7 +91,6 @@ interface TerminalPaneProps {
   onOpenPath: (paneId: string, path: string, resourceType: 'folder' | 'file') => void
   onAddLocalWorkspace: (paneId: string) => void
   onOpenRemoteWorkspacePicker: (paneId: string) => void
-  onSelectLocalWorkspace: (paneId: string, workspacePath: string) => void
   onRemoveLocalWorkspace: (paneId: string) => void
   onBrowseLocal: (paneId: string, path: string) => void
   onGenerateSshKey: (paneId: string) => void
@@ -186,7 +185,7 @@ const UI = {
   stop: '\u505c\u6b62',
   run: '\u5b9f\u884c',
   settings: 'CLI/AI\u30e2\u30c7\u30eb\u9078\u629e/\u8a2d\u5b9a',
-  workspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u8a2d\u5b9a',
+  workspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   cli: 'CLI',
   model: '\u30e2\u30c7\u30eb',
   reasoning: '\u63a8\u8ad6\u30ec\u30d9\u30eb',
@@ -199,14 +198,14 @@ const UI = {
   active: '\u5236\u9650\u306a\u3057\u306e\u81ea\u52d5\u627f\u8a8d',
   currentWorkspace: '\u73fe\u5728\u306e\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   chooseWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
-  chooseRemoteWorkspace: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
+  chooseRemoteWorkspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e',
   removeFromList: '\u4e00\u89a7\u304b\u3089\u5916\u3059',
   savedWorkspaces: '\u767b\u9332\u6e08\u307f\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   folderContents: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u306e\u5185\u5bb9',
   browseLoading: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
   browseEmpty: '\u9078\u629e\u3057\u305f\u30d5\u30a9\u30eb\u30c0\u306e\u5185\u5bb9\u304c\u3053\u3053\u306b\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
   currentConnection: '\u73fe\u5728\u306e\u63a5\u7d9a',
-  connectionSettings: '\u63a5\u7d9a\u8a2d\u5b9a',
+  connectionSettings: 'SSH\u63a5\u7d9a\u8a2d\u5b9a',
   connectionConfigured: '\u63a5\u7d9a\u8a2d\u5b9aOK',
   connectionUnconfigured: '\u63a5\u7d9a\u672a\u8a2d\u5b9a',
   connectionInfo: '\u63a5\u7d9a\u60c5\u5831',
@@ -240,8 +239,9 @@ const UI = {
   dragHint: '\u30ed\u30fc\u30ab\u30eb\u4e00\u89a7\u304b\u3089\u30c9\u30e9\u30c3\u30b0\u3059\u308b\u3068\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u3067\u304d\u307e\u3059\u3002',
   remoteList: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7',
   remoteLoading: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002',
-  remoteEmpty: '\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3059\u308b\u3068\u5185\u5bb9\u304c\u8868\u793a\u3055\u308c\u307e\u3059\u3002',
-  oneLevelUp: '\u4e00\u3064\u4e0a\u3078',
+  remoteEmpty: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
+  oneLevelUp: '\u4e00\u3064\u524d\u3078',
+  emptyFolder: '\u3053\u306e\u5834\u6240\u306b\u8868\u793a\u3067\u304d\u308b\u9805\u76ee\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
   createFolder: '\u30d5\u30a9\u30eb\u30c0\u4f5c\u6210',
   receive: '\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9',
   downloadCurrent: '\u3053\u3053\u3092\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9',
@@ -283,7 +283,7 @@ const UI = {
   terminalStop: '\u505c\u6b62',
   terminalExternal: '\u5916\u90e8\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8a66\u3059',
   terminalPath: '\u73fe\u5728\u30d1\u30b9',
-  workspaceTop: '\u30c8\u30c3\u30d7\u3078',
+  workspaceTop: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u306e\u30c8\u30c3\u30d7\u3078',
   backToTop: '\u30c8\u30c3\u30d7\u306b\u623b\u308b',
   close: '\u9589\u3058\u308b'
 } as const
@@ -316,6 +316,15 @@ function formatElapsed(from: number | null, now: number): string {
 function getShortPathLabel(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean)
   return parts[parts.length - 1] ?? path
+}
+
+function hasActiveTextSelection(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const selection = window.getSelection()
+  return Boolean(selection && selection.type === 'Range' && selection.toString().trim())
 }
 
 function getOutputText(pane: PaneState): string {
@@ -886,7 +895,6 @@ export function TerminalPane({
   onOpenPath,
   onAddLocalWorkspace,
   onOpenRemoteWorkspacePicker,
-  onSelectLocalWorkspace,
   onRemoveLocalWorkspace,
   onBrowseLocal,
   onGenerateSshKey,
@@ -2068,27 +2076,24 @@ export function TerminalPane({
                   <div className="workspace-primary-action">
                     <button type="button" className="primary-button workspace-choose-button" onClick={() => onAddLocalWorkspace(pane.id)}><FolderPlus size={16} />{UI.chooseWorkspace}</button>
                   </div>
-                  <div className="workspace-current">
-                    <span className="workspace-caption">{UI.currentWorkspace}</span>
+                  <div className="workspace-current workspace-current-compact" aria-label={UI.currentWorkspace}>
+                    <FolderOpen size={16} />
                     <strong>{selectedLocalWorkspace?.label ?? getShortPathLabel(pane.localWorkspacePath || UI.unselected)}</strong>
-                    <span>{pane.localWorkspacePath || UI.browseEmpty}</span>
+                    {pane.localWorkspacePath ? (
+                      <>
+                        <span className="workspace-current-divider" aria-hidden="true">/</span>
+                        <span className="workspace-current-path" title={pane.localWorkspacePath}>{pane.localWorkspacePath}</span>
+                      </>
+                    ) : null}
                   </div>
                   {canRemoveLocalWorkspace && (
                     <div className="inline-actions wrap-actions compact-utility-row workspace-secondary-actions">
                       <button type="button" className="danger-button" onClick={() => onRemoveLocalWorkspace(pane.id)}><Trash2 size={16} />{UI.removeFromList}</button>
                     </div>
                   )}
-                  {localWorkspaces.length > 1 && (
-                    <label>
-                      <span>{UI.savedWorkspaces}</span>
-                      <select value={pane.localWorkspacePath} onChange={(event) => onSelectLocalWorkspace(pane.id, event.target.value)}>
-                        {localWorkspaces.map((workspace) => <option key={workspace.id} value={workspace.path}>{workspace.label}</option>)}
-                      </select>
-                    </label>
-                  )}
                   <div className="browser-panel workspace-browser-shell">
                     <div className="section-headline compact-headline browser-headline">
-                      <div><strong>{UI.folderContents}</strong><span className="browser-current-path">{getShortPathLabel(pane.localBrowserPath || pane.localWorkspacePath || '')}</span></div>
+                      <div><strong>{UI.folderContents}</strong></div>
                       <div className="browser-toolbar-actions">
                         {!isAtLocalWorkspaceTop && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, pane.localWorkspacePath)}><Home size={14} />{UI.workspaceTop}</button>}
                         {localParentPath && <button type="button" className="ghost-button compact-ghost" onClick={() => onBrowseLocal(pane.id, localParentPath)}><ChevronLeft size={14} />{UI.oneLevelUp}</button>}
@@ -2099,13 +2104,40 @@ export function TerminalPane({
                       {pane.localBrowserEntries.length > 0 ? (
                         pane.localBrowserEntries.map((entry) => (
                           <div key={entry.path} className={`browser-row ${entry.isDirectory ? 'directory' : 'file'}`}>
-                            <button type="button" draggable className="browser-row-main browser-simple-item" onDragStart={(event) => startLocalDrag(event, entry.path)} onClick={() => entry.isDirectory ? onBrowseLocal(pane.id, entry.path) : onOpenPath(pane.id, entry.path, 'file')}>
-                              <span className="browser-row-icon">{entry.isDirectory ? <Folder size={16} /> : <FileText size={16} />}</span>
-                              <span className="browser-row-label">{entry.label}</span>
-                            </button>
+                            <div
+                              className="browser-row-main browser-simple-item browser-entry-selectable"
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                if (hasActiveTextSelection()) {
+                                  return
+                                }
+                                if (entry.isDirectory) {
+                                  onBrowseLocal(pane.id, entry.path)
+                                  return
+                                }
+                                onOpenPath(pane.id, entry.path, 'file')
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' && event.key !== ' ') {
+                                  return
+                                }
+                                event.preventDefault()
+                                if (entry.isDirectory) {
+                                  onBrowseLocal(pane.id, entry.path)
+                                  return
+                                }
+                                onOpenPath(pane.id, entry.path, 'file')
+                              }}
+                            >
+                              <span className="browser-row-icon browser-row-drag-handle" draggable onDragStart={(event) => startLocalDrag(event, entry.path)} title={UI.dragHint}>
+                                {entry.isDirectory ? <Folder size={16} /> : <FileText size={16} />}
+                              </span>
+                              <span className="browser-row-label" title={entry.label}>{entry.label}</span>
+                            </div>
                           </div>
                         ))
-                      ) : <div className="panel-placeholder browser-placeholder">{pane.localBrowserLoading ? UI.browseLoading : UI.browseEmpty}</div>}
+                      ) : <div className="panel-placeholder browser-placeholder">{pane.localBrowserLoading ? UI.browseLoading : pane.localWorkspacePath ? UI.emptyFolder : UI.browseEmpty}</div>}
                     </div>
                   </div>
                 </div>
@@ -2233,10 +2265,15 @@ export function TerminalPane({
                     <button type="button" className="primary-button workspace-choose-button remote-connect-button" disabled={!isRemoteConnected || pane.remoteBrowserLoading} onClick={() => onOpenRemoteWorkspacePicker(pane.id)}><FolderOpen size={16} />{UI.chooseRemoteWorkspace}</button>
                   </div>
 
-                  <div className="workspace-current">
-                    <span className="workspace-caption">{UI.currentWorkspace}<span className="required-mark">*</span></span>
+                  <div className="workspace-current workspace-current-compact" aria-label={UI.currentWorkspace}>
+                    <FolderOpen size={16} />
                     <strong>{pane.remoteWorkspacePath ? getShortPathLabel(pane.remoteWorkspacePath) : UI.unselected}</strong>
-                    <span>{pane.remoteWorkspacePath || UI.remoteEmpty}</span>
+                    {pane.remoteWorkspacePath ? (
+                      <>
+                        <span className="workspace-current-divider" aria-hidden="true">/</span>
+                        <span className="workspace-current-path" title={pane.remoteWorkspacePath}>{pane.remoteWorkspacePath}</span>
+                      </>
+                    ) : null}
                   </div>
 
                   <div className={`browser-panel workspace-browser-shell remote-browser-shell ${remoteDropTarget === remoteBaseDropPath ? 'is-drop-active' : ''}`} onDragOver={(event) => { if (remoteBaseDropPath) { allowRemoteDrop(event, remoteBaseDropPath) } }} onDragLeave={clearRemoteDrop} onDrop={(event) => { if (remoteBaseDropPath) { handleRemoteDrop(event, remoteBaseDropPath) } }}>
@@ -2255,16 +2292,41 @@ export function TerminalPane({
                       {pane.remoteWorkspacePath && pane.remoteBrowserEntries.length > 0 ? (
                         pane.remoteBrowserEntries.map((entry) => (
                           <div key={entry.path} className={`browser-entry remote-entry modern-remote-entry ${remoteDropTarget === entry.path ? 'drop-ready' : ''}`} onDragOver={(event) => { if (entry.isDirectory) { allowRemoteDrop(event, entry.path) } }} onDragLeave={clearRemoteDrop} onDrop={(event) => { if (entry.isDirectory) { handleRemoteDrop(event, entry.path) } }}>
-                            <button type="button" className="browser-entry-main browser-entry-button modern-browser-button" onClick={() => entry.isDirectory ? onBrowseRemote(pane.id, entry.path) : onOpenPath(pane.id, entry.path, 'file')}>
+                            <div
+                              className="browser-entry-main modern-browser-button browser-entry-selectable"
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                if (hasActiveTextSelection()) {
+                                  return
+                                }
+                                if (entry.isDirectory) {
+                                  onBrowseRemote(pane.id, entry.path)
+                                  return
+                                }
+                                onOpenPath(pane.id, entry.path, 'file')
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' && event.key !== ' ') {
+                                  return
+                                }
+                                event.preventDefault()
+                                if (entry.isDirectory) {
+                                  onBrowseRemote(pane.id, entry.path)
+                                  return
+                                }
+                                onOpenPath(pane.id, entry.path, 'file')
+                              }}
+                            >
                               {entry.isDirectory ? <Folder size={16} /> : <FileText size={16} />}
-                              <strong>{entry.label}</strong>
-                            </button>
+                              <strong className="browser-entry-label" title={entry.label}>{entry.label}</strong>
+                            </div>
                             <div className="browser-entry-actions">
                               <button type="button" className="ghost-button" onClick={() => onTransferSshPath(pane.id, 'download', { remotePath: entry.path, remoteLabel: entry.label, isDirectory: entry.isDirectory })}>{UI.receive}</button>
                             </div>
                           </div>
                         ))
-                      ) : <div className="panel-placeholder browser-placeholder">{pane.remoteBrowserLoading ? UI.remoteLoading : UI.remoteEmpty}</div>}
+                      ) : <div className="panel-placeholder browser-placeholder">{pane.remoteBrowserLoading ? UI.remoteLoading : pane.remoteWorkspacePath ? UI.emptyFolder : UI.remoteEmpty}</div>}
                     </div>
                   </div>
                 </div>

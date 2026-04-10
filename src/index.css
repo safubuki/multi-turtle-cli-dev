@@ -2496,6 +2496,39 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.workspace-current-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.workspace-current-compact svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.workspace-current-compact strong,
+.workspace-current-path {
+  user-select: text;
+  cursor: text;
+}
+
+.workspace-current-compact strong {
+  min-width: 0;
+}
+
+.workspace-current-divider {
+  color: var(--muted);
+}
+
+.workspace-current-path {
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .workspace-secondary-actions {
   min-height: 0;
 }
@@ -2605,6 +2638,17 @@ textarea {
   color: var(--muted);
   font-size: 0.78rem;
   white-space: nowrap;
+}
+
+.browser-entry-selectable {
+  cursor: pointer;
+  outline: none;
+}
+
+.browser-entry-selectable:focus-visible {
+  box-shadow: 0 0 0 1px rgba(84, 210, 194, 0.45);
+  border-radius: 10px;
+  background: rgba(84, 210, 194, 0.06);
 }
 
 .browser-entry-button {
@@ -3358,7 +3402,7 @@ textarea {
   width: 100%;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
+  align-items: start;
   gap: 10px;
 }
 
@@ -3369,11 +3413,20 @@ textarea {
   color: var(--muted);
 }
 
+.browser-row-drag-handle {
+  cursor: grab;
+}
+
+.browser-row-drag-handle:active {
+  cursor: grabbing;
+}
+
 .browser-row-label {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
 }
 
 .compact-ssh-stack {
@@ -3462,7 +3515,7 @@ textarea {
 
 .modern-remote-entry {
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   padding: 6px 8px;
 }
 
@@ -3483,9 +3536,13 @@ textarea {
 .remote-browser-list-modern .modern-browser-button strong {
   display: block;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.browser-entry-label {
+  user-select: text;
+  cursor: text;
 }
 
 .browser-entry-actions {
@@ -3560,17 +3617,26 @@ textarea {
 }
 
 .browser-toolbar-actions {
-  gap: 10px;
+  gap: 8px;
 }
 
 .browser-toolbar-actions .ghost-button,
-.browser-entry-actions .ghost-button,
-.ssh-key-actions .secondary-button {
-  min-height: 40px;
-  padding: 0 16px;
+.browser-entry-actions .ghost-button {
+  min-height: 34px;
+  padding: 0 12px;
 }
 
 .compact-ghost {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.browser-toolbar-actions .compact-icon-button {
+  width: 34px;
+  height: 34px;
+}
+
+.ssh-key-actions .secondary-button {
   min-height: 40px;
   padding: 0 16px;
 }
