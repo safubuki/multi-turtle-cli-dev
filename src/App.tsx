@@ -1584,18 +1584,27 @@ function isPaneBusyForExecution(pane: Pick<PaneState, 'status' | 'runInProgress'
   return pane.runInProgress || pane.status === 'running' || pane.status === 'updating'
 }
 
+function getPaneVisualStatus(pane: PaneState, now: number): PaneStatus | 'stalled' {
+  if (pane.runInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > STALL_MS) {
+    return 'stalled'
+  }
+
+  return pane.status
+}
+
 function applyBackgroundActionSuccess(pane: PaneState, statusText: string, eventAt: number): PaneState {
   if (isPaneBusyForExecution(pane)) {
     return {
       ...pane,
-      streamEntries: appendStreamEntry(pane.streamEntries, 'system', statusText, eventAt)
+      streamEntries: appendStreamEntry(pane.streamEntries, 'system', statusText, eventAt, pane.provider, pane.model)
     }
   }
 
   return {
     ...pane,
     status: 'idle',
-    statusText,
+    statusText: statusLabel('idle'),
+    streamEntries: appendStreamEntry(pane.streamEntries, 'system', statusText, eventAt, pane.provider, pane.model),
     lastError: null
   }
 }
@@ -1765,11 +1774,20 @@ function normalizePane(
   const persistedLocalWorkspacePath = typeof rawPane.localWorkspacePath === 'string' ? rawPane.localWorkspacePath.trim() : ''
   const localWorkspacePath = persistedLocalWorkspacePath || localWorkspaces[0]?.path || ''
   const rawStatus = rawPane.status ?? 'idle'
+  const rawLastError = typeof rawPane.lastError === 'string' && rawPane.lastError.trim() ? rawPane.lastError : null
+  const hasPersistedRunActivity =
+    typeof rawPane.lastRunAt === 'number' ||
+    typeof rawPane.lastFinishedAt === 'number' ||
+    (Array.isArray(rawPane.logs) && rawPane.logs.some((entry) => entry?.role === 'user' || entry?.role === 'assistant'))
   const restoredStatus: PaneStatus =
-    rawStatus === 'running'
+    rawStatus === 'running' || rawStatus === 'updating'
       ? 'attention'
-      : rawStatus === 'completed' || rawStatus === 'attention' || rawStatus === 'error' || rawStatus === 'updating'
-        ? rawStatus
+    : rawStatus === 'error'
+      ? 'error'
+      : rawStatus === 'completed' && hasPersistedRunActivity
+        ? 'completed'
+        : rawStatus === 'attention' && rawLastError && hasPersistedRunActivity
+          ? 'attention'
         : 'idle'
   const remoteBrowserEntries = Array.isArray(rawPane.remoteBrowserEntries)
     ? rawPane.remoteBrowserEntries
@@ -1778,11 +1796,14 @@ function normalizePane(
     : []
   const rawStatusText = typeof rawPane.statusText === 'string' ? rawPane.statusText : ''
   const statusText =
-    rawStatus === 'running'
+    rawStatus === 'running' || rawStatus === 'updating'
       ? '\u524d\u56de\u306e\u5b9f\u884c\u306f\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f'
-      : rawStatusText.includes('\u5916\u90e8\u30bf\u30fc\u30df\u30ca\u30eb')
+      : restoredStatus === 'idle'
+        ? statusLabel('idle')
+        : rawStatusText.includes('\u5916\u90e8\u30bf\u30fc\u30df\u30ca\u30eb')
         ? statusLabel(restoredStatus)
         : rawStatusText || statusLabel(restoredStatus)
+  const restoredLastError = restoredStatus === 'idle' ? null : rawLastError
 
   return {
     id: rawPane.id ?? createId('pane'),
@@ -1884,7 +1905,7 @@ function normalizePane(
     runningSince: null,
     lastActivityAt: typeof rawPane.lastActivityAt === 'number' ? rawPane.lastActivityAt : null,
     lastFinishedAt: typeof rawPane.lastFinishedAt === 'number' ? rawPane.lastFinishedAt : null,
-    lastError: typeof rawPane.lastError === 'string' ? rawPane.lastError : null,
+    lastError: restoredLastError,
     lastResponse: typeof rawPane.lastResponse === 'string' ? rawPane.lastResponse : null
   }
 }
@@ -2217,17 +2238,16 @@ function App() {
     }
 
     for (const pane of panes) {
-      if (isPaneBusyForExecution(pane)) {
+      const visualStatus = getPaneVisualStatus(pane, now)
+      if (visualStatus === 'running' || visualStatus === 'updating') {
         result.running += 1
-      } else if (pane.status === 'completed') {
+      } else if (visualStatus === 'completed') {
         result.completed += 1
-      } else if (pane.status === 'attention') {
+      } else if (visualStatus === 'attention') {
         result.attention += 1
-      } else if (pane.status === 'error') {
+      } else if (visualStatus === 'error') {
         result.error += 1
-      }
-
-      if (pane.runInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > STALL_MS) {
+      } else if (visualStatus === 'stalled') {
         result.stalled += 1
       }
     }
@@ -5264,7 +5284,8 @@ function App() {
           <div className="pane-matrix">
             {panes.map((pane, index) => {
               const isFocused = pane.id === focusedPaneId
-              const isStalled = pane.runInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > STALL_MS
+              const visualStatus = getPaneVisualStatus(pane, now)
+              const matrixStatus = visualStatus === 'stalled' ? 'attention' : visualStatus
 
               return (
                 <button
@@ -5278,7 +5299,7 @@ function App() {
                   }}
                   type="button"
                   draggable={panes.length > 1}
-                  className={`matrix-tile status-${isStalled ? 'attention' : pane.status} ${isFocused ? 'active' : ''} ${selectedPaneIds.includes(pane.id) ? 'selected' : ''} ${draggedPaneId === pane.id ? 'is-dragging' : ''} ${matrixDropTargetId === pane.id && draggedPaneId !== pane.id ? 'is-drop-target' : ''}`}
+                  className={`matrix-tile status-${matrixStatus} ${isFocused ? 'active' : ''} ${selectedPaneIds.includes(pane.id) ? 'selected' : ''} ${draggedPaneId === pane.id ? 'is-dragging' : ''} ${matrixDropTargetId === pane.id && draggedPaneId !== pane.id ? 'is-drop-target' : ''}`}
                   onClick={(event) => handleMatrixClick(event, pane.id)}
                   onDragStart={(event) => handleMatrixDragStart(event, pane.id)}
                   onDragEnter={(event) => handleMatrixDragEnter(event, pane.id)}

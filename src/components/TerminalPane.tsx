@@ -149,6 +149,9 @@ const UI = {
   outputGeneratingHint: '\u65b0\u3057\u3044\u7d50\u679c\u3092\u3053\u3053\u306b\u8868\u793a\u3057\u307e\u3059\u3002\u56de\u7b54\u307e\u3067\u304a\u5f85\u3061\u304f\u3060\u3055\u3044\u3002',
   outputExpand: '\u51fa\u529b\u3092\u62e1\u5927',
   instruction: 'AI\u6307\u793a\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09',
+  readyForFirstInstruction: '指示または画像を追加してください',
+  readyForNextInstruction: '次の指示または画像を追加してください',
+  stalledStatus: '応答待ちが長くなっています',
   currentRequest: '\u73fe\u5728\u51e6\u7406\u4e2d\u306e\u4f9d\u983c',
   latestRequest: '\u4eca\u56de\u306e\u4f9d\u983c',
   previewCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u78ba\u8a8d',
@@ -292,6 +295,7 @@ const UI = {
 
 const LOCAL_DRAG_MIME = 'application/x-multi-turtle-local-path'
 const REMOTE_PROVIDER_ORDER: ProviderId[] = ['codex', 'copilot', 'gemini']
+const COMPLETED_HEADER_PROMPT_DELAY_MS = 60_000
 function formatClock(timestamp: number | null): string {
   if (!timestamp) {
     return UI.notRun
@@ -1115,6 +1119,25 @@ export function TerminalPane({
   const isRunInProgress = pane.runInProgress
   const isBusy = isRunInProgress || hasRunningStatus || isProviderUpdating
   const isStalled = isRunInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > 120_000
+  const isFreshCompletion = pane.status === 'completed' && pane.lastFinishedAt !== null && now - pane.lastFinishedAt <= COMPLETED_HEADER_PROMPT_DELAY_MS
+  const visualPaneStatus = isStalled ? 'stalled' : pane.status
+  const visualPaneStatusClass = visualPaneStatus === 'stalled' ? 'status-attention status-stalled' : `status-${visualPaneStatus}`
+  const hasPaneRunHistory = Boolean(
+    pane.lastRunAt ||
+    pane.lastFinishedAt ||
+    pane.lastResponse?.trim() ||
+    pane.logs.some((entry) => entry.role === 'user' || entry.role === 'assistant')
+  )
+  const idleHeaderStatusText = hasPaneRunHistory ? UI.readyForNextInstruction : UI.readyForFirstInstruction
+  const headerStatusText = isStalled
+    ? UI.stalledStatus
+    : pane.status === 'completed'
+      ? isFreshCompletion
+        ? pane.statusText
+        : idleHeaderStatusText
+      : pane.status === 'idle'
+        ? idleHeaderStatusText
+        : pane.statusText
   const isPromptImageSupported = pane.provider !== 'copilot'
   const hasUploadingPromptImages = promptImageAttachments.some((attachment) => attachment.status === 'uploading')
   const hasPromptImageErrors = promptImageAttachments.some((attachment) => attachment.status === 'error')
@@ -1658,7 +1681,7 @@ export function TerminalPane({
     <>
       <section
         id={`pane-${pane.id}`}
-        className={`terminal-pane minimal-pane status-${pane.status} ${isStalled ? 'status-stalled' : ''} ${isFocused ? 'is-focused' : ''}`}
+        className={`terminal-pane minimal-pane ${visualPaneStatusClass} ${isFocused ? 'is-focused' : ''}`}
         onMouseDownCapture={() => onFocus(pane.id)}
       >
         <header className="pane-header compact-header">
@@ -1666,7 +1689,7 @@ export function TerminalPane({
             <div className="pane-led" />
             <div className="pane-title-stack">
               <input className="pane-title-input" value={pane.title} onChange={(event) => onUpdate(pane.id, { title: event.target.value })} />
-              <p>{pane.statusText}</p>
+              <p>{headerStatusText}</p>
             </div>
           </div>
 

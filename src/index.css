@@ -534,15 +534,15 @@ select {
 }
 
 .toolbar-status-chip.attention {
-  border-color: rgba(114, 182, 255, 0.24);
-  background: rgba(58, 91, 132, 0.18);
-  color: #d8ebff;
+  border-color: rgba(244, 198, 108, 0.28);
+  background: rgba(122, 86, 38, 0.18);
+  color: #ffe2a9;
 }
 
 .toolbar-status-chip.issue {
-  border-color: rgba(244, 198, 108, 0.24);
-  background: rgba(122, 86, 38, 0.18);
-  color: #ffe0a6;
+  border-color: rgba(255, 127, 127, 0.3);
+  background: rgba(134, 44, 48, 0.2);
+  color: #ffd5d5;
 }
 
 .pane-matrix {
