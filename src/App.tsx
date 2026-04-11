@@ -97,7 +97,7 @@ const STORAGE_KEYS = {
   focusedPane: 'multi-turtle-cli-dev/focused-pane-v2'
 } as const
 const MAX_LOGS = 24
-const MAX_STREAM_ENTRIES = 80
+const MAX_STREAM_ENTRIES = 240
 const MAX_SESSION_HISTORY = 18
 const MAX_SESSION_LABEL_LENGTH = 40
 const MAX_LIVE_OUTPUT = 64_000
@@ -727,7 +727,7 @@ function appendStreamEntry(
     return entries
   }
 
-  const clipped = clipText(normalized, 2_000)
+  const clipped = clipText(normalized, 4_000)
   const lastEntry = entries.at(-1)
   if (
     lastEntry &&
@@ -1213,18 +1213,19 @@ function getProviderResumeSession(pane: PaneState, provider: ProviderId, scopeKe
   return null
 }
 
-function selectUnsyncedProviderMemory(pane: PaneState, provider: ProviderId): PaneLogEntry[] {
+function selectPaneContextMemory(pane: PaneState, provider: ProviderId): PaneLogEntry[] {
+  const conversationEntries = pane.logs.filter((entry) => entry.role === 'user' || entry.role === 'assistant')
   const providerSession = pane.providerSessions[provider]
   const lastSharedLogEntryId = providerSession?.lastSharedLogEntryId
   const lastSharedIndex = lastSharedLogEntryId ? pane.logs.findIndex((entry) => entry.id === lastSharedLogEntryId) : -1
   const unsyncedEntries = lastSharedIndex >= 0 ? pane.logs.slice(lastSharedIndex + 1) : pane.logs
-  if (unsyncedEntries.length === 0) {
-    return []
+  const unsyncedConversationEntries = unsyncedEntries.filter((entry) => entry.role === 'user' || entry.role === 'assistant')
+
+  if (unsyncedConversationEntries.length > 0) {
+    return unsyncedConversationEntries.slice(-4)
   }
 
-  const latestUser = [...unsyncedEntries].reverse().find((entry) => entry.role === 'user') ?? null
-  const latestAssistant = [...unsyncedEntries].reverse().find((entry) => entry.role === 'assistant') ?? null
-  return unsyncedEntries.filter((entry) => entry.id === latestUser?.id || entry.id === latestAssistant?.id).slice(-2)
+  return conversationEntries.slice(-2)
 }
 
 function formatPreviewTimestamp(timestamp: number): string {
@@ -1279,7 +1280,7 @@ function formatPreviewImageAttachments(attachments: RunImageAttachment[]): strin
   ].join('\n')).join('\n\n---\n\n')
 }
 
-function buildCommandPreviewSections(params: {
+function buildStructuredRunContextSections(params: {
   catalogs: Record<ProviderId, ProviderCatalogResponse>
   pane: PaneState
   target: WorkspaceTarget
@@ -1289,7 +1290,6 @@ function buildCommandPreviewSections(params: {
   providerContextMemory: PaneLogEntry[]
   sharedContextPayload: SharedContextPayload[]
   readyImageAttachments: RunImageAttachment[]
-  preview: PreviewRunCommandResponse
 }): CommandPreviewSection[] {
   const catalog = params.catalogs[params.pane.provider]
   const modelInfo = catalog.models.find((item) => item.id === params.pane.model)
@@ -1333,7 +1333,9 @@ function buildCommandPreviewSections(params: {
     {
       id: 'session',
       label: 'native session',
-      description: '同じペイン・同じCLIで再利用するCLI内部sessionです。sessionIdが空なら新規sessionとして開始します。',
+      description: params.resumeSessionId
+        ? '同じペイン・同じCLIで再利用するCLI内部sessionです。'
+        : '再利用できるCLI内部sessionがないため、新規sessionとして開始します。',
       value: [
         `sessionId: ${params.resumeSessionId ?? '(新規)'}`,
         `sessionScopeKey: ${params.currentSessionScopeKey}`
@@ -1343,12 +1345,12 @@ function buildCommandPreviewSections(params: {
       id: 'user-input',
       label: 'ユーザー入力',
       description: '入力欄にある本文です。補助コンテキストとは分けて扱います。',
-      value: params.promptText
+      value: params.promptText || '未入力'
     },
     {
       id: 'pane-context',
       label: '同一ペイン補助コンテキスト',
-      description: 'CLI切り替えで未同期の会話がある場合だけ渡す、直近の会話情報です。ユーザー入力より優先しません。',
+      description: 'このペイン内の直近会話情報です。CLI切り替え時は未同期差分を優先し、同じCLIで続ける時も直近会話を小さく渡します。ユーザー入力の意味は変えません。',
       value: formatPreviewLogEntries(params.providerContextMemory)
     },
     {
@@ -1362,7 +1364,24 @@ function buildCommandPreviewSections(params: {
       label: '添付画像',
       description: '今回CLIに渡す画像ファイルです。',
       value: formatPreviewImageAttachments(params.readyImageAttachments)
-    },
+    }
+  ]
+}
+
+function buildCommandPreviewSections(params: {
+  catalogs: Record<ProviderId, ProviderCatalogResponse>
+  pane: PaneState
+  target: WorkspaceTarget
+  promptText: string
+  currentSessionScopeKey: string
+  resumeSessionId: string | null
+  providerContextMemory: PaneLogEntry[]
+  sharedContextPayload: SharedContextPayload[]
+  readyImageAttachments: RunImageAttachment[]
+  preview: PreviewRunCommandResponse
+}): CommandPreviewSection[] {
+  return [
+    ...buildStructuredRunContextSections(params),
     {
       id: 'stdin',
       label: '標準入力で渡す内容',
@@ -1370,6 +1389,18 @@ function buildCommandPreviewSections(params: {
       value: params.preview.stdinPrompt ?? '標準入力では渡しません。'
     }
   ]
+}
+
+function formatStructuredRunContextForStream(sections: CommandPreviewSection[]): string {
+  return [
+    '送信情報',
+    'これからCLIに渡す主要情報です。ユーザー入力本文と補助コンテキストは分けて扱います。',
+    ...sections.map((section) => [
+      `## ${section.label}`,
+      section.description,
+      clipText(section.value || '未入力', 900)
+    ].join('\n'))
+  ].join('\n\n')
 }
 
 function createInitialPane(index: number, payload: BootstrapPayload, localWorkspaces: LocalWorkspace[]): PaneState {
@@ -2509,13 +2540,14 @@ function App() {
       clearPanePromptImages(paneId)
     }
 
+    const changedAt = Date.now()
     mutatePane(paneId, (currentPane) => {
       const previousProvider = currentPane.provider
       const savedPane = syncCurrentProviderSettings(
         updateProviderSessionState(currentPane, previousProvider, {
           sessionId: currentPane.sessionId,
           sessionScopeKey: currentPane.sessionScopeKey,
-          updatedAt: Date.now()
+          updatedAt: changedAt
         })
       )
       const candidatePane = {
@@ -2527,13 +2559,26 @@ function App() {
         codexFastMode: provider === 'codex' ? nextSettings.codexFastMode : 'off'
       }
       const nextSessionScopeKey = buildPaneSessionScopeKey(candidatePane)
+      const providerContextMemory = selectPaneContextMemory(savedPane, provider)
       const nextSessionId = getProviderResumeSession(savedPane, provider, nextSessionScopeKey)
+      const previousProviderLabel = bootstrap.providers[previousProvider]?.label ?? previousProvider
+      const nextProviderLabel = bootstrap.providers[provider]?.label ?? provider
+      const switchLog = [
+        `CLI切り替え: ${previousProviderLabel} -> ${nextProviderLabel}`,
+        `モデル: ${nextSettings.model}`,
+        nextSessionId
+          ? `native session: 再利用 (${nextSessionId})`
+          : providerContextMemory.length > 0
+            ? `native session: 新規（同一ペイン補助コンテキスト ${providerContextMemory.length}件を付与）`
+            : 'native session: 新規'
+      ].join('\n')
 
       return syncCurrentProviderSettings({
         ...candidatePane,
         sessionId: nextSessionId,
         sessionScopeKey: nextSessionId ? nextSessionScopeKey : null,
         selectedSessionKey: null,
+        streamEntries: appendStreamEntry(candidatePane.streamEntries, 'system', switchLog, changedAt, provider, nextSettings.model),
         ...(provider === 'copilot' && hasPromptImages
           ? {
               status: 'attention' as const,
@@ -3068,7 +3113,7 @@ function App() {
     }
   }
 
-  const preparePaneRunPayload = (paneId: string, promptOverride?: string) => {
+  const preparePaneRunPayload = (paneId: string, promptOverride?: string, options: { allowEmptyPrompt?: boolean } = {}) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
     if (!pane) {
       return { ok: false as const, error: "\u30da\u30a4\u30f3\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002" }
@@ -3086,7 +3131,7 @@ function App() {
 
     const promptImages = paneImageAttachmentsRef.current[paneId] ?? []
     const promptText = (promptOverride ?? pane.prompt).trim() || (promptImages.length > 0 ? "\u6dfb\u4ed8\u753b\u50cf\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002" : "")
-    if (!promptText) {
+    if (!promptText && !options.allowEmptyPrompt) {
       updatePane(paneId, {
         status: 'attention',
         statusText: "\u6307\u793a\u307e\u305f\u306f\u753b\u50cf\u3092\u8ffd\u52a0\u3057\u3066\u304f\u3060\u3055\u3044",
@@ -3146,8 +3191,8 @@ function App() {
 
     const requestText = buildPromptWithImageSummary(promptText, readyImageAttachments)
     const currentSessionScopeKey = buildPaneSessionScopeKey(pane)
+    const providerContextMemory = selectPaneContextMemory(pane, pane.provider)
     const resumeSessionId = getProviderResumeSession(pane, pane.provider, currentSessionScopeKey)
-    const providerContextMemory = selectUnsyncedProviderMemory(pane, pane.provider)
     const attachedContext = sharedContextRef.current.filter((item) => pane.attachedContextIds.includes(item.id))
     const consumedContextIds = attachedContext.map((item) => item.id)
     const sharedContextPayload = attachedContext.map((item) => ({
@@ -3178,7 +3223,7 @@ function App() {
       throw new Error('アプリの初期化が完了していません。')
     }
 
-    const prepared = preparePaneRunPayload(paneId, promptOverride)
+    const prepared = preparePaneRunPayload(paneId, promptOverride, { allowEmptyPrompt: true })
     if (!prepared.ok) {
       throw new Error(prepared.error)
     }
@@ -3250,6 +3295,21 @@ function App() {
 
     const memory = providerContextMemory
     const controller = new AbortController()
+    const runContextText = bootstrap
+      ? formatStructuredRunContextForStream(
+          buildStructuredRunContextSections({
+            catalogs: bootstrap.providers,
+            pane,
+            target,
+            promptText: prompt,
+            currentSessionScopeKey,
+            resumeSessionId,
+            providerContextMemory,
+            sharedContextPayload,
+            readyImageAttachments
+          })
+        )
+      : ''
 
     controllersRef.current[paneId] = controller
     stopRequestedRef.current.delete(paneId)
@@ -3286,6 +3346,18 @@ function App() {
 
     mutatePane(paneId, (currentPane) => {
       const nextLogs = appendLogEntry(currentPane.logs, userEntry)
+      const startStreamEntries = appendStreamEntry(
+        currentPane.streamEntries,
+        "system",
+        `\u958b\u59cb: ${currentPane.provider} / ${target.label}`,
+        startedAt,
+        currentPane.provider,
+        currentPane.model
+      )
+      const nextStreamEntries = runContextText
+        ? appendStreamEntry(startStreamEntries, "system", runContextText, startedAt + 1, currentPane.provider, currentPane.model)
+        : startStreamEntries
+
       return updateProviderSessionState({
         ...currentPane,
         prompt: "",
@@ -3307,7 +3379,7 @@ function App() {
         stopRequested: false,
         stopRequestAvailable: true,
         attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
-        streamEntries: appendStreamEntry([], "system", `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt, currentPane.provider, currentPane.model)
+        streamEntries: nextStreamEntries
       }, currentPane.provider, {
         sessionId: resumeSessionId,
         sessionScopeKey: currentSessionScopeKey,

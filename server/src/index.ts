@@ -113,8 +113,20 @@ function buildCombinedPrompt(body: RunRequestBody): string {
     sections.push(
       [
         'Pane Context',
-        'Reference only. The user request below takes priority.',
-        ...body.memory.slice(-4).map((entry, index) => `Entry ${index + 1} (${entry.role})\n${entry.text.slice(0, 4_000)}`)
+        'Reference only. This is the recent conversation context in the same pane of this tool.',
+        'Use it as the primary conversation context when relevant, including references such as "上記", "先ほど", "this issue", or "above".',
+        'Do not reinterpret or expand the user request. If the user request below is self-contained or conflicts with this context, the user request below takes priority.',
+        'Do not derive context from unrelated CLI memory, global history, or guessed repository topics.',
+        ...body.memory.slice(-4).map((entry, index) => {
+          const source = [entry.provider, entry.model].filter(Boolean).join(' / ')
+          const createdAt = typeof entry.createdAt === 'number' ? new Date(entry.createdAt).toISOString() : ''
+          return [
+            `Entry ${index + 1} (${entry.role})`,
+            source ? `CLI: ${source}` : '',
+            createdAt ? `createdAt: ${createdAt}` : '',
+            entry.text.slice(0, 4_000)
+          ].filter(Boolean).join('\n')
+        })
       ].join('\n')
     )
   }
@@ -142,12 +154,18 @@ function buildCombinedPrompt(body: RunRequestBody): string {
     )
   }
 
-  sections.push(body.prompt)
+  if (body.prompt.trim()) {
+    sections.push(body.prompt)
+  }
   return sections.join('\n\n')
 }
 
 function isValidRunRequest(body: Partial<RunRequestBody> | null | undefined): body is RunRequestBody {
   return Boolean(body?.paneId && body.provider && body.model && body.target && body.prompt?.trim())
+}
+
+function isValidPreviewRunRequest(body: Partial<RunRequestBody> | null | undefined): body is RunRequestBody {
+  return Boolean(body?.paneId && body.provider && body.model && body.target && typeof body.prompt === 'string')
 }
 
 function normalizeRunRequestBody(rawBody: Partial<RunRequestBody>): RunRequestBody {
@@ -806,7 +824,7 @@ app.post('/api/shell/stop', (req, res) => {
 
 app.post('/api/run/preview-command', async (req, res) => {
   const rawBody = req.body as Partial<RunRequestBody>
-  if (!isValidRunRequest(rawBody)) {
+  if (!isValidPreviewRunRequest(rawBody)) {
     res.status(400).json({
       success: false,
       error: 'invalid run request'

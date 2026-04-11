@@ -121,6 +121,9 @@ export type WorkspaceTarget =
 export interface MemoryEntry {
   role: 'user' | 'assistant' | 'system'
   text: string
+  createdAt?: number
+  provider?: ProviderId
+  model?: string
 }
 
 export interface SharedContextPayload {
