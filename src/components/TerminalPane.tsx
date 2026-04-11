@@ -345,15 +345,6 @@ function getOutputText(pane: PaneState): string {
   return ''
 }
 
-function summarizePromptPreview(text: string, maxLength = 150): string {
-  const normalized = text.replace(/\s+/g, ' ').trim()
-  if (normalized.length <= maxLength) {
-    return normalized
-  }
-
-  return `${normalized.slice(0, maxLength).trimEnd()}...`
-}
-
 function getConversationEntryLabel(entry: PaneLogEntry, provider: ProviderId): string {
   return entry.role === 'assistant' ? entry.provider ?? provider : entry.role
 }
@@ -1158,7 +1149,6 @@ export function TerminalPane({
   const shouldCollapseCurrentRequest = currentRequestText.split(/\r?\n/).length > 5 || currentRequestText.length > 280
   const hasCurrentRequest = currentRequestText.length > 0
   const requestLabel = isRunInProgress ? UI.currentRequest : UI.latestRequest
-  const requestPreview = hasCurrentRequest ? summarizePromptPreview(currentRequestText) : ''
   const isWaitingForFreshOutput = isRunInProgress && !hasOutput
   const canOfferStop = isRunInProgress || pane.stopRequestAvailable || pane.stopRequested
   const runningHintText = pane.stopRequested
@@ -1823,7 +1813,6 @@ export function TerminalPane({
                     <LoaderCircle size={16} className="spin" />
                     <strong>{UI.outputGenerating}</strong>
                   </div>
-                  {hasCurrentRequest ? <p className="output-loading-request">{`${UI.outputForRequest}: ${requestPreview}`}</p> : null}
                   <p className="output-loading-copy">{UI.outputGeneratingHint}</p>
                   <div className="output-loading-bars" aria-hidden="true">
                     <span />
