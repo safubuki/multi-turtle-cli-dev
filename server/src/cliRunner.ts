@@ -23,7 +23,6 @@ interface RunOptions {
   reasoningEffort: ReasoningEffort
   autonomyMode: AutonomyMode
   codexFastMode: CodexFastMode
-  codexExecutionMode?: 'sandboxed' | 'danger-full-access'
   sessionId: string | null
   target: WorkspaceTarget
   imageAttachments: RunImageAttachment[]
@@ -44,11 +43,16 @@ interface ParsedRunState {
   stderrText: string
 }
 
+interface RunStatusAssessment {
+  statusHint: CliExecResult['statusHint']
+  warningMessage: string | null
+  warningStatusText: string | null
+}
+
 const REMOTE_CAPTURE_BEGIN = '__TAKO_REMOTE_CAPTURE_BEGIN__'
 const REMOTE_CAPTURE_END = '__TAKO_REMOTE_CAPTURE_END__'
 const REMOTE_CODEX_OUTPUT_PLACEHOLDER = '__TAKO_REMOTE_CODEX_OUTPUT__'
 const REMOTE_PREVIEW_IMAGE_DIR = '/tmp/multi-turtle-images-preview'
-const CODEX_SANDBOX_RETRY_NOTICE = 'Codex の sandbox 初期化に失敗したため、この実行だけ sandbox なしで再試行します。'
 
 interface ResolvedRunImageAttachment {
   fileName: string
@@ -99,36 +103,19 @@ function sanitizeSessionId(sessionId: string | null | undefined): string | null 
   return normalized
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message
+function buildCodexModeArgs(autonomyMode: AutonomyMode): string[] {
+  return autonomyMode === 'max'
+    ? ['--dangerously-bypass-approvals-and-sandbox']
+    : ['--full-auto']
+}
+
+function appendCodexPreviewNotes(notes: string[], autonomyMode: AutonomyMode): void {
+  if (autonomyMode === 'max') {
+    notes.push('Codex は --dangerously-bypass-approvals-and-sandbox で実行します。workspace 外の書き込みや、workspace 直下の .agents / .codex / .git への変更も許可されます。実行内容を十分確認してください。')
+    return
   }
 
-  return String(error)
-}
-
-function isCodexSandboxStartupFailure(message: string): boolean {
-  const normalized = message.toLowerCase()
-  return normalized.includes('bwrap:') ||
-    normalized.includes('bubblewrap') ||
-    (normalized.includes('windows sandbox') && normalized.includes('createprocessasuserw failed')) ||
-    normalized.includes('failed rtm_newaddr') ||
-    (normalized.includes('loopback') && normalized.includes('operation not permitted')) ||
-    (normalized.includes('sandbox') && normalized.includes('operation not permitted'))
-}
-
-function isLikelyFileWriteRequest(prompt: string): boolean {
-  const normalized = prompt.toLowerCase()
-  return /\.md\b|write|save|create file|output to file|markdown|書き込|保存|作成|出力|ファイル|そのまま入れて/.test(normalized)
-}
-
-function isCodexSandboxFailureResponse(response: string): boolean {
-  const normalized = response.toLowerCase()
-  return isCodexSandboxStartupFailure(normalized) ||
-    normalized.includes('サンドボックス制約') ||
-    normalized.includes('書き込みを実行できませんでした') ||
-    normalized.includes('作成できていません') ||
-    normalized.includes('operation not permitted')
+  notes.push('Codex は --full-auto で実行します。標準モードでは workspace-write sandbox が有効になり、workspace 直下の .agents / .codex / .git は保護されます。これらのパスでは writing outside of the project や Access is denied が出ることがあります。')
 }
 
 function buildCodexExecArgs(
@@ -136,19 +123,15 @@ function buildCodexExecArgs(
   model: string,
   outputFilePath: string,
   resolvedSessionId: string | null,
-  executionMode: 'sandboxed' | 'danger-full-access',
-  imagePaths: string[]
+  imagePaths: string[],
+  autonomyMode: AutonomyMode
 ): string[] {
-  const sandboxArgs = executionMode === 'danger-full-access'
-    ? ['--dangerously-bypass-approvals-and-sandbox']
-    : ['--full-auto']
-
   return resolvedSessionId
     ? [
         ...prefixArgs,
         'exec',
         '--json',
-        ...sandboxArgs,
+        ...buildCodexModeArgs(autonomyMode),
         '--skip-git-repo-check',
         '-o',
         outputFilePath,
@@ -163,7 +146,7 @@ function buildCodexExecArgs(
         ...prefixArgs,
         'exec',
         '--json',
-        ...sandboxArgs,
+      ...buildCodexModeArgs(autonomyMode),
         '--skip-git-repo-check',
         '-o',
         outputFilePath,
@@ -199,6 +182,32 @@ function chooseDecodedText(utf8Text: string, shiftJisText: string): string {
   }
 
   return utf8Text
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+}
+
+function getMeaningfulStderrLines(stderrText: string): string[] {
+  return stderrText
+    .replace(/\r/g, '\n')
+    .split(/\n+/)
+    .map((line) => stripAnsi(line).trim())
+    .filter(Boolean)
+    .filter((line) => !/^[\[\](){}<>\-=_.,:;|\\/]+$/.test(line))
+}
+
+function hasMeaningfulStderr(stderrText: string): boolean {
+  const lines = getMeaningfulStderrLines(stderrText)
+  if (lines.length === 0) {
+    return false
+  }
+
+  if (lines.length >= 2) {
+    return true
+  }
+
+  return /warn|error|fail|denied|refus|not allowed|exception|traceback|permission|blocked|access|fatal|quota|limit|timeout|timed out|plan mode|rejected|unauthorized|cannot|can't|enoent|eperm|eacces|no such/i.test(lines[0]) || lines[0].length >= 48
 }
 
 function createBufferDecoder(encoding: CliEncoding) {
@@ -583,23 +592,49 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
   emitIfText(onEvent, 'status', JSON.stringify(parsed))
 }
 
-function classifyStatus(response: string, stderrText: string): CliExecResult['statusHint'] {
+function classifyStatus(response: string, stderrText: string): RunStatusAssessment {
   const normalizedResponse = response.toLowerCase()
   const normalizedStderr = stderrText.toLowerCase()
+  const genericWarningMessage = '標準エラー出力がありました。Run Log を確認してください。'
+  const genericWarningStatusText = 'ログ確認が必要です'
 
   if (/approval|approve|continue\?|yes\/no|which one|choose|select|confirm|confirmation required|need your input/.test(normalizedResponse)) {
-    return 'attention'
+    return {
+      statusHint: 'attention',
+      warningMessage: 'CLI が追加の確認を求めています。Run Log を確認してください。',
+      warningStatusText: '確認待ちです'
+    }
   }
 
   if (/tool execution denied by policy|you are in plan mode and cannot modify source code|may only use write_file or replace to save plans/.test(normalizedStderr)) {
-    return 'attention'
+    return {
+      statusHint: 'attention',
+      warningMessage: genericWarningMessage,
+      warningStatusText: genericWarningStatusText
+    }
   }
 
   if (!normalizedResponse.trim() && /permission denied|fatal:|traceback|exception|failed|error:|not found|enoent/.test(normalizedStderr) && !/no error/.test(normalizedStderr)) {
-    return 'error'
+    return {
+      statusHint: 'error',
+      warningMessage: null,
+      warningStatusText: null
+    }
   }
 
-  return 'completed'
+  if (hasMeaningfulStderr(stderrText)) {
+    return {
+      statusHint: 'attention',
+      warningMessage: genericWarningMessage,
+      warningStatusText: genericWarningStatusText
+    }
+  }
+
+  return {
+    statusHint: 'completed',
+    warningMessage: null,
+    warningStatusText: null
+  }
 }
 
 async function modelSupportsReasoning(provider: ProviderId, model: string): Promise<boolean> {
@@ -919,8 +954,8 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
       options.model,
       outputFilePath,
       resolvedSessionId,
-      options.codexExecutionMode ?? 'sandboxed',
-      resolvedImageAttachments.map((attachment) => attachment.path)
+      resolvedImageAttachments.map((attachment) => attachment.path),
+      options.autonomyMode
     )
 
     return {
@@ -1012,8 +1047,8 @@ async function buildRemoteLaunchSpecFromResolved(
           options.model,
           REMOTE_CODEX_OUTPUT_PLACEHOLDER,
           resolvedSessionId,
-          options.codexExecutionMode ?? 'sandboxed',
-          preparedRemoteImages.attachments.map((attachment) => attachment.path)
+          preparedRemoteImages.attachments.map((attachment) => attachment.path),
+          options.autonomyMode
         )
       : options.provider === 'gemini'
         ? [
@@ -1249,10 +1284,13 @@ function createActiveRun(
         return
       }
 
+      const statusAssessment = classifyStatus(response, state.stderrText)
       const result: CliExecResult = {
         response,
-        statusHint: classifyStatus(response, state.stderrText),
-        sessionId: sanitizeSessionId(state.sessionId)
+        statusHint: statusAssessment.statusHint,
+        sessionId: sanitizeSessionId(state.sessionId),
+        warningMessage: statusAssessment.warningMessage,
+        warningStatusText: statusAssessment.warningStatusText
       }
 
       resolve(result)
@@ -1292,6 +1330,9 @@ export async function previewCliRunCommand(options: RunOptions): Promise<{
     if (launchSpec.stdinPrompt) {
       notes.push('Codex CLI \u3067\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u672c\u4f53\u3092\u6a19\u6e96\u5165\u529b\u3067\u6e21\u3057\u307e\u3059\u3002')
     }
+    if (options.provider === 'codex') {
+      appendCodexPreviewNotes(notes, options.autonomyMode)
+    }
 
     return {
       commandLine: buildPreviewCommandLine(launchSpec.command, launchSpec.args),
@@ -1307,6 +1348,9 @@ export async function previewCliRunCommand(options: RunOptions): Promise<{
   const launchSpec = await buildRemoteLaunchSpecFromResolved(options, previewRemoteImages)
   if (launchSpec.stdinPrompt) {
     notes.push('Codex CLI \u3067\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u672c\u4f53\u3092\u6a19\u6e96\u5165\u529b\u3067\u6e21\u3057\u307e\u3059\u3002')
+  }
+  if (options.provider === 'codex') {
+    appendCodexPreviewNotes(notes, options.autonomyMode)
   }
   if (previewRemoteImages.attachments.length > 0) {
     notes.push('\u30ea\u30e2\u30fc\u30c8\u753b\u50cf\u306f\u5b9f\u884c\u6642\u306b\u4e00\u6642\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\u3078\u8ee2\u9001\u3055\u308c\u308b\u305f\u3081\u3001\u30d7\u30ec\u30d3\u30e5\u30fc\u3067\u306f\u4ee3\u8868\u30d1\u30b9\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059\u3002')
@@ -1342,61 +1386,7 @@ async function startSingleCliRun(options: RunOptions): Promise<ActiveCliRun> {
 }
 
 export async function startCliRun(options: RunOptions): Promise<ActiveCliRun> {
-  const initialRun = await startSingleCliRun({
-    ...options,
-    codexExecutionMode: options.codexExecutionMode ?? 'sandboxed'
-  })
-
-  if (options.provider !== 'codex') {
-    return initialRun
-  }
-
-  let currentRun = initialRun
-  let stopped = false
-
-  const retryWithoutSandbox = async (): Promise<CliExecResult> => {
-    options.onEvent?.({
-      type: 'status',
-      text: CODEX_SANDBOX_RETRY_NOTICE
-    })
-
-    const retryRun = await startSingleCliRun({
-      ...options,
-      codexExecutionMode: 'danger-full-access'
-    })
-    currentRun = retryRun
-
-    if (stopped) {
-      retryRun.stop()
-      throw new Error('CLI run stopped')
-    }
-
-    return retryRun.promise
-  }
-
-  return {
-    promise: (async () => {
-      try {
-        const result = await initialRun.promise
-        if (!stopped && isLikelyFileWriteRequest(options.prompt) && isCodexSandboxFailureResponse(result.response)) {
-          return retryWithoutSandbox()
-        }
-
-        return result
-      } catch (error) {
-        const message = getErrorMessage(error)
-        if (stopped || !isCodexSandboxStartupFailure(message)) {
-          throw error
-        }
-
-        return retryWithoutSandbox()
-      }
-    })(),
-    stop: () => {
-      stopped = true
-      currentRun.stop()
-    }
-  }
+  return startSingleCliRun(options)
 }
 
 

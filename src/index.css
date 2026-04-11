@@ -709,6 +709,33 @@ select {
   color: var(--muted);
 }
 
+.pane-header-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  border: 1px solid rgba(244, 198, 108, 0.28);
+  background: rgba(244, 198, 108, 0.1);
+  color: rgba(255, 231, 183, 0.96);
+}
+
+.pane-header-notice.is-error {
+  border-color: rgba(255, 127, 127, 0.3);
+  background: rgba(255, 127, 127, 0.12);
+  color: rgba(255, 220, 220, 0.98);
+}
+
+.pane-header-notice span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .pane-title-input {
   display: block;
   border: 1px solid transparent;

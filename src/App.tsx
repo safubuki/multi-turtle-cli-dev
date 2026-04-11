@@ -41,6 +41,7 @@ import {
   transferSshPath,
 } from './lib/api'
 import type {
+  AutonomyMode,
   BootstrapPayload,
   CommandPreviewSection,
   LocalSshKey,
@@ -855,7 +856,9 @@ function extractGeminiQuotaResetWindow(message: string): string | null {
   return match?.[1]?.trim() || null
 }
 
-function getProviderIssueSummary(provider: ProviderId, message: string): { displayMessage: string; status: PaneStatus; statusText: string } | null {
+function getProviderIssueSummary(provider: ProviderId, message: string, autonomyMode?: AutonomyMode): { displayMessage: string; status: PaneStatus; statusText: string } | null {
+  const codexCanEscalate = provider === 'codex' && autonomyMode !== 'max'
+
   if (
     provider === 'gemini' &&
     /exhausted your capacity on this model|quota will reset after|resource_exhausted|too many requests/i.test(message)
@@ -878,6 +881,33 @@ function getProviderIssueSummary(provider: ProviderId, message: string): { displ
       displayMessage: 'Gemini CLI が Plan Mode に入り、ソースコード変更が拒否されました。現状の設定では調査計画までは進めても、実ファイル編集に移れないことがあります。編集を確実に進めるなら Codex CLI を使うか、Gemini 側で Plan Mode に落ちない実行設定が必要です。',
       status: 'attention',
       statusText: 'Gemini が Plan Mode で停止しました'
+    }
+  }
+
+  if (
+    provider === 'codex' &&
+    /writing outside of the project; rejected by user approval settings|writing is blocked by read-only sandbox; rejected by user approval settings|patch rejected:\s*writing outside of the project/i.test(message)
+  ) {
+    return {
+      displayMessage: codexCanEscalate
+        ? 'Codex の標準モードでは workspace 直下の .agents / .codex / .git が保護されます。この種の編集は VS Code で対象ワークスペースを開いて進めてください。'
+        : 'Codex は workspace 外か保護対象ディレクトリへの書き込みを拒否しました。.agents / .codex / .git の編集は VS Code へ切り替え、制限なしでも失敗する場合は対象パスや OS 権限を確認してください。',
+      status: 'attention',
+      statusText: 'Codex が保護パスを書き込めません'
+    }
+  }
+
+  if (
+    provider === 'codex' &&
+    /access is denied|unauthorizedaccessexception|アクセスが拒否されました/i.test(message) &&
+    /\.agents|\.codex|\.git/i.test(message)
+  ) {
+    return {
+      displayMessage: codexCanEscalate
+        ? 'Windows 上の Codex 標準モードでは .agents / .codex / .git が保護され、Access is denied と見えることがあります。この種の編集は VS Code で対象ワークスペースを開いて進めてください。'
+        : 'Windows が対象パスへの書き込みを拒否しました。.agents / .codex / .git の編集は VS Code に切り替え、なお失敗する場合は ACL や属性を確認してください。',
+      status: 'attention',
+      statusText: 'Windows が書き込みを拒否しました'
     }
   }
 
@@ -2905,7 +2935,10 @@ function App() {
       const kind = event.type === 'status' ? 'status' : event.type === 'tool' ? 'tool' : 'stderr'
       const normalizedText = sanitizeTerminalText(event.text).trim()
       mutatePane(paneId, (pane) => {
-        const issueSummary = event.type === 'stderr' ? getProviderIssueSummary(pane.provider, normalizedText) : null
+        const issueSummary = event.type === 'stderr' ? getProviderIssueSummary(pane.provider, normalizedText, pane.autonomyMode) : null
+        const nextStreamEntries = issueSummary && !pane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
+          ? appendStreamEntry(appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt, pane.provider, pane.model), 'system', issueSummary.displayMessage, eventAt, pane.provider, pane.model)
+          : appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt, pane.provider, pane.model)
 
         return {
           ...pane,
@@ -2913,11 +2946,9 @@ function App() {
           lastActivityAt: eventAt,
           runInProgress: shouldKeepRunning ? true : pane.runInProgress,
           runningSince: shouldKeepRunning ? pane.runningSince ?? eventAt : pane.runningSince,
-          statusText: shouldKeepRunning ? '\u5b9f\u884c\u4e2d' : pane.statusText,
-          streamEntries:
-            issueSummary && !pane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
-              ? appendStreamEntry(appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt, pane.provider, pane.model), 'system', issueSummary.displayMessage, eventAt, pane.provider, pane.model)
-              : appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt, pane.provider, pane.model)
+          statusText: issueSummary?.statusText ?? pane.statusText,
+          lastError: issueSummary?.displayMessage ?? pane.lastError,
+          streamEntries: nextStreamEntries
         }
       })
       return
@@ -2953,21 +2984,30 @@ function App() {
         pendingShareGlobal = pane.pendingShareGlobal
         pendingShareTargetIds = pane.pendingShareTargetIds.filter((item) => item !== pane.id)
         const nextLogs = appendLogEntry(pane.logs, assistantEntry)
-        const nextStreamEntries = appendStreamEntry(pane.streamEntries, 'system', `\u7d50\u679c: ${statusLabel(event.statusHint)}`, eventAt, pane.provider, pane.model)
+        const warningMessage = typeof event.warningMessage === 'string' && event.warningMessage.trim() ? event.warningMessage.trim() : null
+        const warningStatusText = typeof event.warningStatusText === 'string' && event.warningStatusText.trim() ? event.warningStatusText.trim() : null
+        const streamEntriesWithWarning = warningMessage && !pane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === warningMessage)
+          ? appendStreamEntry(pane.streamEntries, 'system', warningMessage, eventAt, pane.provider, pane.model)
+          : pane.streamEntries
+        const nextStreamEntries = appendStreamEntry(streamEntriesWithWarning, 'system', `\u7d50\u679c: ${statusLabel(event.statusHint)}`, eventAt, pane.provider, pane.model)
         const nextSessionId = event.sessionId ?? pane.sessionId
         const nextSessionScopeKey = buildPaneSessionScopeKey(pane)
         return updateProviderSessionState({
           ...pane,
           logs: nextLogs,
           status: event.statusHint,
-          statusText: statusLabel(event.statusHint),
+          statusText: event.statusHint === 'attention'
+            ? warningStatusText ?? (pane.lastError ? pane.statusText : statusLabel('attention'))
+            : statusLabel(event.statusHint),
           runInProgress: false,
           runningSince: null,
           stopRequested: false,
           stopRequestAvailable: false,
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
-          lastError: event.statusHint === 'error' ? '\u51e6\u7406\u304c\u30a8\u30e9\u30fc\u3067\u7d42\u4e86\u3057\u307e\u3057\u305f' : null,
+          lastError: event.statusHint === 'error'
+            ? '\u51e6\u7406\u304c\u30a8\u30e9\u30fc\u3067\u7d42\u4e86\u3057\u307e\u3057\u305f'
+            : warningMessage ?? (event.statusHint === 'attention' ? pane.lastError : null),
           lastResponse: assistantEntry.text,
           liveOutput: nextLiveOutput,
           sessionId: nextSessionId,
@@ -2999,7 +3039,7 @@ function App() {
       const message = sanitizeTerminalText(event.message).trim()
       streamErroredRef.current.add(paneId)
       mutatePane(paneId, (pane) => {
-        const issueSummary = getProviderIssueSummary(pane.provider, message)
+        const issueSummary = getProviderIssueSummary(pane.provider, message, pane.autonomyMode)
         const systemEntry: PaneLogEntry = {
           id: createId('log'),
           role: 'system',
@@ -3305,7 +3345,7 @@ function App() {
       if (!stopped && !streamErrored) {
         const failedAt = Date.now()
         mutatePane(paneId, (currentPane) => {
-          const issueSummary = getProviderIssueSummary(currentPane.provider, message)
+          const issueSummary = getProviderIssueSummary(currentPane.provider, message, currentPane.autonomyMode)
           const fallbackAttentionMessage = "\u30b9\u30c8\u30ea\u30fc\u30e0\u63a5\u7d9a\u304c\u9014\u4e2d\u3067\u5207\u308c\u307e\u3057\u305f\u3002\u30b5\u30fc\u30d0\u30fc\u5074\u3067\u5b9f\u884c\u304c\u6b8b\u3063\u3066\u3044\u308b\u53ef\u80fd\u6027\u304c\u3042\u308b\u305f\u3081\u3001\u5fc5\u8981\u306a\u3089\u505c\u6b62\u518d\u9001\u3092\u8a66\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
           const displayMessage = issueSummary?.displayMessage ?? fallbackAttentionMessage
           const systemEntry: PaneLogEntry = {

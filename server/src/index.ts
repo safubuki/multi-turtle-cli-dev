@@ -956,7 +956,9 @@ app.post('/api/run/stream', async (req, res) => {
       type: 'final',
       response: result.response,
       statusHint: result.statusHint,
-      sessionId: result.sessionId
+      sessionId: result.sessionId,
+      warningMessage: result.warningMessage,
+      warningStatusText: result.warningStatusText
     })
     res.end()
   } catch (error) {

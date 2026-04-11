@@ -196,8 +196,8 @@ const UI = {
   model: '\u30e2\u30c7\u30eb',
   reasoning: '\u63a8\u8ad6\u30ec\u30d9\u30eb',
   reasoningUnavailable: '\u9078\u629e\u3067\u304d\u307e\u305b\u3093',
-  executionStyle: '\u81ea\u52d5\u627f\u8a8d\u30ec\u30d9\u30eb',
-  readonlyCodex: 'Codex \u306f --full-auto \u56fa\u5b9a\u3067\u3059\u3002Fast\u30e2\u30fc\u30c9\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u5148\u982d\u306b /fast \u3092\u4ed8\u3051\u3066\u5b9f\u884c\u3057\u307e\u3059\u3002',
+  executionStyle: '\u5b9f\u884c\u6a29\u9650\u30ec\u30d9\u30eb',
+  readonlyCodex: 'Codex \u306f\u6a19\u6e96\u3067 --full-auto\u3001\u5236\u9650\u306a\u3057\u3067 --dangerously-bypass-approvals-and-sandbox \u3092\u4f7f\u3044\u307e\u3059\u3002\u6a19\u6e96\u30e2\u30fc\u30c9\u3067\u306f workspace \u76f4\u4e0b\u306e .agents / .codex / .git \u304c\u4fdd\u8b77\u3055\u308c\u307e\u3059\u3002Fast\u30e2\u30fc\u30c9\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u5148\u982d\u306b /fast \u3092\u4ed8\u3051\u3066\u5b9f\u884c\u3057\u307e\u3059\u3002',
   styleHint: '\u6a19\u6e96\u306f\u901a\u5e38\u306e\u7de8\u96c6\u3068\u30c4\u30fc\u30eb\u5b9f\u884c\u3092\u81ea\u52d5\u3067\u9032\u3081\u3001\u5236\u9650\u306a\u3057\u306f\u305d\u308c\u3088\u308a\u5e83\u3044\u64cd\u4f5c\u307e\u3067\u8a31\u53ef\u3057\u307e\u3059\u3002Gemini \u306f auto_edit / yolo\u3001Copilot \u306f allow-all-tools / allow-all \u306b\u5bfe\u5fdc\u3057\u307e\u3059\u3002',
   unchanged: '\u9078\u629e\u3067\u304d\u307e\u305b\u3093',
   normal: '\u6a19\u6e96\u306e\u81ea\u52d5\u627f\u8a8d',
@@ -1113,6 +1113,7 @@ export function TerminalPane({
   const isFreshCompletion = pane.status === 'completed' && pane.lastFinishedAt !== null && now - pane.lastFinishedAt <= COMPLETED_HEADER_PROMPT_DELAY_MS
   const visualPaneStatus = isStalled ? 'stalled' : pane.status
   const visualPaneStatusClass = visualPaneStatus === 'stalled' ? 'status-attention status-stalled' : `status-${visualPaneStatus}`
+  const headerNoticeText = pane.lastError?.trim() || null
   const hasPaneRunHistory = Boolean(
     pane.lastRunAt ||
     pane.lastFinishedAt ||
@@ -1680,6 +1681,12 @@ export function TerminalPane({
             <div className="pane-title-stack">
               <input className="pane-title-input" value={pane.title} onChange={(event) => onUpdate(pane.id, { title: event.target.value })} />
               <p>{headerStatusText}</p>
+              {headerNoticeText ? (
+                <div className={`pane-header-notice ${pane.status === 'error' ? 'is-error' : 'is-warning'}`}>
+                  <AlertTriangle size={13} />
+                  <span>{headerNoticeText}</span>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -2016,7 +2023,7 @@ export function TerminalPane({
                 </label>
                 <label>
                   <span>{UI.executionStyle}</span>
-                  <select value={pane.autonomyMode} disabled={isBusy || pane.provider === 'codex'} onChange={(event) => onUpdate(pane.id, { autonomyMode: event.target.value === 'max' ? 'max' : 'balanced' })}>
+                  <select value={pane.autonomyMode} disabled={isBusy} onChange={(event) => onUpdate(pane.id, { autonomyMode: event.target.value === 'max' ? 'max' : 'balanced' })}>
                     <option value="balanced">{UI.normal}</option>
                     <option value="max">{UI.active}</option>
                   </select>

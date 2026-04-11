@@ -350,6 +350,8 @@ export interface RunPaneResponse {
   response: string
   statusHint: 'completed' | 'attention' | 'error'
   sessionId: string | null
+  warningMessage?: string | null
+  warningStatusText?: string | null
 }
 
 export interface PreviewRunCommandRequest extends RunPaneRequest {}
@@ -427,6 +429,8 @@ export type RunStreamEvent =
       response: string
       statusHint: 'completed' | 'attention' | 'error'
       sessionId: string | null
+      warningMessage?: string | null
+      warningStatusText?: string | null
     }
   | {
       type: 'error'

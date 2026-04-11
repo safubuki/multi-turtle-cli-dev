@@ -188,6 +188,8 @@ export type RunStreamEvent =
       response: string
       statusHint: 'completed' | 'attention' | 'error'
       sessionId: string | null
+      warningMessage?: string | null
+      warningStatusText?: string | null
     }
   | {
       type: 'error'
@@ -198,6 +200,8 @@ export interface CliExecResult {
   response: string
   statusHint: 'completed' | 'attention' | 'error'
   sessionId: string | null
+  warningMessage?: string | null
+  warningStatusText?: string | null
 }
 
 export interface ActiveCliRun {
