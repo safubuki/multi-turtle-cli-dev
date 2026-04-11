@@ -154,7 +154,10 @@ const UI = {
   previewCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u78ba\u8a8d',
   previewCommandLoading: '\u30b3\u30de\u30f3\u30c9\u3092\u751f\u6210\u4e2d',
   commandPreviewTitle: '\u5b9f\u884c\u30b3\u30de\u30f3\u30c9',
+  structuredPreview: '渡す情報の内訳',
+  structuredPreviewHelp: 'この実行でCLIへ渡す情報を、読み取り専用で分解して表示します。',
   effectivePrompt: '\u5b9f\u969b\u306b\u6e21\u3059\u5165\u529b',
+  effectivePromptHelp: 'CLIが最終的に読む完成済みの入力です。',
   workingDirectory: '\u5b9f\u884c\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   previewNotes: '\u88dc\u8db3',
   copyPreviewCommand: '\u30b3\u30de\u30f3\u30c9\u3092\u30b3\u30d4\u30fc',
@@ -183,6 +186,7 @@ const UI = {
   stopRetry: '\u505c\u6b62\u518d\u9001',
   stop: '\u505c\u6b62',
   run: '\u5b9f\u884c',
+  agentSwitch: '次に話すAI',
   settings: 'CLI/AI\u30e2\u30c7\u30eb\u9078\u629e/\u8a2d\u5b9a',
   workspace: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9',
   cli: 'CLI',
@@ -287,7 +291,7 @@ const UI = {
 } as const
 
 const LOCAL_DRAG_MIME = 'application/x-multi-turtle-local-path'
-const REMOTE_PROVIDER_ORDER: ProviderId[] = ['codex', 'gemini', 'copilot']
+const REMOTE_PROVIDER_ORDER: ProviderId[] = ['codex', 'copilot', 'gemini']
 function formatClock(timestamp: number | null): string {
   if (!timestamp) {
     return UI.notRun
@@ -347,15 +351,17 @@ function summarizePromptPreview(text: string, maxLength = 150): string {
 }
 
 function getConversationEntryLabel(entry: PaneLogEntry, provider: ProviderId): string {
-  return entry.role === 'assistant' ? provider : entry.role
+  return entry.role === 'assistant' ? entry.provider ?? provider : entry.role
 }
 
 function formatConversationEntryForCopy(entry: PaneLogEntry, provider: ProviderId): string {
-  return `[${formatClock(entry.createdAt)}] ${getConversationEntryLabel(entry, provider)}\n${entry.text}`
+  const model = entry.model ? ` / ${entry.model}` : ''
+  return `[${formatClock(entry.createdAt)}] ${getConversationEntryLabel(entry, provider)}${model}\n${entry.text}`
 }
 
 function formatStreamEntryForCopy(entry: PaneStreamEntry): string {
-  return `[${formatClock(entry.createdAt)}] ${entry.kind}\n${entry.text}`
+  const agent = entry.provider ? ` / ${entry.provider}${entry.model ? ` / ${entry.model}` : ''}` : ''
+  return `[${formatClock(entry.createdAt)}] ${entry.kind}${agent}\n${entry.text}`
 }
 
 function splitTrailingUrlPunctuation(value: string): { url: string; trailing: string } {
@@ -1094,6 +1100,11 @@ export function TerminalPane({
 
   const catalog = catalogs[pane.provider]
   const currentModel = catalog?.models.find((model) => model.id === pane.model) ?? catalog?.models[0]
+  const formatProviderModel = (provider: ProviderId, modelId?: string | null) => {
+    const providerLabel = catalogs[provider]?.label ?? provider
+    const modelLabel = modelId ? catalogs[provider]?.models.find((model) => model.id === modelId)?.name ?? modelId : null
+    return modelLabel ? `${providerLabel} / ${modelLabel}` : providerLabel
+  }
   const reasoningOptions = currentModel?.supportedReasoningEfforts ?? []
   const canSelectReasoning = reasoningOptions.length > 0
   const isRemoteConnected = Boolean(pane.sshHost.trim() && (pane.remoteBrowserPath.trim() || pane.remoteHomeDirectory))
@@ -1116,6 +1127,10 @@ export function TerminalPane({
   const promptImageErrorText = promptImageAttachments.find((attachment) => attachment.status === 'error')?.error || UI.promptImageError
   const outputText = getOutputText(pane)
   const hasOutput = outputText.trim().length > 0
+  const latestAssistantEntry = [...pane.logs].reverse().find((entry) => entry.role === 'assistant') ?? null
+  const outputProvider = isRunInProgress ? pane.provider : latestAssistantEntry?.provider ?? pane.provider
+  const outputModel = isRunInProgress ? pane.model : latestAssistantEntry?.model ?? pane.model
+  const outputProviderLabel = formatProviderModel(outputProvider, outputModel)
   const currentRequestText = pane.currentRequestText?.trim() ?? ''
   const shouldCollapseCurrentRequest = currentRequestText.split(/\r?\n/).length > 5 || currentRequestText.length > 280
   const hasCurrentRequest = currentRequestText.length > 0
@@ -1185,6 +1200,7 @@ export function TerminalPane({
   const previewCommandText = commandPreviewState.data?.commandLine ?? ''
   const previewPromptText = commandPreviewState.data?.effectivePrompt ?? ''
   const previewNotes = commandPreviewState.data?.notes ?? []
+  const structuredPreviewItems = commandPreviewState.data?.structuredInput ?? []
   const incomingShareSources = useMemo(() => {
     const sourceMap = new Map<string, { id: string; title: string; count: number }>()
 
@@ -1275,6 +1291,11 @@ export function TerminalPane({
     installed: pane.remoteAvailableProviders.includes(provider)
   }))
   const currentCliStates = pane.workspaceMode === 'local' ? localCliStates : remoteCliStates
+  const availableAgentProviders = REMOTE_PROVIDER_ORDER.filter((provider) =>
+    pane.workspaceMode === 'local'
+      ? Boolean(catalogs[provider]?.available)
+      : isRemoteConnected && pane.remoteAvailableProviders.includes(provider)
+  )
   const currentCliEnvironmentLabel = pane.workspaceMode === 'local' ? 'ローカル' : 'リモート'
   const hasRemoteConfiguration = Boolean(
     pane.sshHost.trim() ||
@@ -1715,6 +1736,7 @@ export function TerminalPane({
           <div className="panel-header slim">
             <div>
               <h3>{UI.output}</h3>
+              {hasOutput || isRunInProgress ? <p className="output-agent-meta">{outputProviderLabel}</p> : null}
               {hasOutput && pane.lastActivityAt ? <p>{`\u6700\u7d42\u66f4\u65b0 ${formatClock(pane.lastActivityAt)}`}</p> : null}
             </div>
             <div className="output-panel-actions">
@@ -1813,6 +1835,25 @@ export function TerminalPane({
             multiple
             onChange={handlePromptImageInputChange}
           />
+          {availableAgentProviders.length > 0 ? (
+            <div className="agent-switch-row" aria-label={UI.agentSwitch}>
+              <span>{UI.agentSwitch}</span>
+              <div className="agent-switch-buttons">
+                {availableAgentProviders.map((provider) => (
+                  <button
+                    key={provider}
+                    type="button"
+                    className={provider === pane.provider ? 'switch-button active agent-switch-button' : 'switch-button agent-switch-button'}
+                    aria-pressed={provider === pane.provider}
+                    disabled={isBusy}
+                    onClick={() => onProviderChange(pane.id, provider)}
+                  >
+                    {catalogs[provider]?.label ?? provider}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {promptImageAttachments.length > 0 ? (
             <div className="prompt-image-strip" aria-label="attached-images">
               {promptImageAttachments.map((attachment) => {
@@ -1941,7 +1982,7 @@ export function TerminalPane({
               <div className="pane-meta-grid compact-grid">
                 <label>
                   <span>{UI.cli}</span>
-                  <select value={pane.provider} onChange={(event) => onProviderChange(pane.id, event.target.value as ProviderId)}>
+                  <select value={pane.provider} disabled={isBusy} onChange={(event) => onProviderChange(pane.id, event.target.value as ProviderId)}>
                     {(['codex', 'copilot', 'gemini'] as ProviderId[]).map((provider) => {
                       const item = catalogs[provider]
                       const disabled = pane.workspaceMode === 'ssh' && !availableRemoteProviders.includes(provider)
@@ -1951,26 +1992,26 @@ export function TerminalPane({
                 </label>
                 <label>
                   <span>{UI.model}</span>
-                  <select value={pane.model} onChange={(event) => onModelChange(pane.id, event.target.value)}>
+                  <select value={pane.model} disabled={isBusy} onChange={(event) => onModelChange(pane.id, event.target.value)}>
                     {catalog?.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
                   </select>
                 </label>
                 <label>
                   <span>{UI.reasoning}</span>
-                  <select value={pane.reasoningEffort} disabled={!canSelectReasoning} onChange={(event) => onUpdate(pane.id, { reasoningEffort: event.target.value as PaneState['reasoningEffort'] })}>
+                  <select value={pane.reasoningEffort} disabled={isBusy || !canSelectReasoning} onChange={(event) => onUpdate(pane.id, { reasoningEffort: event.target.value as PaneState['reasoningEffort'] })}>
                     {canSelectReasoning ? reasoningOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>) : <option value={pane.reasoningEffort}>{UI.reasoningUnavailable}</option>}
                   </select>
                 </label>
                 <label>
                   <span>{UI.executionStyle}</span>
-                  <select value={pane.autonomyMode} disabled={pane.provider === 'codex'} onChange={(event) => onUpdate(pane.id, { autonomyMode: event.target.value === 'max' ? 'max' : 'balanced' })}>
+                  <select value={pane.autonomyMode} disabled={isBusy || pane.provider === 'codex'} onChange={(event) => onUpdate(pane.id, { autonomyMode: event.target.value === 'max' ? 'max' : 'balanced' })}>
                     <option value="balanced">{UI.normal}</option>
                     <option value="max">{UI.active}</option>
                   </select>
                 </label>
                 <label>
                   <span>{UI.fastMode}</span>
-                  <select value={pane.codexFastMode} disabled={pane.provider !== 'codex'} onChange={(event) => onUpdate(pane.id, { codexFastMode: event.target.value === 'fast' ? 'fast' : 'off' })}>
+                  <select value={pane.codexFastMode} disabled={isBusy || pane.provider !== 'codex'} onChange={(event) => onUpdate(pane.id, { codexFastMode: event.target.value === 'fast' ? 'fast' : 'off' })}>
                     {pane.provider === 'codex' ? (
                       <>
                         <option value="off">{UI.fastOff}</option>
@@ -2368,7 +2409,7 @@ export function TerminalPane({
         <div className="output-modal-backdrop">
           <div className="output-modal" onClick={(event) => event.stopPropagation()}>
             <div className="panel-header slim">
-              <div><h3>{UI.output}</h3><p>{pane.title}</p></div>
+              <div><h3>{UI.output}</h3><p>{pane.title}{hasOutput || isRunInProgress ? ` / ${outputProviderLabel}` : ''}</p></div>
               <button type="button" className="icon-button" onClick={() => setIsOutputExpanded(false)} title="close"><X size={16} /></button>
             </div>
             <div className="output-modal-body">{hasOutput ? <LinkifiedText text={outputText} keyPrefix={`${pane.id}-output-modal`} onOpenFile={handleOpenLinkedPath} /> : null}</div>
@@ -2417,6 +2458,26 @@ export function TerminalPane({
                     <pre className="command-preview-block">{commandPreviewState.data.workingDirectory}</pre>
                   </section>
 
+                  {structuredPreviewItems.length > 0 ? (
+                    <section className="command-preview-field">
+                      <div className="command-preview-field-head">
+                        <strong>{UI.structuredPreview}</strong>
+                      </div>
+                      <p className="command-preview-description">{UI.structuredPreviewHelp}</p>
+                      <div className="command-preview-structured-list">
+                        {structuredPreviewItems.map((item) => (
+                          <article key={item.id} className="command-preview-structured-item">
+                            <div className="command-preview-structured-head">
+                              <strong>{item.label}</strong>
+                              <span>{item.description}</span>
+                            </div>
+                            <pre className="command-preview-block structured">{item.value}</pre>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+
                   <section className="command-preview-field">
                     <div className="command-preview-field-head">
                       <strong>{UI.effectivePrompt}</strong>
@@ -2430,6 +2491,7 @@ export function TerminalPane({
                         {copiedControlKey === `preview-prompt-${pane.id}` ? <CheckCircle2 size={14} /> : <Copy size={14} />}
                       </button>
                     </div>
+                    <p className="command-preview-description">{UI.effectivePromptHelp}</p>
                     <pre className="command-preview-block prompt">{previewPromptText}</pre>
                   </section>
 
@@ -2521,6 +2583,7 @@ export function TerminalPane({
                               <header>
                                 <div className="run-log-entry-header-main">
                                   <strong>{getConversationEntryLabel(entry, pane.provider)}</strong>
+                                  {entry.provider ? <span className="run-log-agent-chip">{formatProviderModel(entry.provider, entry.model)}</span> : null}
                                   <span>{formatClock(entry.createdAt)}</span>
                                 </div>
                                 <button
@@ -2548,6 +2611,7 @@ export function TerminalPane({
                             <header>
                               <div className="run-log-entry-header-main">
                                 <strong>{entry.kind}</strong>
+                                {entry.provider ? <span className="run-log-agent-chip">{formatProviderModel(entry.provider, entry.model)}</span> : null}
                                 <span>{formatClock(entry.createdAt)}</span>
                               </div>
                               <button

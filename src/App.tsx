@@ -42,11 +42,14 @@ import {
 } from './lib/api'
 import type {
   BootstrapPayload,
+  CommandPreviewSection,
   LocalSshKey,
   LocalBrowseRoot,
   LocalDirectoryEntry,
   LocalWorkspace,
   PaneLogEntry,
+  PaneProviderSessionState,
+  PaneProviderSettings,
   PaneSessionRecord,
   PaneState,
   PaneStatus,
@@ -60,6 +63,7 @@ import type {
   RunImageAttachment,
   RunStreamEvent,
   ShellRunEvent,
+  SharedContextPayload,
   SharedContextItem,
   SshConnectionOptions,
   SshHost,
@@ -713,7 +717,9 @@ function appendStreamEntry(
   entries: PaneState['streamEntries'],
   kind: PaneState['streamEntries'][number]['kind'],
   text: string,
-  createdAt: number
+  createdAt: number,
+  provider?: ProviderId,
+  model?: string
 ): PaneState['streamEntries'] {
   const normalized = text.trim()
   if (!normalized) {
@@ -725,6 +731,8 @@ function appendStreamEntry(
   if (
     lastEntry &&
     lastEntry.kind === kind &&
+    lastEntry.provider === provider &&
+    lastEntry.model === model &&
     createdAt - lastEntry.createdAt < 1_500 &&
     lastEntry.text.length + clipped.length < 1_800
   ) {
@@ -738,7 +746,7 @@ function appendStreamEntry(
     ]
   }
 
-  return [...entries, { id: createId('stream'), kind, text: clipped, createdAt }].slice(-MAX_STREAM_ENTRIES)
+  return [...entries, { id: createId('stream'), kind, text: clipped, createdAt, provider, model }].slice(-MAX_STREAM_ENTRIES)
 }
 
 function hasSessionContent(pane: Pick<PaneState, 'logs' | 'streamEntries' | 'sessionId' | 'liveOutput' | 'lastResponse'>): boolean {
@@ -1030,12 +1038,315 @@ function buildPaneSessionScopeKey(pane: Pick<PaneState, 'provider' | 'model' | '
   return ['ssh', pane.provider, pane.model, pane.sshUser.trim(), pane.sshHost.trim(), pane.sshPort.trim(), pane.remoteWorkspacePath.trim()].join('::')
 }
 
+function createEmptyProviderSessionState(): PaneProviderSessionState {
+  return {
+    sessionId: null,
+    sessionScopeKey: null,
+    lastSharedLogEntryId: null,
+    lastSharedStreamEntryId: null,
+    updatedAt: null
+  }
+}
+
+function createEmptyProviderSessions(): Record<ProviderId, PaneProviderSessionState> {
+  return {
+    codex: createEmptyProviderSessionState(),
+    copilot: createEmptyProviderSessionState(),
+    gemini: createEmptyProviderSessionState()
+  }
+}
+
+function createProviderSettingsFromCatalog(catalogs: Record<ProviderId, ProviderCatalogResponse>, provider: ProviderId): PaneProviderSettings {
+  const model = catalogs[provider].models[0]
+  return {
+    model: model?.id ?? '',
+    reasoningEffort: model?.defaultReasoningEffort ?? 'medium',
+    autonomyMode: 'balanced',
+    codexFastMode: 'off'
+  }
+}
+
+function normalizeProviderSettings(
+  rawSettings: Partial<PaneProviderSettings> | null | undefined,
+  catalogs: Record<ProviderId, ProviderCatalogResponse>,
+  provider: ProviderId
+): PaneProviderSettings {
+  const fallback = createProviderSettingsFromCatalog(catalogs, provider)
+  const catalog = catalogs[provider]
+  const model = typeof rawSettings?.model === 'string' && catalog.models.some((item) => item.id === rawSettings.model)
+    ? rawSettings.model
+    : fallback.model
+  const modelInfo = catalog.models.find((item) => item.id === model) ?? catalog.models[0]
+  const reasoningEffort =
+    isReasoningEffort(rawSettings?.reasoningEffort) &&
+    (modelInfo?.supportedReasoningEfforts.length ? modelInfo.supportedReasoningEfforts.includes(rawSettings.reasoningEffort) : true)
+      ? rawSettings.reasoningEffort
+      : modelInfo?.defaultReasoningEffort ?? fallback.reasoningEffort
+
+  return {
+    model,
+    reasoningEffort,
+    autonomyMode: rawSettings?.autonomyMode === 'max' ? 'max' : 'balanced',
+    codexFastMode: provider === 'codex' && rawSettings?.codexFastMode === 'fast' ? 'fast' : 'off'
+  }
+}
+
+function createProviderSettingsMap(catalogs: Record<ProviderId, ProviderCatalogResponse>): Record<ProviderId, PaneProviderSettings> {
+  return {
+    codex: createProviderSettingsFromCatalog(catalogs, 'codex'),
+    copilot: createProviderSettingsFromCatalog(catalogs, 'copilot'),
+    gemini: createProviderSettingsFromCatalog(catalogs, 'gemini')
+  }
+}
+
+function normalizeProviderSettingsMap(
+  rawSettings: Partial<Record<ProviderId, Partial<PaneProviderSettings>>> | null | undefined,
+  catalogs: Record<ProviderId, ProviderCatalogResponse>
+): Record<ProviderId, PaneProviderSettings> {
+  return {
+    codex: normalizeProviderSettings(rawSettings?.codex, catalogs, 'codex'),
+    copilot: normalizeProviderSettings(rawSettings?.copilot, catalogs, 'copilot'),
+    gemini: normalizeProviderSettings(rawSettings?.gemini, catalogs, 'gemini')
+  }
+}
+
+function normalizeProviderSessionState(rawSession: Partial<PaneProviderSessionState> | null | undefined): PaneProviderSessionState {
+  return {
+    sessionId: typeof rawSession?.sessionId === 'string' ? rawSession.sessionId : null,
+    sessionScopeKey: typeof rawSession?.sessionScopeKey === 'string' ? rawSession.sessionScopeKey : null,
+    lastSharedLogEntryId: typeof rawSession?.lastSharedLogEntryId === 'string' ? rawSession.lastSharedLogEntryId : null,
+    lastSharedStreamEntryId: typeof rawSession?.lastSharedStreamEntryId === 'string' ? rawSession.lastSharedStreamEntryId : null,
+    updatedAt: typeof rawSession?.updatedAt === 'number' ? rawSession.updatedAt : null
+  }
+}
+
+function normalizeProviderSessionsMap(
+  rawSessions: Partial<Record<ProviderId, Partial<PaneProviderSessionState>>> | null | undefined
+): Record<ProviderId, PaneProviderSessionState> {
+  return {
+    codex: normalizeProviderSessionState(rawSessions?.codex),
+    copilot: normalizeProviderSessionState(rawSessions?.copilot),
+    gemini: normalizeProviderSessionState(rawSessions?.gemini)
+  }
+}
+
+function getCurrentProviderSettings(pane: PaneState): PaneProviderSettings {
+  return {
+    model: pane.model,
+    reasoningEffort: pane.reasoningEffort,
+    autonomyMode: pane.autonomyMode,
+    codexFastMode: pane.provider === 'codex' ? pane.codexFastMode : 'off'
+  }
+}
+
+function syncCurrentProviderSettings(pane: PaneState): PaneState {
+  return {
+    ...pane,
+    providerSettings: {
+      ...pane.providerSettings,
+      [pane.provider]: getCurrentProviderSettings(pane)
+    }
+  }
+}
+
+function updateProviderSessionState(
+  pane: PaneState,
+  provider: ProviderId,
+  updates: Partial<PaneProviderSessionState>
+): PaneState {
+  return {
+    ...pane,
+    providerSessions: {
+      ...pane.providerSessions,
+      [provider]: {
+        ...pane.providerSessions[provider],
+        ...updates
+      }
+    }
+  }
+}
+
+function resetProviderSessionState(pane: PaneState, provider: ProviderId): PaneState {
+  return updateProviderSessionState(pane, provider, createEmptyProviderSessionState())
+}
+
+function getProviderResumeSession(pane: PaneState, provider: ProviderId, scopeKey: string): string | null {
+  const providerSession = pane.providerSessions[provider]
+  if (providerSession?.sessionScopeKey === scopeKey) {
+    return providerSession.sessionId
+  }
+
+  if (provider === pane.provider && pane.sessionScopeKey === scopeKey) {
+    return pane.sessionId
+  }
+
+  return null
+}
+
+function selectUnsyncedProviderMemory(pane: PaneState, provider: ProviderId): PaneLogEntry[] {
+  const providerSession = pane.providerSessions[provider]
+  const lastSharedLogEntryId = providerSession?.lastSharedLogEntryId
+  const lastSharedIndex = lastSharedLogEntryId ? pane.logs.findIndex((entry) => entry.id === lastSharedLogEntryId) : -1
+  const unsyncedEntries = lastSharedIndex >= 0 ? pane.logs.slice(lastSharedIndex + 1) : pane.logs
+  if (unsyncedEntries.length === 0) {
+    return []
+  }
+
+  const latestUser = [...unsyncedEntries].reverse().find((entry) => entry.role === 'user') ?? null
+  const latestAssistant = [...unsyncedEntries].reverse().find((entry) => entry.role === 'assistant') ?? null
+  return unsyncedEntries.filter((entry) => entry.id === latestUser?.id || entry.id === latestAssistant?.id).slice(-2)
+}
+
+function formatPreviewTimestamp(timestamp: number): string {
+  return new Date(timestamp).toLocaleString('ja-JP')
+}
+
+function formatPreviewLogEntries(entries: PaneLogEntry[]): string {
+  if (entries.length === 0) {
+    return '今回は渡しません。'
+  }
+
+  return entries.map((entry, index) => {
+    const agent = entry.provider ? `\nCLI: ${entry.provider}${entry.model ? ` / ${entry.model}` : ''}` : ''
+    return [
+      `Entry ${index + 1}`,
+      `role: ${entry.role}`,
+      `createdAt: ${formatPreviewTimestamp(entry.createdAt)}`,
+      agent.trim(),
+      'text:',
+      entry.text
+    ].filter(Boolean).join('\n')
+  }).join('\n\n---\n\n')
+}
+
+function formatPreviewSharedContext(items: SharedContextPayload[]): string {
+  if (items.length === 0) {
+    return '今回は渡しません。'
+  }
+
+  return items.map((item, index) => [
+    `Context ${index + 1}`,
+    `共有元ペイン: ${item.sourcePaneTitle}`,
+    `共有元CLI: ${item.provider}`,
+    `作業対象: ${item.workspaceLabel}`,
+    `概要: ${item.summary}`,
+    '詳細:',
+    item.detail
+  ].join('\n')).join('\n\n---\n\n')
+}
+
+function formatPreviewImageAttachments(attachments: RunImageAttachment[]): string {
+  if (attachments.length === 0) {
+    return '今回は渡しません。'
+  }
+
+  return attachments.map((attachment, index) => [
+    `Image ${index + 1}`,
+    `fileName: ${attachment.fileName}`,
+    `mimeType: ${attachment.mimeType}`,
+    `size: ${attachment.size}`,
+    `localPath: ${attachment.localPath}`
+  ].join('\n')).join('\n\n---\n\n')
+}
+
+function buildCommandPreviewSections(params: {
+  catalogs: Record<ProviderId, ProviderCatalogResponse>
+  pane: PaneState
+  target: WorkspaceTarget
+  promptText: string
+  currentSessionScopeKey: string
+  resumeSessionId: string | null
+  providerContextMemory: PaneLogEntry[]
+  sharedContextPayload: SharedContextPayload[]
+  readyImageAttachments: RunImageAttachment[]
+  preview: PreviewRunCommandResponse
+}): CommandPreviewSection[] {
+  const catalog = params.catalogs[params.pane.provider]
+  const modelInfo = catalog.models.find((item) => item.id === params.pane.model)
+  const targetValue = params.target.kind === 'local'
+    ? [
+        'kind: local',
+        `label: ${params.target.label}`,
+        `path: ${params.target.path}`,
+        `resourceType: ${params.target.resourceType ?? 'folder'}`,
+        `workspacePath: ${params.target.workspacePath ?? params.target.path}`
+      ].join('\n')
+    : [
+        'kind: ssh',
+        `host: ${params.target.host}`,
+        `label: ${params.target.label}`,
+        `path: ${params.target.path}`,
+        `resourceType: ${params.target.resourceType ?? 'folder'}`,
+        `workspacePath: ${params.target.workspacePath ?? params.target.path}`
+      ].join('\n')
+
+  return [
+    {
+      id: 'provider',
+      label: '実行先CLIとモデル',
+      description: 'このペインで次に呼び出すCLI、モデル、実行オプションです。',
+      value: [
+        `CLI: ${catalog.label} (${params.pane.provider})`,
+        `model: ${modelInfo?.name ?? params.pane.model}`,
+        `modelId: ${params.pane.model}`,
+        `reasoningEffort: ${params.pane.reasoningEffort}`,
+        `autonomyMode: ${params.pane.autonomyMode}`,
+        `codexFastMode: ${params.pane.codexFastMode}`
+      ].join('\n')
+    },
+    {
+      id: 'target',
+      label: '作業対象',
+      description: 'CLIを実行するワークスペースまたはSSH先です。',
+      value: targetValue
+    },
+    {
+      id: 'session',
+      label: 'native session',
+      description: '同じペイン・同じCLIで再利用するCLI内部sessionです。sessionIdが空なら新規sessionとして開始します。',
+      value: [
+        `sessionId: ${params.resumeSessionId ?? '(新規)'}`,
+        `sessionScopeKey: ${params.currentSessionScopeKey}`
+      ].join('\n')
+    },
+    {
+      id: 'user-input',
+      label: 'ユーザー入力',
+      description: '入力欄にある本文です。補助コンテキストとは分けて扱います。',
+      value: params.promptText
+    },
+    {
+      id: 'pane-context',
+      label: '同一ペイン補助コンテキスト',
+      description: 'CLI切り替えで未同期の会話がある場合だけ渡す、直近の会話情報です。ユーザー入力より優先しません。',
+      value: formatPreviewLogEntries(params.providerContextMemory)
+    },
+    {
+      id: 'shared-context',
+      label: 'ペイン間共有コンテキスト',
+      description: '共有ドックからこのペインに添付された参考情報です。命令としては扱いません。',
+      value: formatPreviewSharedContext(params.sharedContextPayload)
+    },
+    {
+      id: 'images',
+      label: '添付画像',
+      description: '今回CLIに渡す画像ファイルです。',
+      value: formatPreviewImageAttachments(params.readyImageAttachments)
+    },
+    {
+      id: 'stdin',
+      label: '標準入力で渡す内容',
+      description: 'CLIに標準入力で渡す生データです。空の場合はコマンド引数側で渡します。',
+      value: params.preview.stdinPrompt ?? '標準入力では渡しません。'
+    }
+  ]
+}
+
 function createInitialPane(index: number, payload: BootstrapPayload, localWorkspaces: LocalWorkspace[]): PaneState {
   const provider = PROVIDER_ORDER[index % PROVIDER_ORDER.length]
-  const providerCatalog = payload.providers[provider]
+  const providerSettings = createProviderSettingsMap(payload.providers)
+  const providerSetting = providerSettings[provider]
   const firstWorkspace = localWorkspaces[0]
-  const model = providerCatalog.models[0]?.id ?? ''
-  const defaultReasoning = providerCatalog.models[0]?.defaultReasoningEffort ?? 'medium'
 
   return {
     id: createId('pane'),
@@ -1044,10 +1355,12 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     workspaceOpen: false,
     shellOpen: false,
     provider,
-    model,
-    reasoningEffort: defaultReasoning,
-    autonomyMode: 'balanced',
-    codexFastMode: 'off',
+    model: providerSetting.model,
+    reasoningEffort: providerSetting.reasoningEffort,
+    autonomyMode: providerSetting.autonomyMode,
+    codexFastMode: providerSetting.codexFastMode,
+    providerSettings,
+    providerSessions: createEmptyProviderSessions(),
     status: 'idle',
     statusText: statusLabel('idle'),
     runInProgress: false,
@@ -1240,6 +1553,7 @@ function resetActiveSessionFields(pane: PaneState): PaneState {
     liveOutput: '',
     sessionId: null,
     sessionScopeKey: null,
+    providerSessions: createEmptyProviderSessions(),
     currentRequestText: null,
     currentRequestAt: null,
     stopRequested: false,
@@ -1423,15 +1737,30 @@ function normalizePane(
   localWorkspaces: LocalWorkspace[]
 ): PaneState {
   const provider = isProviderId(rawPane.provider) ? rawPane.provider : 'codex'
-  const catalog = payload.providers[provider]
-  const fallbackModel = catalog.models[0]
-  const model = catalog.models.some((item) => item.id === rawPane.model) ? rawPane.model ?? '' : fallbackModel?.id ?? ''
-  const modelInfo = catalog.models.find((item) => item.id === model) ?? fallbackModel
-  const reasoningEffort =
-    isReasoningEffort(rawPane.reasoningEffort) &&
-    (modelInfo?.supportedReasoningEfforts.length ? modelInfo.supportedReasoningEfforts.includes(rawPane.reasoningEffort) : true)
-      ? rawPane.reasoningEffort
-      : modelInfo?.defaultReasoningEffort ?? 'medium'
+  const providerSettings = normalizeProviderSettingsMap(rawPane.providerSettings, payload.providers)
+  const activeProviderSetting = normalizeProviderSettings(
+    {
+      ...providerSettings[provider],
+      model: typeof rawPane.model === 'string' ? rawPane.model : providerSettings[provider].model,
+      reasoningEffort: isReasoningEffort(rawPane.reasoningEffort) ? rawPane.reasoningEffort : providerSettings[provider].reasoningEffort,
+      autonomyMode: rawPane.autonomyMode === 'max' ? 'max' : providerSettings[provider].autonomyMode,
+      codexFastMode: rawPane.codexFastMode === 'fast' ? 'fast' : providerSettings[provider].codexFastMode
+    },
+    payload.providers,
+    provider
+  )
+  providerSettings[provider] = activeProviderSetting
+  const providerSessions = normalizeProviderSessionsMap(rawPane.providerSessions)
+  const restoredSessionId = typeof rawPane.sessionId === 'string' ? rawPane.sessionId : null
+  const restoredSessionScopeKey = typeof rawPane.sessionScopeKey === 'string' ? rawPane.sessionScopeKey : null
+  if (restoredSessionId || restoredSessionScopeKey) {
+    providerSessions[provider] = {
+      ...providerSessions[provider],
+      sessionId: restoredSessionId,
+      sessionScopeKey: restoredSessionScopeKey,
+      updatedAt: typeof rawPane.lastActivityAt === 'number' ? rawPane.lastActivityAt : providerSessions[provider].updatedAt
+    }
+  }
   const workspaceMode = rawPane.workspaceMode === 'ssh' ? 'ssh' : 'local'
   const persistedLocalWorkspacePath = typeof rawPane.localWorkspacePath === 'string' ? rawPane.localWorkspacePath.trim() : ''
   const localWorkspacePath = persistedLocalWorkspacePath || localWorkspaces[0]?.path || ''
@@ -1462,10 +1791,12 @@ function normalizePane(
     workspaceOpen: rawPane.workspaceOpen === true,
     shellOpen: rawPane.shellOpen === true,
     provider,
-    model,
-    reasoningEffort,
-    autonomyMode: rawPane.autonomyMode === 'max' ? 'max' : 'balanced',
-    codexFastMode: rawPane.codexFastMode === 'fast' ? 'fast' : 'off',
+    model: activeProviderSetting.model,
+    reasoningEffort: activeProviderSetting.reasoningEffort,
+    autonomyMode: activeProviderSetting.autonomyMode,
+    codexFastMode: activeProviderSetting.codexFastMode,
+    providerSettings,
+    providerSessions,
     status: restoredStatus,
     statusText,
     runInProgress: false,
@@ -1535,8 +1866,8 @@ function normalizePane(
     attachedContextIds: Array.isArray(rawPane.attachedContextIds)
       ? rawPane.attachedContextIds.filter((item): item is string => typeof item === 'string')
       : [],
-    sessionId: typeof rawPane.sessionId === 'string' ? rawPane.sessionId : null,
-    sessionScopeKey: typeof rawPane.sessionScopeKey === 'string' ? rawPane.sessionScopeKey : null,
+    sessionId: restoredSessionId,
+    sessionScopeKey: restoredSessionScopeKey,
     autoShare: Boolean(rawPane.autoShare),
     autoShareTargetIds: Array.isArray(rawPane.autoShareTargetIds)
       ? rawPane.autoShareTargetIds.filter((item): item is string => typeof item === 'string')
@@ -1946,7 +2277,7 @@ function App() {
 
       const nextPane = { ...pane, ...updates }
       if (typeof updates.sshHost !== 'string') {
-        return nextPane
+        return syncCurrentProviderSettings(nextPane)
       }
 
       const reusablePane = findReusableSshPane(paneId, nextPane.sshHost, current)
@@ -1974,7 +2305,7 @@ function App() {
         }
       }
 
-      return nextPane
+      return syncCurrentProviderSettings(nextPane)
     }))
   }
 
@@ -2117,27 +2448,50 @@ function App() {
       return
     }
 
-    const nextModel = bootstrap.providers[provider].models[0]
+    const pane = panesRef.current.find((item) => item.id === paneId)
+    if (!pane || pane.provider === provider) {
+      return
+    }
+
+    const nextSettings = pane.providerSettings[provider] ?? createProviderSettingsFromCatalog(bootstrap.providers, provider)
     const hasPromptImages = (paneImageAttachmentsRef.current[paneId] ?? []).length > 0
     if (provider === 'copilot' && hasPromptImages) {
       clearPanePromptImages(paneId)
     }
 
-    updatePane(paneId, {
-      provider,
-      model: nextModel?.id ?? '',
-      reasoningEffort: nextModel?.defaultReasoningEffort ?? 'medium',
-      codexFastMode: 'off',
-      sessionId: null,
-      sessionScopeKey: null,
-      selectedSessionKey: null,
-      ...(provider === 'copilot' && hasPromptImages
-        ? {
-            status: 'attention' as const,
-            statusText: 'Copilot では画像添付を使えません',
-            lastError: 'GitHub Copilot CLI は画像入力未対応のため、添付画像を解除しました。'
-          }
-        : {})
+    mutatePane(paneId, (currentPane) => {
+      const previousProvider = currentPane.provider
+      const savedPane = syncCurrentProviderSettings(
+        updateProviderSessionState(currentPane, previousProvider, {
+          sessionId: currentPane.sessionId,
+          sessionScopeKey: currentPane.sessionScopeKey,
+          updatedAt: Date.now()
+        })
+      )
+      const candidatePane = {
+        ...savedPane,
+        provider,
+        model: nextSettings.model,
+        reasoningEffort: nextSettings.reasoningEffort,
+        autonomyMode: nextSettings.autonomyMode,
+        codexFastMode: provider === 'codex' ? nextSettings.codexFastMode : 'off'
+      }
+      const nextSessionScopeKey = buildPaneSessionScopeKey(candidatePane)
+      const nextSessionId = getProviderResumeSession(savedPane, provider, nextSessionScopeKey)
+
+      return syncCurrentProviderSettings({
+        ...candidatePane,
+        sessionId: nextSessionId,
+        sessionScopeKey: nextSessionId ? nextSessionScopeKey : null,
+        selectedSessionKey: null,
+        ...(provider === 'copilot' && hasPromptImages
+          ? {
+              status: 'attention' as const,
+              statusText: 'Copilot では画像添付を使えません',
+              lastError: 'GitHub Copilot CLI は画像入力未対応のため、添付画像を解除しました。'
+            }
+          : {})
+      })
     })
   }
 
@@ -2271,12 +2625,16 @@ function App() {
         ? pane.reasoningEffort
         : modelInfo.defaultReasoningEffort ?? 'medium'
 
-    updatePane(paneId, {
-      model: normalizedModel,
-      reasoningEffort,
-      sessionId: null,
-      sessionScopeKey: null,
-      selectedSessionKey: null
+    mutatePane(paneId, (currentPane) => {
+      const nextPane = syncCurrentProviderSettings({
+        ...currentPane,
+        model: normalizedModel,
+        reasoningEffort,
+        sessionId: null,
+        sessionScopeKey: null,
+        selectedSessionKey: null
+      })
+      return resetProviderSessionState(nextPane, currentPane.provider)
     })
   }
 
@@ -2502,17 +2860,24 @@ function App() {
     }
 
     if (event.type === 'session') {
-      mutatePane(paneId, (pane) => ({
-        ...pane,
-        status: shouldKeepRunning ? 'running' : pane.status,
-        sessionId: event.sessionId,
-        sessionScopeKey: buildPaneSessionScopeKey(pane),
-        runInProgress: shouldKeepRunning ? true : pane.runInProgress,
-        runningSince: shouldKeepRunning ? pane.runningSince ?? eventAt : pane.runningSince,
-        lastActivityAt: eventAt,
-        statusText: shouldKeepRunning ? '\u5b9f\u884c\u4e2d' : pane.statusText,
-        streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb: ${event.sessionId}`, eventAt)
-      }))
+      mutatePane(paneId, (pane) => {
+        const sessionScopeKey = buildPaneSessionScopeKey(pane)
+        return updateProviderSessionState({
+          ...pane,
+          status: shouldKeepRunning ? 'running' : pane.status,
+          sessionId: event.sessionId,
+          sessionScopeKey,
+          runInProgress: shouldKeepRunning ? true : pane.runInProgress,
+          runningSince: shouldKeepRunning ? pane.runningSince ?? eventAt : pane.runningSince,
+          lastActivityAt: eventAt,
+          statusText: shouldKeepRunning ? '\u5b9f\u884c\u4e2d' : pane.statusText,
+          streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u30bb\u30c3\u30b7\u30e7\u30f3\u958b\u59cb: ${event.sessionId}`, eventAt, pane.provider, pane.model)
+        }, pane.provider, {
+          sessionId: event.sessionId,
+          sessionScopeKey,
+          updatedAt: eventAt
+        })
+      })
       return
     }
 
@@ -2531,8 +2896,8 @@ function App() {
           statusText: shouldKeepRunning ? '\u5b9f\u884c\u4e2d' : pane.statusText,
           streamEntries:
             issueSummary && !pane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
-              ? appendStreamEntry(appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt), 'system', issueSummary.displayMessage, eventAt)
-              : appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt)
+              ? appendStreamEntry(appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt, pane.provider, pane.model), 'system', issueSummary.displayMessage, eventAt, pane.provider, pane.model)
+              : appendStreamEntry(pane.streamEntries, kind, normalizedText, eventAt, pane.provider, pane.model)
         }
       })
       return
@@ -2540,11 +2905,14 @@ function App() {
 
     if (event.type === 'final') {
       const finalText = clipText(sanitizeTerminalText(event.response).trim(), MAX_LIVE_OUTPUT)
+      const eventPane = panesRef.current.find((item) => item.id === paneId)
       const assistantEntry: PaneLogEntry = {
         id: createId('log'),
         role: 'assistant',
         text: finalText,
-        createdAt: eventAt
+        createdAt: eventAt,
+        provider: eventPane?.provider,
+        model: eventPane?.model
       }
 
       let shouldShareGlobal = false
@@ -2564,9 +2932,13 @@ function App() {
         autoShareTargetIds = pane.autoShareTargetIds.filter((item) => item !== pane.id)
         pendingShareGlobal = pane.pendingShareGlobal
         pendingShareTargetIds = pane.pendingShareTargetIds.filter((item) => item !== pane.id)
-        return {
+        const nextLogs = appendLogEntry(pane.logs, assistantEntry)
+        const nextStreamEntries = appendStreamEntry(pane.streamEntries, 'system', `\u7d50\u679c: ${statusLabel(event.statusHint)}`, eventAt, pane.provider, pane.model)
+        const nextSessionId = event.sessionId ?? pane.sessionId
+        const nextSessionScopeKey = buildPaneSessionScopeKey(pane)
+        return updateProviderSessionState({
           ...pane,
-          logs: appendLogEntry(pane.logs, assistantEntry),
+          logs: nextLogs,
           status: event.statusHint,
           statusText: statusLabel(event.statusHint),
           runInProgress: false,
@@ -2578,10 +2950,16 @@ function App() {
           lastError: event.statusHint === 'error' ? '\u51e6\u7406\u304c\u30a8\u30e9\u30fc\u3067\u7d42\u4e86\u3057\u307e\u3057\u305f' : null,
           lastResponse: assistantEntry.text,
           liveOutput: nextLiveOutput,
-          sessionId: event.sessionId ?? pane.sessionId,
-          sessionScopeKey: buildPaneSessionScopeKey(pane),
-          streamEntries: appendStreamEntry(pane.streamEntries, 'system', `\u7d50\u679c: ${statusLabel(event.statusHint)}`, eventAt)
-        }
+          sessionId: nextSessionId,
+          sessionScopeKey: nextSessionScopeKey,
+          streamEntries: nextStreamEntries
+        }, pane.provider, {
+          sessionId: nextSessionId,
+          sessionScopeKey: nextSessionScopeKey,
+          lastSharedLogEntryId: assistantEntry.id,
+          lastSharedStreamEntryId: nextStreamEntries.at(-1)?.id ?? pane.providerSessions[pane.provider].lastSharedStreamEntryId,
+          updatedAt: eventAt
+        })
       })
 
       if (pendingShareGlobal) {
@@ -2606,7 +2984,9 @@ function App() {
           id: createId('log'),
           role: 'system',
           text: issueSummary?.displayMessage ?? message,
-          createdAt: eventAt
+          createdAt: eventAt,
+          provider: pane.provider,
+          model: pane.model
         }
 
         return {
@@ -2621,7 +3001,7 @@ function App() {
           lastActivityAt: eventAt,
           lastFinishedAt: eventAt,
           lastError: issueSummary?.displayMessage ?? message,
-          streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', message, eventAt)
+          streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', message, eventAt, pane.provider, pane.model)
         }
       })
       scheduleWorkspaceContentsRefresh(paneId)
@@ -2706,7 +3086,8 @@ function App() {
 
     const requestText = buildPromptWithImageSummary(promptText, readyImageAttachments)
     const currentSessionScopeKey = buildPaneSessionScopeKey(pane)
-    const resumeSessionId = pane.sessionScopeKey === currentSessionScopeKey ? pane.sessionId : null
+    const resumeSessionId = getProviderResumeSession(pane, pane.provider, currentSessionScopeKey)
+    const providerContextMemory = selectUnsyncedProviderMemory(pane, pane.provider)
     const attachedContext = sharedContextRef.current.filter((item) => pane.attachedContextIds.includes(item.id))
     const consumedContextIds = attachedContext.map((item) => item.id)
     const sharedContextPayload = attachedContext.map((item) => ({
@@ -2726,25 +3107,23 @@ function App() {
       readyImageAttachments,
       currentSessionScopeKey,
       resumeSessionId,
+      providerContextMemory,
       consumedContextIds,
       sharedContextPayload
     }
   }
 
   const handlePreviewRunCommand = async (paneId: string, promptOverride?: string): Promise<PreviewRunCommandResponse> => {
+    if (!bootstrap) {
+      throw new Error('アプリの初期化が完了していません。')
+    }
+
     const prepared = preparePaneRunPayload(paneId, promptOverride)
     if (!prepared.ok) {
       throw new Error(prepared.error)
     }
 
-    const previewEntry: PaneLogEntry = {
-      id: "preview",
-      role: "user",
-      text: prepared.requestText,
-      createdAt: Date.now()
-    }
-
-    return previewRunCommand({
+    const preview = await previewRunCommand({
       paneId,
       provider: prepared.pane.provider,
       model: prepared.pane.model,
@@ -2754,10 +3133,26 @@ function App() {
       target: prepared.target,
       prompt: prepared.promptText,
       sessionId: prepared.resumeSessionId,
-      memory: [...prepared.pane.logs, previewEntry].slice(-8),
+      memory: prepared.providerContextMemory,
       sharedContext: prepared.sharedContextPayload,
       imageAttachments: prepared.readyImageAttachments
     })
+
+    return {
+      ...preview,
+      structuredInput: buildCommandPreviewSections({
+        catalogs: bootstrap.providers,
+        pane: prepared.pane,
+        target: prepared.target,
+        promptText: prepared.promptText,
+        currentSessionScopeKey: prepared.currentSessionScopeKey,
+        resumeSessionId: prepared.resumeSessionId,
+        providerContextMemory: prepared.providerContextMemory,
+        sharedContextPayload: prepared.sharedContextPayload,
+        readyImageAttachments: prepared.readyImageAttachments,
+        preview
+      })
+    }
   }
 
   const handleRun = async (paneId: string, promptOverride?: string) => {
@@ -2774,6 +3169,7 @@ function App() {
       readyImageAttachments,
       currentSessionScopeKey,
       resumeSessionId,
+      providerContextMemory,
       consumedContextIds,
       sharedContextPayload
     } = prepared
@@ -2787,10 +3183,12 @@ function App() {
       id: createId("log"),
       role: "user",
       text: requestText,
-      createdAt: startedAt
+      createdAt: startedAt,
+      provider: pane.provider,
+      model: pane.model
     }
 
-    const memory = [...pane.logs, userEntry].slice(-8)
+    const memory = providerContextMemory
     const controller = new AbortController()
 
     controllersRef.current[paneId] = controller
@@ -2826,29 +3224,37 @@ function App() {
       )
     }
 
-    mutatePane(paneId, (currentPane) => ({
-      ...currentPane,
-      prompt: "",
-      logs: appendLogEntry(currentPane.logs, userEntry),
-      status: "running",
-      statusText: "\u5b9f\u884c\u4e2d",
-      runInProgress: true,
-      lastRunAt: startedAt,
-      runningSince: startedAt,
-      lastActivityAt: startedAt,
-      lastError: null,
-      lastResponse: null,
-      selectedSessionKey: null,
-      liveOutput: "",
-      sessionId: resumeSessionId,
-      sessionScopeKey: currentSessionScopeKey,
-      currentRequestText: requestText,
-      currentRequestAt: startedAt,
-      stopRequested: false,
-      stopRequestAvailable: true,
-      attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
-      streamEntries: appendStreamEntry([], "system", `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt)
-    }))
+    mutatePane(paneId, (currentPane) => {
+      const nextLogs = appendLogEntry(currentPane.logs, userEntry)
+      return updateProviderSessionState({
+        ...currentPane,
+        prompt: "",
+        logs: nextLogs,
+        status: "running",
+        statusText: "\u5b9f\u884c\u4e2d",
+        runInProgress: true,
+        lastRunAt: startedAt,
+        runningSince: startedAt,
+        lastActivityAt: startedAt,
+        lastError: null,
+        lastResponse: null,
+        selectedSessionKey: null,
+        liveOutput: "",
+        sessionId: resumeSessionId,
+        sessionScopeKey: currentSessionScopeKey,
+        currentRequestText: requestText,
+        currentRequestAt: startedAt,
+        stopRequested: false,
+        stopRequestAvailable: true,
+        attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
+        streamEntries: appendStreamEntry([], "system", `\u958b\u59cb: ${currentPane.provider} / ${target.label}`, startedAt, currentPane.provider, currentPane.model)
+      }, currentPane.provider, {
+        sessionId: resumeSessionId,
+        sessionScopeKey: currentSessionScopeKey,
+        lastSharedLogEntryId: userEntry.id,
+        updatedAt: startedAt
+      })
+    })
     queuePromptImageCleanup(paneId, readyImageAttachments.map((attachment) => attachment.localPath))
     clearPanePromptImages(paneId, { cleanupFiles: false })
 
@@ -2886,10 +3292,12 @@ function App() {
             id: createId("log"),
             role: "system",
             text: displayMessage,
-            createdAt: failedAt
+            createdAt: failedAt,
+            provider: currentPane.provider,
+            model: currentPane.model
           }
 
-          const nextStreamEntries = appendStreamEntry(currentPane.streamEntries, "stderr", message, failedAt)
+          const nextStreamEntries = appendStreamEntry(currentPane.streamEntries, "stderr", message, failedAt, currentPane.provider, currentPane.model)
 
           return {
             ...currentPane,
@@ -2905,7 +3313,7 @@ function App() {
             lastError: displayMessage,
             streamEntries:
               issueSummary && !currentPane.streamEntries.some((entry) => entry.kind === "system" && entry.text === issueSummary.displayMessage)
-                ? appendStreamEntry(nextStreamEntries, "system", issueSummary.displayMessage, failedAt)
+                ? appendStreamEntry(nextStreamEntries, "system", issueSummary.displayMessage, failedAt, currentPane.provider, currentPane.model)
                 : nextStreamEntries
           }
         })
@@ -2925,7 +3333,7 @@ function App() {
           lastActivityAt: stoppedAt,
           lastFinishedAt: stoppedAt,
           lastError: null,
-          streamEntries: appendStreamEntry(currentPane.streamEntries, "system", "\u5b9f\u884c\u3092\u505c\u6b62\u3057\u307e\u3057\u305f", stoppedAt)
+          streamEntries: appendStreamEntry(currentPane.streamEntries, "system", "\u5b9f\u884c\u3092\u505c\u6b62\u3057\u307e\u3057\u305f", stoppedAt, currentPane.provider, currentPane.model)
         }))
       }
     } finally {
@@ -2975,7 +3383,9 @@ function App() {
           result.stopped
             ? '\u30b5\u30fc\u30d0\u30fc\u5074\u306e\u5b9f\u884c\u306b\u505c\u6b62\u8981\u6c42\u3092\u9001\u4fe1\u3057\u3001\u505c\u6b62\u3057\u307e\u3057\u305f'
             : '\u30b5\u30fc\u30d0\u30fc\u5074\u3067\u505c\u6b62\u3067\u304d\u308b\u5b9f\u884c\u306f\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f',
-          completedAt
+          completedAt,
+          pane.provider,
+          pane.model
         )
       }))
     } catch (error) {
@@ -3156,6 +3566,7 @@ function App() {
       liveOutput: '',
       sessionId: null,
       sessionScopeKey: null,
+      providerSessions: createEmptyProviderSessions(),
       currentRequestText: null,
       currentRequestAt: null,
       stopRequested: false,
@@ -3213,7 +3624,8 @@ function App() {
       const latestUser = [...selectedSession.logs].reverse().find((entry) => entry.role === 'user') ?? null
       const latestAssistant = [...selectedSession.logs].reverse().find((entry) => entry.role === 'assistant') ?? null
 
-      return {
+      const sessionScopeKey = buildPaneSessionScopeKey(pane)
+      return updateProviderSessionState({
         ...pane,
         prompt: '',
         status: 'idle',
@@ -3224,7 +3636,7 @@ function App() {
         selectedSessionKey: null,
         liveOutput: '',
         sessionId: selectedSession.sessionId,
-        sessionScopeKey: buildPaneSessionScopeKey(pane),
+        sessionScopeKey,
         currentRequestText: latestUser?.text ?? null,
         currentRequestAt: latestUser?.createdAt ?? null,
         stopRequested: false,
@@ -3235,7 +3647,13 @@ function App() {
         lastFinishedAt: selectedSession.updatedAt,
         lastError: null,
         lastResponse: latestAssistant?.text ?? null
-      }
+      }, pane.provider, {
+        sessionId: selectedSession.sessionId,
+        sessionScopeKey,
+        lastSharedLogEntryId: selectedSession.logs.at(-1)?.id ?? null,
+        lastSharedStreamEntryId: selectedSession.streamEntries.at(-1)?.id ?? null,
+        updatedAt: selectedSession.updatedAt
+      })
     })
   }
 
@@ -4111,10 +4529,10 @@ function App() {
             inspectionPayload && inspectionPayload.availableProviders.length > 0 && !inspectionPayload.availableProviders.includes(item.provider)
               ? inspectionPayload.availableProviders[0]
               : item.provider
-          const nextModel =
+          const nextSettings =
             nextProvider !== item.provider && bootstrap
-              ? bootstrap.providers[nextProvider].models[0]?.id ?? item.model
-              : item.model
+              ? item.providerSettings[nextProvider] ?? createProviderSettingsFromCatalog(bootstrap.providers, nextProvider)
+              : getCurrentProviderSettings(item)
           const updatedAt = Date.now()
           const nextLocalKeys = mergeLocalSshKeys(inspectionPayload?.localKeys ?? [], item.sshLocalKeys)
           const selectedKey = getPreferredLocalSshKey({ ...item, sshLocalKeys: nextLocalKeys }, nextLocalKeys, current)
@@ -4128,10 +4546,15 @@ function App() {
           const hasPartialFailure = partialErrors.length > 0
           const noRemoteProviderDetected = Boolean(inspectionPayload && inspectionPayload.availableProviders.length === 0)
 
-          return {
+          return syncCurrentProviderSettings({
             ...item,
             provider: nextProvider,
-            model: nextModel,
+            model: nextSettings.model,
+            reasoningEffort: nextSettings.reasoningEffort,
+            autonomyMode: nextSettings.autonomyMode,
+            codexFastMode: nextProvider === 'codex' ? nextSettings.codexFastMode : 'off',
+            sessionId: nextProvider === item.provider ? item.sessionId : null,
+            sessionScopeKey: nextProvider === item.provider ? item.sessionScopeKey : null,
             sshUser: item.sshUser || inspectionPayload?.suggestedUser || '',
             sshPort: item.sshPort || inspectionPayload?.suggestedPort || '',
             sshIdentityFile: selectedKey?.privateKeyPath || item.sshIdentityFile || inspectionPayload?.suggestedIdentityFile || '',
@@ -4162,7 +4585,7 @@ function App() {
             lastError: hasPartialFailure ? partialErrors.join('\n') : null,
             sshActionState: hasPartialFailure ? 'error' : 'success',
             sshActionMessage: hasPartialFailure ? `${host} への接続は成功しましたが、${failedPartLabels.join(' / ')} の取得に失敗しました` : noRemoteProviderDetected ? `${host} に接続しました。CLI を確認してください` : `${host} の接続情報を更新しました`
-          }
+          })
         })
       )
     } catch (error) {

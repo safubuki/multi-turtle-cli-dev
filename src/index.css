@@ -1434,6 +1434,21 @@ textarea {
   gap: 4px;
 }
 
+.run-log-agent-chip,
+.output-agent-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.run-log-agent-chip {
+  display: inline-flex;
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 8px;
+  border: 1px solid rgba(84, 210, 194, 0.12);
+  background: rgba(84, 210, 194, 0.06);
+}
+
 .run-log-copy-button {
   flex: 0 0 auto;
   transition:
@@ -1519,6 +1534,32 @@ textarea {
 
 .prompt-image-input {
   display: none;
+}
+
+.agent-switch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.agent-switch-row > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.agent-switch-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-switch-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 0.82rem;
 }
 
 .prompt-image-strip {
@@ -2969,6 +3010,38 @@ textarea {
   font-size: 0.9rem;
 }
 
+.command-preview-description {
+  margin: -2px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.command-preview-structured-list {
+  display: grid;
+  gap: 10px;
+}
+
+.command-preview-structured-item {
+  display: grid;
+  gap: 8px;
+}
+
+.command-preview-structured-head {
+  display: grid;
+  gap: 3px;
+}
+
+.command-preview-structured-head strong {
+  font-size: 0.86rem;
+}
+
+.command-preview-structured-head span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .command-preview-block {
   margin: 0;
   padding: 12px 14px;
@@ -2981,6 +3054,11 @@ textarea {
   font-family: 'Cascadia Code', 'Consolas', 'SFMono-Regular', monospace;
   font-size: 0.88rem;
   line-height: 1.55;
+}
+
+.command-preview-block.structured {
+  max-height: 220px;
+  overflow: auto;
 }
 
 .command-preview-block.prompt {

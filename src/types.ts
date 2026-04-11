@@ -143,6 +143,8 @@ export interface PaneLogEntry {
   role: 'user' | 'assistant' | 'system'
   text: string
   createdAt: number
+  provider?: ProviderId
+  model?: string
 }
 export interface SharedContextPayload {
   sourcePaneTitle: string
@@ -198,6 +200,23 @@ export interface PaneStreamEntry {
   kind: 'status' | 'tool' | 'stderr' | 'system'
   text: string
   createdAt: number
+  provider?: ProviderId
+  model?: string
+}
+
+export interface PaneProviderSettings {
+  model: string
+  reasoningEffort: ReasoningEffort
+  autonomyMode: AutonomyMode
+  codexFastMode: CodexFastMode
+}
+
+export interface PaneProviderSessionState {
+  sessionId: string | null
+  sessionScopeKey: string | null
+  lastSharedLogEntryId: string | null
+  lastSharedStreamEntryId: string | null
+  updatedAt: number | null
 }
 
 export interface PaneSessionRecord {
@@ -248,6 +267,8 @@ export interface PaneState {
   reasoningEffort: ReasoningEffort
   autonomyMode: AutonomyMode
   codexFastMode: CodexFastMode
+  providerSettings: Record<ProviderId, PaneProviderSettings>
+  providerSessions: Record<ProviderId, PaneProviderSessionState>
   status: PaneStatus
   statusText: string
   runInProgress: boolean
@@ -333,6 +354,13 @@ export interface RunPaneResponse {
 
 export interface PreviewRunCommandRequest extends RunPaneRequest {}
 
+export interface CommandPreviewSection {
+  id: string
+  label: string
+  description: string
+  value: string
+}
+
 export interface PreviewRunCommandResponse {
   success: boolean
   commandLine: string
@@ -340,6 +368,7 @@ export interface PreviewRunCommandResponse {
   effectivePrompt: string
   workingDirectory: string
   notes: string[]
+  structuredInput?: CommandPreviewSection[]
 }
 
 export interface ShellRunRequest {
