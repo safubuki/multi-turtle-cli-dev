@@ -64,6 +64,9 @@ interface TerminalPaneProps {
   onUpdate: (paneId: string, updates: Partial<PaneState>) => void
   onProviderChange: (paneId: string, provider: ProviderId) => void
   onModelChange: (paneId: string, model: string) => void
+  onReasoningEffortChange: (paneId: string, reasoningEffort: PaneState['reasoningEffort']) => void
+  onAutonomyModeChange: (paneId: string, autonomyMode: PaneState['autonomyMode']) => void
+  onCodexFastModeChange: (paneId: string, codexFastMode: PaneState['codexFastMode']) => void
   promptImageAttachments: PromptImageAttachment[]
   onAddPromptImages: (paneId: string, files: File[], source: PromptImageAttachmentSource) => void
   onRemovePromptImage: (paneId: string, attachmentId: string) => void
@@ -870,6 +873,9 @@ export function TerminalPane({
   onUpdate,
   onProviderChange,
   onModelChange,
+  onReasoningEffortChange,
+  onAutonomyModeChange,
+  onCodexFastModeChange,
   promptImageAttachments,
   onAddPromptImages,
   onRemovePromptImage,
@@ -2023,20 +2029,20 @@ export function TerminalPane({
                 </label>
                 <label>
                   <span>{UI.reasoning}</span>
-                  <select value={pane.reasoningEffort} disabled={isBusy || !canSelectReasoning} onChange={(event) => onUpdate(pane.id, { reasoningEffort: event.target.value as PaneState['reasoningEffort'] })}>
+                  <select value={pane.reasoningEffort} disabled={isBusy || !canSelectReasoning} onChange={(event) => onReasoningEffortChange(pane.id, event.target.value as PaneState['reasoningEffort'])}>
                     {canSelectReasoning ? reasoningOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>) : <option value={pane.reasoningEffort}>{UI.reasoningUnavailable}</option>}
                   </select>
                 </label>
                 <label>
                   <span>{UI.executionStyle}</span>
-                  <select value={pane.autonomyMode} disabled={isBusy} onChange={(event) => onUpdate(pane.id, { autonomyMode: event.target.value === 'max' ? 'max' : 'balanced' })}>
+                  <select value={pane.autonomyMode} disabled={isBusy} onChange={(event) => onAutonomyModeChange(pane.id, event.target.value === 'max' ? 'max' : 'balanced')}>
                     <option value="balanced">{UI.normal}</option>
                     <option value="max">{UI.active}</option>
                   </select>
                 </label>
                 <label>
                   <span>{UI.fastMode}</span>
-                  <select value={pane.codexFastMode} disabled={isBusy || pane.provider !== 'codex'} onChange={(event) => onUpdate(pane.id, { codexFastMode: event.target.value === 'fast' ? 'fast' : 'off' })}>
+                  <select value={pane.codexFastMode} disabled={isBusy || pane.provider !== 'codex'} onChange={(event) => onCodexFastModeChange(pane.id, event.target.value === 'fast' ? 'fast' : 'off')}>
                     {pane.provider === 'codex' ? (
                       <>
                         <option value="off">{UI.fastOff}</option>
