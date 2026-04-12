@@ -1,6 +1,5 @@
 ﻿import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import {
-  X,
   XCircle
 } from 'lucide-react'
 import { TerminalPane } from './components/TerminalPane'
@@ -8,6 +7,7 @@ import { PaneMatrix } from './components/PaneMatrix'
 import { SharedContextDock } from './components/SharedContextDock'
 import { StageToolbar } from './components/StageToolbar'
 import { SummaryMetrics } from './components/SummaryMetrics'
+import { WorkspacePickerModal } from './components/WorkspacePickerModal'
 import {
   browseRemoteDirectory,
   browseLocalDirectory,
@@ -61,15 +61,19 @@ import {
 } from './lib/providerState'
 import { reconcileSharedContextWithPanes } from './lib/sharedContext'
 import {
+  buildLocalWorkspacePickerEntries,
+  buildLocalWorkspaceRecord,
+  buildRemoteWorkspacePickerEntries,
   buildRemoteWorkspacePickerRoots,
   chooseLocalWorkspacePickerStartPath,
   clampLocalPathToWorkspace,
-  getAbsoluteLocalParentPath,
-  getAbsoluteRemoteParentPath,
+  createWorkspacePickerState,
   getDefaultLocalBrowsePath,
+  getManualWorkspaces,
   isLocalWorkspacePickerRootVisible,
-  isWorkspacePickerRootActive,
+  mergeLocalWorkspaces,
   normalizeComparablePath,
+  patchWorkspacePickerState,
   resolveLinkedLocalPath,
   resolveLinkedRemotePath
 } from './lib/workspacePaths'
@@ -87,6 +91,7 @@ import type {
   RunStreamEvent,
   ShellRunEvent,
   SharedContextItem,
+  WorkspacePickerState,
   WorkspaceTarget
 } from './types'
 
@@ -98,13 +103,11 @@ import {
   PROVIDER_ORDER,
   TITLE_IMAGE_URL,
   type LayoutMode,
-  type WorkspacePickerState,
   appendLogEntry,
   appendSessionRecord,
   appendStreamEntry,
   buildPromptWithImageSummary,
   buildShellPromptLabel,
-  buildLocalWorkspaceRecord,
   buildSshConnectionFromPane,
   buildSshLabel,
   buildTargetFromPane,
@@ -113,14 +116,12 @@ import {
   createSharedContextItem,
   fetchBootstrapWithRetry,
   findReusableSshPane,
-  getManualWorkspaces,
   getPaneOutputText,
   getPreferredLocalSshKey,
   getProviderIssueSummary,
   getShareablePayload,
   hasSessionContent,
   mergeLocalSshKeys,
-  mergeLocalWorkspaces,
   normalizePromptImageFile,
   readFileAsBase64,
   reorderPanesById,
@@ -463,11 +464,6 @@ function App() {
     [layout, panes, selectedPane]
   )
   const visiblePaneOrderKey = useMemo(() => visiblePanes.map((pane) => pane.id).join('|'), [visiblePanes])
-  const workspacePickerParentPath = workspacePicker
-    ? workspacePicker.mode === 'local'
-      ? getAbsoluteLocalParentPath(workspacePicker.path)
-      : getAbsoluteRemoteParentPath(workspacePicker.path)
-    : null
 
   const metrics = useMemo(() => {
     const result = {
@@ -2302,34 +2298,21 @@ function App() {
       return
     }
 
-    setWorkspacePicker((current) =>
-      current
-        ? {
-            ...current,
-            loading: true,
-            error: null
-          }
-        : current
-    )
+    setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+      loading: true,
+      error: null
+    }))
 
     try {
       if (workspacePicker.mode === 'local') {
         const payload = await browseLocalDirectory(normalizedTargetPath)
         rememberLastLocalBrowsePath(payload.path)
-        setWorkspacePicker((current) =>
-          current
-            ? {
-                ...current,
-                path: payload.path,
-                entries: payload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
-                  label: entry.label,
-                  path: entry.path
-                })),
-                loading: false,
-                error: null
-              }
-            : current
-        )
+        setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+          path: payload.path,
+          entries: buildLocalWorkspacePickerEntries(payload.entries),
+          loading: false,
+          error: null
+        }))
       } else {
         const pane = panesRef.current.find((item) => item.id === workspacePicker.paneId)
         if (!pane || !pane.sshHost.trim()) {
@@ -2342,48 +2325,31 @@ function App() {
           buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
         )
 
-        setWorkspacePicker((current) =>
-          current
-            ? {
-                ...current,
-                path: payload.path,
-                entries: payload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
-                  label: entry.label,
-                  path: entry.path,
-                  isWorkspace: entry.isWorkspace
-                })),
-                roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], payload.homeDirectory),
-                loading: false,
-                error: null
-              }
-            : current
-        )
+        setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+          path: payload.path,
+          entries: buildRemoteWorkspacePickerEntries(payload.entries),
+          roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], payload.homeDirectory),
+          loading: false,
+          error: null
+        }))
       }
     } catch (error) {
-      setWorkspacePicker((current) =>
-        current
-          ? {
-              ...current,
-              loading: false,
-              error: error instanceof Error ? error.message : String(error)
-            }
-          : current
-      )
+      setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+        loading: false,
+        error: error instanceof Error ? error.message : String(error)
+      }))
     }
   }
 
   const handleOpenWorkspacePicker = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
 
-    setWorkspacePicker({
+    setWorkspacePicker(createWorkspacePickerState({
       mode: 'local',
       paneId,
-      path: '',
-      entries: [],
-      roots: [],
       loading: true,
       error: null
-    })
+    }))
 
     try {
       const rootsPayload = await fetchLocalBrowseRoots()
@@ -2407,29 +2373,23 @@ function App() {
         directoryPayload = await browseLocalDirectory(defaultPath)
       }
 
-      setWorkspacePicker({
+      setWorkspacePicker(createWorkspacePickerState({
         mode: 'local',
         paneId,
         path: directoryPayload.path,
-        entries: directoryPayload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
-          label: entry.label,
-          path: entry.path
-        })),
+        entries: buildLocalWorkspacePickerEntries(directoryPayload.entries),
         roots: visibleRoots,
         loading: false,
         error: null
-      })
+      }))
       rememberLastLocalBrowsePath(directoryPayload.path)
     } catch (error) {
-      setWorkspacePicker({
+      setWorkspacePicker(createWorkspacePickerState({
         mode: 'local',
         paneId,
-        path: '',
-        entries: [],
-        roots: [],
         loading: false,
         error: error instanceof Error ? error.message : String(error)
-      })
+      }))
     }
   }
 
@@ -2447,15 +2407,14 @@ function App() {
     const startPath = pane.remoteWorkspacePath || pane.remoteBrowserPath || pane.remoteHomeDirectory || '~'
     const roots = buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], pane.remoteHomeDirectory)
 
-    setWorkspacePicker({
+    setWorkspacePicker(createWorkspacePickerState({
       mode: 'ssh',
       paneId,
       path: startPath,
-      entries: [],
       roots,
       loading: true,
       error: null
-    })
+    }))
 
     try {
       const payload = await browseRemoteDirectory(
@@ -2464,29 +2423,24 @@ function App() {
         buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
       )
 
-      setWorkspacePicker({
+      setWorkspacePicker(createWorkspacePickerState({
         mode: 'ssh',
         paneId,
         path: payload.path,
-        entries: payload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
-          label: entry.label,
-          path: entry.path,
-          isWorkspace: entry.isWorkspace
-        })),
+        entries: buildRemoteWorkspacePickerEntries(payload.entries),
         roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], payload.homeDirectory),
         loading: false,
         error: null
-      })
+      }))
     } catch (error) {
-      setWorkspacePicker({
+      setWorkspacePicker(createWorkspacePickerState({
         mode: 'ssh',
         paneId,
         path: startPath,
-        entries: [],
         roots,
         loading: false,
         error: error instanceof Error ? error.message : String(error)
-      })
+      }))
     }
   }
 
@@ -2532,46 +2486,28 @@ function App() {
 
     const trimmedName = folderName.trim()
     if (!trimmedName) {
-      setWorkspacePicker((current) =>
-        current
-          ? {
-              ...current,
-              error: '新しいフォルダ名を入力してください。'
-            }
-          : current
-      )
+      setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+        error: '新しいフォルダ名を入力してください。'
+      }))
       return
     }
 
     const parentPath = workspacePicker.path
-    setWorkspacePicker((current) =>
-      current
-        ? {
-            ...current,
-            loading: true,
-            error: null
-          }
-        : current
-    )
+    setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+      loading: true,
+      error: null
+    }))
 
     try {
       if (workspacePicker.mode === 'local') {
         const payload = await createLocalDirectory(parentPath, trimmedName)
         const directoryPayload = await browseLocalDirectory(payload.path)
-        setWorkspacePicker((current) =>
-          current
-            ? {
-                ...current,
-                path: directoryPayload.path,
-                entries: directoryPayload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
-                  label: entry.label,
-                  path: entry.path
-                })),
-                loading: false,
-                error: null
-              }
-            : current
-        )
+        setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+          path: directoryPayload.path,
+          entries: buildLocalWorkspacePickerEntries(directoryPayload.entries),
+          loading: false,
+          error: null
+        }))
       } else {
         const pane = panesRef.current.find((item) => item.id === workspacePicker.paneId)
         if (!pane || !pane.sshHost.trim()) {
@@ -2590,33 +2526,19 @@ function App() {
           buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
         )
 
-        setWorkspacePicker((current) =>
-          current
-            ? {
-                ...current,
-                path: directoryPayload.path,
-                entries: directoryPayload.entries.filter((entry) => entry.isDirectory).map((entry) => ({
-                  label: entry.label,
-                  path: entry.path,
-                  isWorkspace: entry.isWorkspace
-                })),
-                roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], directoryPayload.homeDirectory),
-                loading: false,
-                error: null
-              }
-            : current
-        )
+        setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+          path: directoryPayload.path,
+          entries: buildRemoteWorkspacePickerEntries(directoryPayload.entries),
+          roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], directoryPayload.homeDirectory),
+          loading: false,
+          error: null
+        }))
       }
     } catch (error) {
-      setWorkspacePicker((current) =>
-        current
-          ? {
-              ...current,
-              loading: false,
-              error: error instanceof Error ? error.message : String(error)
-            }
-          : current
-      )
+      setWorkspacePicker((current) => patchWorkspacePickerState(current, {
+        loading: false,
+        error: error instanceof Error ? error.message : String(error)
+      }))
     }
   }
 
@@ -3743,70 +3665,13 @@ function App() {
       </div>
 
       {workspacePicker && (
-        <div className="output-modal-backdrop">
-          <div className="output-modal workspace-picker-modal">
-            <div className="panel-header slim">
-              <div>
-                <h3>{workspacePicker.mode === 'local' ? '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u3092\u9078\u629e' : '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7/\u30ea\u30e2\u30fc\u30c8\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u9078\u629e'}</h3>
-                <p className="workspace-picker-current-path">{workspacePicker.path || (workspacePicker.mode === 'local' ? '\u4f7f\u3044\u305f\u3044\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002' : '\u4f7f\u3044\u305f\u3044\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002')}</p>
-              </div>
-              <button type="button" className="icon-button" onClick={() => setWorkspacePicker(null)} title="閉じる" aria-label="閉じる"><X size={16} /></button>
-            </div>
-
-            <div className="workspace-picker-toolbar">
-              <div className="workspace-picker-roots">
-                {workspacePicker.roots.filter((root) => workspacePicker.mode !== 'local' || isLocalWorkspacePickerRootVisible(root)).map((root) => (
-                  <button key={root.path} type="button" className={isWorkspacePickerRootActive(workspacePicker, root.path) ? 'switch-button active' : 'switch-button'} onClick={() => void handleBrowseWorkspacePicker(root.path)}>
-                    {root.label}
-                  </button>
-                ))}
-                {workspacePickerParentPath && (
-                  <button type="button" className="switch-button workspace-picker-up-button" disabled={workspacePicker.loading} onClick={() => void handleBrowseWorkspacePicker(workspacePickerParentPath)}>
-                    {'\u4e00\u3064\u4e0a\u3078'}
-                  </button>
-                )}
-              </div>
-              <div className="workspace-picker-actions">
-                <button type="button" className="secondary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleCreateWorkspacePickerDirectory()}>
-                  {'\u65b0\u3057\u3044\u30d5\u30a9\u30eb\u30c0'}
-                </button>
-                <button type="button" className="secondary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleBrowseWorkspacePicker(workspacePicker.path)}>
-                  {'\u518d\u8aad\u8fbc'}
-                </button>
-              </div>
-            </div>
-
-            {workspacePicker.error && (
-              <div className="global-error compact-error">
-                <XCircle size={16} />
-                <span>{workspacePicker.error}</span>
-              </div>
-            )}
-
-            <div className="workspace-picker-list">
-              {workspacePicker.loading ? (
-                <div className="panel-placeholder">{workspacePicker.mode === 'local' ? '\u30d5\u30a9\u30eb\u30c0\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002' : '\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u4e00\u89a7\u3092\u8aad\u307f\u8fbc\u307f\u4e2d\u3067\u3059\u3002'}</div>
-              ) : workspacePicker.entries.length > 0 ? (
-                workspacePicker.entries.map((entry) => (
-                  <button key={entry.path} type="button" className="workspace-picker-entry" onClick={() => void handleBrowseWorkspacePicker(entry.path)}>
-                    <strong>{entry.label}</strong>
-                    <span>{entry.path}</span>
-                    {entry.isWorkspace ? <span>{'\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u5019\u88dc'}</span> : null}
-                  </button>
-                ))
-              ) : (
-                <div className="panel-placeholder">{workspacePicker.mode === 'local' ? '\u3053\u306e\u5834\u6240\u306b\u8868\u793a\u3067\u304d\u308b\u30d5\u30a9\u30eb\u30c0\u304c\u3042\u308a\u307e\u305b\u3093\u3002' : '\u3053\u306e\u5834\u6240\u306b\u8868\u793a\u3067\u304d\u308b\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u304c\u3042\u308a\u307e\u305b\u3093\u3002'}</div>
-              )}
-            </div>
-
-            <div className="output-modal-footer workspace-picker-footer">
-              <button type="button" className="secondary-button" onClick={() => setWorkspacePicker(null)}>{'\u30ad\u30e3\u30f3\u30bb\u30eb'}</button>
-              <button type="button" className="primary-button" disabled={!workspacePicker.path || workspacePicker.loading} onClick={() => void handleConfirmWorkspacePicker()}>
-                {workspacePicker.mode === 'local' ? '\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u4f7f\u3046' : '\u3053\u306e\u30ea\u30e2\u30fc\u30c8\u30d5\u30a9\u30eb\u30c0\u3092\u4f7f\u3046'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <WorkspacePickerModal
+          workspacePicker={workspacePicker}
+          onBrowse={(path) => void handleBrowseWorkspacePicker(path)}
+          onClose={() => setWorkspacePicker(null)}
+          onCreateDirectory={() => void handleCreateWorkspacePickerDirectory()}
+          onConfirm={() => void handleConfirmWorkspacePicker()}
+        />
       )}
     </div>
   )

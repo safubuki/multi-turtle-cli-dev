@@ -1,25 +1,11 @@
 ﻿import { fetchBootstrap } from './api'
 import { clipText, summarize } from './text'
-import type { AutonomyMode, BootstrapPayload, LocalSshKey, LocalBrowseRoot, LocalWorkspace, PaneLogEntry, PaneSessionRecord, PaneState, PaneStatus, PromptImageAttachmentSource, ProviderCatalogResponse, ProviderId, RunImageAttachment, SharedContextItem, SshConnectionOptions, SshHost, WorkspaceTarget } from '../types'
+import type { AutonomyMode, BootstrapPayload, LocalSshKey, LocalWorkspace, PaneLogEntry, PaneSessionRecord, PaneState, PaneStatus, PromptImageAttachmentSource, ProviderCatalogResponse, ProviderId, RunImageAttachment, SharedContextItem, SshConnectionOptions, SshHost, WorkspaceTarget } from '../types'
 
 // App.tsx の React 本体から独立して扱える補助層。
 // 純粋なドメインコアではなく、状態復元・正規化・実行補助・ブラウザ依存の小さなユーティリティをまとめる。
 
 export type LayoutMode = 'quad' | 'triple' | 'focus'
-
-export interface WorkspacePickerState {
-  mode: 'local' | 'ssh'
-  paneId: string
-  path: string
-  entries: Array<{
-    label: string
-    path: string
-    isWorkspace?: boolean
-  }>
-  roots: LocalBrowseRoot[]
-  loading: boolean
-  error: string | null
-}
 
 export const PROVIDER_ORDER: ProviderId[] = ['codex', 'copilot', 'gemini']
 export const EMPTY_CATALOGS = {} as Record<ProviderId, ProviderCatalogResponse>
@@ -191,67 +177,6 @@ export function buildShellPromptLabel(pane: PaneState, cwd?: string | null): str
 
   const sshLabel = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim() || 'ssh'
   return `${sshLabel}:${currentPath}$`
-}
-
-export function normalizeLocalWorkspace(rawWorkspace: Partial<LocalWorkspace> | null | undefined): LocalWorkspace | null {
-  if (!rawWorkspace?.path || !rawWorkspace.label) {
-    return null
-  }
-
-  return {
-    id: rawWorkspace.id ?? `local-${rawWorkspace.path.toLowerCase()}`,
-    label: rawWorkspace.label,
-    path: rawWorkspace.path,
-    indicators: Array.isArray(rawWorkspace.indicators)
-      ? rawWorkspace.indicators.filter((item): item is string => typeof item === 'string')
-      : [],
-    source: rawWorkspace.source === 'app' ? 'app' : 'manual'
-  }
-}
-
-export function buildLocalWorkspaceRecord(path: string): LocalWorkspace {
-  const label = path.split(/[\\/]/).filter(Boolean).pop() ?? path
-
-  return {
-    id: `local-${path.toLowerCase()}`,
-    label,
-    path,
-    indicators: [],
-    source: 'manual'
-  }
-}
-
-export function getManualWorkspaces(workspaces: LocalWorkspace[]): LocalWorkspace[] {
-  return workspaces.filter((workspace) => workspace.source === 'manual')
-}
-
-export function mergeLocalWorkspaces(...groups: Array<Array<Partial<LocalWorkspace>> | LocalWorkspace[]>): LocalWorkspace[] {
-  const seen = new Map<string, LocalWorkspace>()
-
-  for (const group of groups) {
-    for (const candidate of group) {
-      const workspace = normalizeLocalWorkspace(candidate)
-      if (!workspace) {
-        continue
-      }
-
-      const key = workspace.path.toLowerCase()
-      const current = seen.get(key)
-      if (!current || (workspace.source === 'app' && current.source !== 'app')) {
-        seen.set(key, workspace)
-      }
-    }
-  }
-
-  return [...seen.values()].sort((left, right) => {
-    if (left.source === 'app' && right.source !== 'app') {
-      return -1
-    }
-    if (left.source !== 'app' && right.source === 'app') {
-      return 1
-    }
-    return left.label.localeCompare(right.label, 'ja')
-  })
 }
 
 export function appendLogEntry(entries: PaneLogEntry[], entry: PaneLogEntry): PaneLogEntry[] {

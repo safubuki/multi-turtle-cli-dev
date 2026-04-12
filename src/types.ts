@@ -53,6 +53,22 @@ export interface LocalBrowseRoot {
   path: string
 }
 
+export interface WorkspacePickerEntry {
+  label: string
+  path: string
+  isWorkspace?: boolean
+}
+
+export interface WorkspacePickerState {
+  mode: 'local' | 'ssh'
+  paneId: string
+  path: string
+  entries: WorkspacePickerEntry[]
+  roots: LocalBrowseRoot[]
+  loading: boolean
+  error: string | null
+}
+
 export interface SshHost {
   id: string
   alias: string

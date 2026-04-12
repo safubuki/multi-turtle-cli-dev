@@ -1,9 +1,9 @@
+import type { LocalWorkspace, PaneState, SharedContextItem } from '../types'
+import { type LayoutMode } from './appCore'
 import {
   getManualWorkspaces,
-  mergeLocalWorkspaces,
-  type LayoutMode
-} from './appCore'
-import type { LocalWorkspace, PaneState, SharedContextItem } from '../types'
+  mergeLocalWorkspaces
+} from './workspacePaths'
 
 export const STORAGE_KEYS = {
   panes: 'multi-turtle-cli-dev/panes-v2',

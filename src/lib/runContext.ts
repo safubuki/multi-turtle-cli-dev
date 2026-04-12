@@ -30,7 +30,7 @@ function formatPreviewTimestamp(timestamp: number): string {
   return new Date(timestamp).toLocaleString('ja-JP')
 }
 
-function formatPreviewLogEntries(entries: PaneLogEntry[]): string {
+export function formatPaneContextMemory(entries: PaneLogEntry[]): string {
   if (entries.length === 0) {
     return '今回は渡しません。'
   }
@@ -149,7 +149,7 @@ export function buildStructuredRunContextSections(params: {
       id: 'pane-context',
       label: '同一ペイン補助コンテキスト',
       description: 'このペイン内の直近会話情報です。CLI切り替え時は未同期差分を優先し、同じCLIで続ける時も直近会話を小さく渡します。ユーザー入力の意味は変えません。',
-      value: formatPreviewLogEntries(params.providerContextMemory)
+      value: formatPaneContextMemory(params.providerContextMemory)
     },
     {
       id: 'shared-context',

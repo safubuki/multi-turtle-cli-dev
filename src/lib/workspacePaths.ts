@@ -1,9 +1,14 @@
-import type { HostPlatform, LocalBrowseRoot, LocalWorkspace } from '../types'
+import type {
+  HostPlatform,
+  LocalBrowseRoot,
+  LocalDirectoryEntry,
+  LocalWorkspace,
+  RemoteDirectoryEntry,
+  WorkspacePickerEntry,
+  WorkspacePickerState
+} from '../types'
 
-export interface WorkspacePickerPathState {
-  mode: 'local' | 'ssh'
-  path: string
-}
+type WorkspacePickerPathState = Pick<WorkspacePickerState, 'mode' | 'path'>
 
 export function getAbsoluteLocalParentPath(currentPath: string): string | null {
   const normalizedPath = currentPath.replace(/[\/]+$/, '').replace(/\//g, '\\')
@@ -48,6 +53,67 @@ export function getPathLabel(path: string): string {
   const trimmed = path.trim().replace(/[\/]+$/, '')
   const parts = trimmed.split(/[\/]/).filter(Boolean)
   return parts[parts.length - 1] ?? path
+}
+
+export function normalizeLocalWorkspace(rawWorkspace: Partial<LocalWorkspace> | null | undefined): LocalWorkspace | null {
+  if (!rawWorkspace?.path || !rawWorkspace.label) {
+    return null
+  }
+
+  return {
+    id: rawWorkspace.id ?? `local-${rawWorkspace.path.toLowerCase()}`,
+    label: rawWorkspace.label,
+    path: rawWorkspace.path,
+    indicators: Array.isArray(rawWorkspace.indicators)
+      ? rawWorkspace.indicators.filter((item): item is string => typeof item === 'string')
+      : [],
+    source: rawWorkspace.source === 'app' ? 'app' : 'manual'
+  }
+}
+
+export function buildLocalWorkspaceRecord(path: string): LocalWorkspace {
+  const label = path.split(/[\\/]/).filter(Boolean).pop() ?? path
+
+  return {
+    id: `local-${path.toLowerCase()}`,
+    label,
+    path,
+    indicators: [],
+    source: 'manual'
+  }
+}
+
+export function getManualWorkspaces(workspaces: LocalWorkspace[]): LocalWorkspace[] {
+  return workspaces.filter((workspace) => workspace.source === 'manual')
+}
+
+export function mergeLocalWorkspaces(...groups: Array<Array<Partial<LocalWorkspace>> | LocalWorkspace[]>): LocalWorkspace[] {
+  const seen = new Map<string, LocalWorkspace>()
+
+  for (const group of groups) {
+    for (const candidate of group) {
+      const workspace = normalizeLocalWorkspace(candidate)
+      if (!workspace) {
+        continue
+      }
+
+      const key = workspace.path.toLowerCase()
+      const current = seen.get(key)
+      if (!current || (workspace.source === 'app' && current.source !== 'app')) {
+        seen.set(key, workspace)
+      }
+    }
+  }
+
+  return [...seen.values()].sort((left, right) => {
+    if (left.source === 'app' && right.source !== 'app') {
+      return -1
+    }
+    if (left.source !== 'app' && right.source === 'app') {
+      return 1
+    }
+    return left.label.localeCompare(right.label, 'ja')
+  })
 }
 
 export function resolveRemoteRootPath(rootPath: string, homeDirectory: string | null): string {
@@ -115,6 +181,69 @@ export function normalizeComparablePath(value: string): string {
   }
 
   return normalized
+}
+
+export function buildLocalWorkspacePickerEntries(entries: LocalDirectoryEntry[]): WorkspacePickerEntry[] {
+  return entries
+    .filter((entry) => entry.isDirectory)
+    .map((entry) => ({
+      label: entry.label,
+      path: entry.path
+    }))
+}
+
+export function buildRemoteWorkspacePickerEntries(entries: RemoteDirectoryEntry[]): WorkspacePickerEntry[] {
+  return entries
+    .filter((entry) => entry.isDirectory)
+    .map((entry) => ({
+      label: entry.label,
+      path: entry.path,
+      isWorkspace: entry.isWorkspace
+    }))
+}
+
+export function createWorkspacePickerState(params: {
+  mode: WorkspacePickerState['mode']
+  paneId: string
+  path?: string
+  entries?: WorkspacePickerEntry[]
+  roots?: LocalBrowseRoot[]
+  loading?: boolean
+  error?: string | null
+}): WorkspacePickerState {
+  return {
+    mode: params.mode,
+    paneId: params.paneId,
+    path: params.path ?? '',
+    entries: params.entries ?? [],
+    roots: params.roots ?? [],
+    loading: params.loading ?? false,
+    error: params.error ?? null
+  }
+}
+
+export function patchWorkspacePickerState(
+  current: WorkspacePickerState | null,
+  updates: Partial<WorkspacePickerState>
+): WorkspacePickerState | null {
+  if (!current) {
+    return current
+  }
+
+  return {
+    ...current,
+    ...updates
+  }
+}
+
+export function getWorkspacePickerParentPath(workspacePicker: WorkspacePickerState | null): string | null {
+  if (!workspacePicker) {
+    return null
+  }
+
+  return workspacePicker.mode === 'local'
+    ? getAbsoluteLocalParentPath(workspacePicker.path)
+    : getAbsoluteRemoteParentPath(workspacePicker.path)
 }
 
 export function normalizeLinkedPathTarget(value: string): string {
