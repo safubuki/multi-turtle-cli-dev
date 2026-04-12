@@ -41,17 +41,61 @@ import {
   stopShellRun,
   transferSshPath,
 } from './lib/api'
+import {
+  appendLiveOutputChunk,
+  appendLiveOutputLine,
+  appendShellOutputLine,
+  clipText,
+  MAX_LIVE_OUTPUT,
+  MAX_SHELL_OUTPUT,
+  sanitizeTerminalText,
+  summarize
+} from './lib/text'
+import {
+  buildCommandPreviewSections,
+  buildStructuredRunContextSections,
+  formatStructuredRunContextForStream,
+  selectPaneContextMemory
+} from './lib/runContext'
+import {
+  buildPaneSessionScopeKey,
+  createEmptyProviderSessions,
+  createProviderSettingsFromCatalog,
+  createProviderSettingsMap,
+  getCurrentProviderSettings,
+  getProviderResumeSession,
+  isProviderId,
+  isReasoningEffort,
+  normalizeProviderSettings,
+  normalizeProviderSettingsMap,
+  normalizeProviderSessionsMap,
+  resetProviderSessionState,
+  syncCurrentProviderSettings,
+  updateProviderSessionState
+} from './lib/providerState'
+import { reconcileSharedContextWithPanes } from './lib/sharedContext'
+import {
+  buildRemoteWorkspacePickerRoots,
+  chooseInitialLocalWorkspacePath,
+  chooseLocalWorkspacePickerStartPath,
+  clampLocalPathToWorkspace,
+  getAbsoluteLocalParentPath,
+  getAbsoluteRemoteParentPath,
+  getDefaultLocalBrowsePath,
+  isLocalWorkspacePickerRootVisible,
+  isWorkspacePickerRootActive,
+  normalizeComparablePath,
+  resolveLinkedLocalPath,
+  resolveLinkedRemotePath
+} from './lib/workspacePaths'
 import type {
   AutonomyMode,
   BootstrapPayload,
-  CommandPreviewSection,
   LocalSshKey,
   LocalBrowseRoot,
   LocalDirectoryEntry,
   LocalWorkspace,
   PaneLogEntry,
-  PaneProviderSessionState,
-  PaneProviderSettings,
   PaneSessionRecord,
   PaneState,
   PaneStatus,
@@ -60,13 +104,11 @@ import type {
   PromptImageAttachmentSource,
   ProviderCatalogResponse,
   ProviderId,
-  ReasoningEffort,
   RemoteDirectoryEntry,
   RunImageAttachment,
   RunStatusResponse,
   RunStreamEvent,
   ShellRunEvent,
-  SharedContextPayload,
   SharedContextItem,
   SshConnectionOptions,
   SshHost,
@@ -103,8 +145,6 @@ const MAX_LOGS = 24
 const MAX_STREAM_ENTRIES = 240
 const MAX_SESSION_HISTORY = 18
 const MAX_SESSION_LABEL_LENGTH = 40
-const MAX_LIVE_OUTPUT = 64_000
-const MAX_SHELL_OUTPUT = 48_000
 const MAX_SHARED_CONTEXT = 16
 const STALL_MS = 120_000
 const BOOTSTRAP_RETRY_DELAY_MS = 500
@@ -213,14 +253,6 @@ function buildPromptWithImageSummary(prompt: string, imageAttachments: Pick<RunI
   ].join('\n')
 }
 
-function clipText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) {
-    return text
-  }
-
-  return `${text.slice(0, maxLength).trimEnd()}\n\n[truncated]`
-}
-
 function reorderPanesById(panes: PaneState[], sourcePaneId: string, targetPaneId: string): PaneState[] {
   if (sourcePaneId === targetPaneId) {
     return panes
@@ -303,36 +335,6 @@ async function fetchBootstrapWithRetry(): Promise<BootstrapPayload> {
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
-function sanitizeTerminalText(text: string): string {
-  return text
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\r\n?/g, '\n')
-    .replace(/\u0000/g, '')
-}
-
-function appendLiveOutputChunk(existing: string, incoming: string): string {
-  const normalized = sanitizeTerminalText(incoming)
-  if (!normalized) {
-    return existing
-  }
-
-  return clipText(`${existing}${normalized}`, MAX_LIVE_OUTPUT)
-}
-
-function appendShellOutputLine(existing: string, incoming: string): string {
-  const normalized = sanitizeTerminalText(incoming).replace(/\r/g, '').replace(/\n$/, '')
-
-  if (!existing) {
-    return normalized
-  }
-
-  if (!normalized.length) {
-    return clipText(`${existing}\n`, MAX_SHELL_OUTPUT)
-  }
-
-  return clipText(`${existing}\n${normalized}`, MAX_SHELL_OUTPUT)
-}
-
 function buildShellPromptLabel(pane: PaneState, cwd?: string | null): string {
   const currentPath =
     pane.workspaceMode === 'local'
@@ -345,229 +347,6 @@ function buildShellPromptLabel(pane: PaneState, cwd?: string | null): string {
 
   const sshLabel = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim() || 'ssh'
   return `${sshLabel}:${currentPath}$`
-}
-
-
-function appendLiveOutputLine(existing: string, incoming: string): string {
-  const normalized = sanitizeTerminalText(incoming).trim()
-  if (!normalized) {
-    return existing
-  }
-
-  return clipText(existing.trim() ? `${existing.trimEnd()}\n${normalized}` : normalized, MAX_LIVE_OUTPUT)
-}
-
-function summarize(text: string): string {
-  const normalized = text.replace(/\s+/g, ' ').trim()
-  if (normalized.length <= 110) {
-    return normalized
-  }
-
-  return `${normalized.slice(0, 110).trim()}...`
-}
-
-function getAbsoluteLocalParentPath(currentPath: string): string | null {
-  const normalizedPath = currentPath.replace(/[\/]+$/, '').replace(/\//g, '\\')
-  if (!normalizedPath) {
-    return null
-  }
-
-  if (/^[A-Za-z]:\\?$/.test(normalizedPath) || normalizedPath === '\\') {
-    return null
-  }
-
-  const segments = normalizedPath.split('\\')
-  if (segments.length <= 1) {
-    return null
-  }
-
-  segments.pop()
-  let parent = segments.join('\\')
-  if (/^[A-Za-z]:$/.test(parent)) {
-    parent += '\\'
-  }
-
-  return parent || null
-}
-
-function getAbsoluteRemoteParentPath(currentPath: string): string | null {
-  const normalizedPath = currentPath.trim().replace(/\\/g, '/').replace(/\/+$/, '')
-  if (!normalizedPath || normalizedPath === '/') {
-    return null
-  }
-
-  const segments = normalizedPath.split('/').filter(Boolean)
-  if (segments.length === 0) {
-    return '/'
-  }
-
-  segments.pop()
-  return segments.length === 0 ? '/' : `/${segments.join('/')}`
-}
-
-function getPathLabel(path: string): string {
-  const trimmed = path.trim().replace(/[\/]+$/, '')
-  const parts = trimmed.split(/[\/]/).filter(Boolean)
-  return parts[parts.length - 1] ?? path
-}
-
-function resolveRemoteRootPath(rootPath: string, homeDirectory: string | null): string {
-  const trimmed = rootPath.trim()
-  if (!trimmed || trimmed === '.') {
-    return homeDirectory || '~'
-  }
-
-  if (trimmed === '~') {
-    return homeDirectory || '~'
-  }
-
-  if (trimmed.startsWith('~/') && homeDirectory) {
-    return `${homeDirectory.replace(/\/+$/, '')}/${trimmed.slice(2)}`
-  }
-
-  return trimmed
-}
-
-function buildRemoteWorkspacePickerRoots(remoteRoots: string[], homeDirectory: string | null): LocalBrowseRoot[] {
-  const seen = new Set<string>()
-  const roots = [homeDirectory || '~', ...remoteRoots]
-
-  return roots
-    .map((rootPath) => resolveRemoteRootPath(rootPath, homeDirectory))
-    .filter((rootPath) => {
-      if (!rootPath || seen.has(rootPath)) {
-        return false
-      }
-      seen.add(rootPath)
-      return true
-    })
-    .map((rootPath) => ({
-      label: rootPath === homeDirectory || rootPath === '~' ? 'Home' : getPathLabel(rootPath),
-      path: rootPath
-    }))
-}
-
-function isLocalWorkspacePickerRootVisible(root: LocalBrowseRoot): boolean {
-  const hiddenNames = new Set(['desktop', 'documents', 'downloads', '\u30c7\u30b9\u30af\u30c8\u30c3\u30d7', '\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8', '\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9'])
-  const label = root.label.trim().toLowerCase()
-  const pathParts = normalizeComparablePath(root.path).toLowerCase().split('/').filter(Boolean)
-  const lastPathPart = pathParts[pathParts.length - 1] ?? ''
-  return !hiddenNames.has(label) && !hiddenNames.has(lastPathPart)
-}
-
-function isWorkspacePickerRootActive(workspacePicker: WorkspacePickerState, rootPath: string): boolean {
-  const normalizedCurrentPath = normalizeComparablePath(workspacePicker.path)
-  const normalizedRootPath = normalizeComparablePath(rootPath)
-  if (!normalizedCurrentPath || !normalizedRootPath) {
-    return false
-  }
-
-  if (workspacePicker.mode === 'local') {
-    return normalizedCurrentPath.toLowerCase().startsWith(normalizedRootPath.toLowerCase())
-  }
-
-  return normalizedCurrentPath === normalizedRootPath || normalizedCurrentPath.startsWith(`${normalizedRootPath}/`)
-}
-
-function normalizeComparablePath(value: string): string {
-  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '')
-  if (/^[A-Za-z]:$/.test(normalized)) {
-    return `${normalized}/`
-  }
-
-  return normalized
-}
-
-function normalizeLinkedPathTarget(value: string): string {
-  const trimmed = value.trim().replace(/^file:\/\/\/?/i, '')
-
-  try {
-    return decodeURIComponent(trimmed)
-  } catch {
-    return trimmed
-  }
-}
-
-function stripLinkedPathFragment(value: string): string {
-  return value.replace(/#L\d+(?::\d+)?(?:-L?\d+(?::\d+)?)?$/i, '').replace(/#\d+(?::\d+)?$/i, '').replace(/(\.[A-Za-z0-9]{1,12}):\d+(?::\d+)?$/i, '$1')
-}
-
-function isAbsoluteLocalPath(value: string): boolean {
-  const normalized = value.replace(/\//g, '\\')
-  return /^[A-Za-z]:\\/.test(normalized) || normalized.startsWith('\\\\')
-}
-
-function resolvePathSegments(baseSegments: string[], targetSegments: string[], minDepth = 0): string[] {
-  const resolved = [...baseSegments]
-
-  for (const segment of targetSegments) {
-    if (!segment || segment === '.') {
-      continue
-    }
-
-    if (segment === '..') {
-      if (resolved.length > minDepth) {
-        resolved.pop()
-      }
-      continue
-    }
-
-    resolved.push(segment)
-  }
-
-  return resolved
-}
-
-function resolveLinkedLocalPath(targetPath: string, workspaceRoot: string): string {
-  const normalizedTarget = stripLinkedPathFragment(normalizeLinkedPathTarget(targetPath)).replace(/\//g, '\\')
-  if (!normalizedTarget) {
-    return ''
-  }
-
-  if (isAbsoluteLocalPath(normalizedTarget)) {
-    return normalizedTarget
-  }
-
-  const normalizedWorkspaceRoot = workspaceRoot.trim().replace(/\//g, '\\')
-  if (!normalizedWorkspaceRoot) {
-    return normalizedTarget
-  }
-
-  const driveMatch = normalizedWorkspaceRoot.match(/^[A-Za-z]:/)
-  if (normalizedTarget.startsWith('\\') && driveMatch) {
-    return `${driveMatch[0]}${normalizedTarget}`
-  }
-
-  const baseSegments = normalizedWorkspaceRoot.split('\\').filter(Boolean)
-  const targetSegments = normalizedTarget.split('\\').filter(Boolean)
-  const resolvedSegments = resolvePathSegments(baseSegments, targetSegments, /^[A-Za-z]:$/.test(baseSegments[0] ?? '') ? 1 : 0)
-
-  if (/^[A-Za-z]:$/.test(resolvedSegments[0] ?? '')) {
-    return `${resolvedSegments[0]}\\${resolvedSegments.slice(1).join('\\')}`
-  }
-
-  return resolvedSegments.join('\\')
-}
-
-function resolveLinkedRemotePath(targetPath: string, workspaceRoot: string): string {
-  const normalizedTarget = stripLinkedPathFragment(normalizeLinkedPathTarget(targetPath)).replace(/\\/g, '/')
-  if (!normalizedTarget) {
-    return ''
-  }
-
-  if (normalizedTarget.startsWith('/')) {
-    return normalizedTarget
-  }
-
-  const normalizedWorkspaceRoot = workspaceRoot.trim().replace(/\\/g, '/')
-  if (!normalizedWorkspaceRoot) {
-    return normalizedTarget
-  }
-
-  const baseSegments = normalizedWorkspaceRoot.split('/').filter(Boolean)
-  const targetSegments = normalizedTarget.split('/').filter(Boolean)
-  const resolvedSegments = resolvePathSegments(baseSegments, targetSegments)
-  return `/${resolvedSegments.join('/')}`
 }
 
 function acquireBodyScrollLock(): () => void {
@@ -606,27 +385,6 @@ function acquireBodyScrollLock(): () => void {
   }
 }
 
-function clampLocalPathToWorkspace(targetPath: string, workspaceRoot: string): string {
-  const normalizedTarget = normalizeComparablePath(targetPath)
-  const normalizedRoot = normalizeComparablePath(workspaceRoot)
-
-  if (!normalizedRoot) {
-    return targetPath.trim()
-  }
-
-  if (!normalizedTarget) {
-    return workspaceRoot.trim()
-  }
-
-  const targetLower = normalizedTarget.toLowerCase()
-  const rootLower = normalizedRoot.toLowerCase()
-  if (targetLower === rootLower || targetLower.startsWith(`${rootLower}/`)) {
-    return targetPath.trim()
-  }
-
-  return workspaceRoot.trim()
-}
-
 function statusLabel(status: PaneStatus): string {
   switch (status) {
     case 'running':
@@ -642,14 +400,6 @@ function statusLabel(status: PaneStatus): string {
     default:
       return '\u5f85\u6a5f\u4e2d'
   }
-}
-
-function isProviderId(value: unknown): value is ProviderId {
-  return value === 'codex' || value === 'copilot' || value === 'gemini'
-}
-
-function isReasoningEffort(value: unknown): value is ReasoningEffort {
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
 }
 
 function normalizeLocalWorkspace(rawWorkspace: Partial<LocalWorkspace> | null | undefined): LocalWorkspace | null {
@@ -711,64 +461,6 @@ function mergeLocalWorkspaces(...groups: Array<Array<Partial<LocalWorkspace>> | 
     }
     return left.label.localeCompare(right.label, 'ja')
   })
-}
-
-function isAppLocalWorkspacePath(targetPath: string, workspaces: LocalWorkspace[]): boolean {
-  const normalizedTargetPath = normalizeComparablePath(targetPath).toLowerCase()
-  if (!normalizedTargetPath) {
-    return false
-  }
-
-  return workspaces.some((workspace) =>
-    workspace.source === 'app' &&
-    normalizeComparablePath(workspace.path).toLowerCase() === normalizedTargetPath
-  )
-}
-
-function getPreferredManualLocalWorkspace(workspaces: LocalWorkspace[]): LocalWorkspace | null {
-  return workspaces.find((workspace) => workspace.source !== 'app') ?? null
-}
-
-function isWindowsDriveRootPath(targetPath: string): boolean {
-  return /^[A-Za-z]:[\\/]?$/.test(targetPath.trim())
-}
-
-function getDefaultLocalBrowsePath(roots: LocalBrowseRoot[], hostPlatform: BootstrapPayload['hostPlatform'] | undefined): string {
-  const visibleRoots = roots.filter(isLocalWorkspacePickerRootVisible)
-  const driveRoot = visibleRoots.find((root) => isWindowsDriveRootPath(root.path))
-
-  if (hostPlatform === 'windows' || (hostPlatform === undefined && driveRoot)) {
-    return driveRoot?.path ?? visibleRoots[0]?.path ?? ''
-  }
-
-  return visibleRoots.find((root) => {
-    const label = root.label.trim().toLowerCase()
-    return label === 'home' || label === '\u30db\u30fc\u30e0'
-  })?.path ?? visibleRoots[0]?.path ?? ''
-}
-
-function chooseInitialLocalWorkspacePath(workspaces: LocalWorkspace[]): string {
-  return getPreferredManualLocalWorkspace(workspaces)?.path ?? ''
-}
-
-function chooseLocalWorkspacePickerStartPath(params: {
-  pane: PaneState | undefined
-  workspaces: LocalWorkspace[]
-  roots: LocalBrowseRoot[]
-  lastLocalBrowsePath: string | null
-  hostPlatform: BootstrapPayload['hostPlatform'] | undefined
-}): string {
-  const lastLocalBrowsePath = params.lastLocalBrowsePath?.trim()
-  if (lastLocalBrowsePath) {
-    return lastLocalBrowsePath
-  }
-
-  const paneWorkspacePath = params.pane?.localWorkspacePath.trim()
-  if (paneWorkspacePath && !isAppLocalWorkspacePath(paneWorkspacePath, params.workspaces)) {
-    return paneWorkspacePath
-  }
-
-  return getDefaultLocalBrowsePath(params.roots, params.hostPlatform)
 }
 
 function appendLogEntry(entries: PaneLogEntry[], entry: PaneLogEntry): PaneLogEntry[] {
@@ -1119,349 +811,6 @@ function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[],
     workspacePath: pane.remoteWorkspacePath.trim(),
     connection
   }
-}
-
-function buildPaneSessionScopeKey(pane: Pick<PaneState, 'provider' | 'model' | 'workspaceMode' | 'localWorkspacePath' | 'sshHost' | 'sshUser' | 'sshPort' | 'remoteWorkspacePath'>): string {
-  if (pane.workspaceMode === 'local') {
-    return ['local', pane.provider, pane.model, pane.localWorkspacePath.trim()].join('::')
-  }
-
-  return ['ssh', pane.provider, pane.model, pane.sshUser.trim(), pane.sshHost.trim(), pane.sshPort.trim(), pane.remoteWorkspacePath.trim()].join('::')
-}
-
-function createEmptyProviderSessionState(): PaneProviderSessionState {
-  return {
-    sessionId: null,
-    sessionScopeKey: null,
-    lastSharedLogEntryId: null,
-    lastSharedStreamEntryId: null,
-    updatedAt: null
-  }
-}
-
-function createEmptyProviderSessions(): Record<ProviderId, PaneProviderSessionState> {
-  return {
-    codex: createEmptyProviderSessionState(),
-    copilot: createEmptyProviderSessionState(),
-    gemini: createEmptyProviderSessionState()
-  }
-}
-
-function createProviderSettingsFromCatalog(catalogs: Record<ProviderId, ProviderCatalogResponse>, provider: ProviderId): PaneProviderSettings {
-  const model = catalogs[provider].models[0]
-  return {
-    model: model?.id ?? '',
-    reasoningEffort: model?.defaultReasoningEffort ?? 'medium',
-    autonomyMode: 'balanced',
-    codexFastMode: 'off'
-  }
-}
-
-function normalizeProviderSettings(
-  rawSettings: Partial<PaneProviderSettings> | null | undefined,
-  catalogs: Record<ProviderId, ProviderCatalogResponse>,
-  provider: ProviderId
-): PaneProviderSettings {
-  const fallback = createProviderSettingsFromCatalog(catalogs, provider)
-  const catalog = catalogs[provider]
-  const model = typeof rawSettings?.model === 'string' && catalog.models.some((item) => item.id === rawSettings.model)
-    ? rawSettings.model
-    : fallback.model
-  const modelInfo = catalog.models.find((item) => item.id === model) ?? catalog.models[0]
-  const reasoningEffort =
-    isReasoningEffort(rawSettings?.reasoningEffort) &&
-    (modelInfo?.supportedReasoningEfforts.length ? modelInfo.supportedReasoningEfforts.includes(rawSettings.reasoningEffort) : true)
-      ? rawSettings.reasoningEffort
-      : modelInfo?.defaultReasoningEffort ?? fallback.reasoningEffort
-
-  return {
-    model,
-    reasoningEffort,
-    autonomyMode: rawSettings?.autonomyMode === 'max' ? 'max' : 'balanced',
-    codexFastMode: provider === 'codex' && rawSettings?.codexFastMode === 'fast' ? 'fast' : 'off'
-  }
-}
-
-function createProviderSettingsMap(catalogs: Record<ProviderId, ProviderCatalogResponse>): Record<ProviderId, PaneProviderSettings> {
-  return {
-    codex: createProviderSettingsFromCatalog(catalogs, 'codex'),
-    copilot: createProviderSettingsFromCatalog(catalogs, 'copilot'),
-    gemini: createProviderSettingsFromCatalog(catalogs, 'gemini')
-  }
-}
-
-function normalizeProviderSettingsMap(
-  rawSettings: Partial<Record<ProviderId, Partial<PaneProviderSettings>>> | null | undefined,
-  catalogs: Record<ProviderId, ProviderCatalogResponse>
-): Record<ProviderId, PaneProviderSettings> {
-  return {
-    codex: normalizeProviderSettings(rawSettings?.codex, catalogs, 'codex'),
-    copilot: normalizeProviderSettings(rawSettings?.copilot, catalogs, 'copilot'),
-    gemini: normalizeProviderSettings(rawSettings?.gemini, catalogs, 'gemini')
-  }
-}
-
-function normalizeProviderSessionState(rawSession: Partial<PaneProviderSessionState> | null | undefined): PaneProviderSessionState {
-  return {
-    sessionId: typeof rawSession?.sessionId === 'string' ? rawSession.sessionId : null,
-    sessionScopeKey: typeof rawSession?.sessionScopeKey === 'string' ? rawSession.sessionScopeKey : null,
-    lastSharedLogEntryId: typeof rawSession?.lastSharedLogEntryId === 'string' ? rawSession.lastSharedLogEntryId : null,
-    lastSharedStreamEntryId: typeof rawSession?.lastSharedStreamEntryId === 'string' ? rawSession.lastSharedStreamEntryId : null,
-    updatedAt: typeof rawSession?.updatedAt === 'number' ? rawSession.updatedAt : null
-  }
-}
-
-function normalizeProviderSessionsMap(
-  rawSessions: Partial<Record<ProviderId, Partial<PaneProviderSessionState>>> | null | undefined
-): Record<ProviderId, PaneProviderSessionState> {
-  return {
-    codex: normalizeProviderSessionState(rawSessions?.codex),
-    copilot: normalizeProviderSessionState(rawSessions?.copilot),
-    gemini: normalizeProviderSessionState(rawSessions?.gemini)
-  }
-}
-
-function getCurrentProviderSettings(pane: PaneState): PaneProviderSettings {
-  return {
-    model: pane.model,
-    reasoningEffort: pane.reasoningEffort,
-    autonomyMode: pane.autonomyMode,
-    codexFastMode: pane.provider === 'codex' ? pane.codexFastMode : 'off'
-  }
-}
-
-function syncCurrentProviderSettings(pane: PaneState): PaneState {
-  return {
-    ...pane,
-    providerSettings: {
-      ...pane.providerSettings,
-      [pane.provider]: getCurrentProviderSettings(pane)
-    }
-  }
-}
-
-function updateProviderSessionState(
-  pane: PaneState,
-  provider: ProviderId,
-  updates: Partial<PaneProviderSessionState>
-): PaneState {
-  return {
-    ...pane,
-    providerSessions: {
-      ...pane.providerSessions,
-      [provider]: {
-        ...pane.providerSessions[provider],
-        ...updates
-      }
-    }
-  }
-}
-
-function resetProviderSessionState(pane: PaneState, provider: ProviderId): PaneState {
-  return updateProviderSessionState(pane, provider, createEmptyProviderSessionState())
-}
-
-function getProviderResumeSession(pane: PaneState, provider: ProviderId, scopeKey: string): string | null {
-  const providerSession = pane.providerSessions[provider]
-  if (providerSession?.sessionScopeKey === scopeKey) {
-    return providerSession.sessionId
-  }
-
-  if (provider === pane.provider && pane.sessionScopeKey === scopeKey) {
-    return pane.sessionId
-  }
-
-  return null
-}
-
-function selectPaneContextMemory(pane: PaneState, provider: ProviderId): PaneLogEntry[] {
-  const conversationEntries = pane.logs.filter((entry) => entry.role === 'user' || entry.role === 'assistant')
-  const providerSession = pane.providerSessions[provider]
-  const lastSharedLogEntryId = providerSession?.lastSharedLogEntryId
-  const lastSharedIndex = lastSharedLogEntryId ? pane.logs.findIndex((entry) => entry.id === lastSharedLogEntryId) : -1
-  const unsyncedEntries = lastSharedIndex >= 0 ? pane.logs.slice(lastSharedIndex + 1) : pane.logs
-  const unsyncedConversationEntries = unsyncedEntries.filter((entry) => entry.role === 'user' || entry.role === 'assistant')
-
-  if (unsyncedConversationEntries.length > 0) {
-    return unsyncedConversationEntries.slice(-4)
-  }
-
-  return conversationEntries.slice(-2)
-}
-
-function formatPreviewTimestamp(timestamp: number): string {
-  return new Date(timestamp).toLocaleString('ja-JP')
-}
-
-function formatPreviewLogEntries(entries: PaneLogEntry[]): string {
-  if (entries.length === 0) {
-    return '今回は渡しません。'
-  }
-
-  return entries.map((entry, index) => {
-    const agent = entry.provider ? `\nCLI: ${entry.provider}${entry.model ? ` / ${entry.model}` : ''}` : ''
-    return [
-      `Entry ${index + 1}`,
-      `role: ${entry.role}`,
-      `createdAt: ${formatPreviewTimestamp(entry.createdAt)}`,
-      agent.trim(),
-      'text:',
-      entry.text
-    ].filter(Boolean).join('\n')
-  }).join('\n\n---\n\n')
-}
-
-function formatPreviewSharedContext(items: SharedContextPayload[]): string {
-  if (items.length === 0) {
-    return '今回は渡しません。'
-  }
-
-  return items.map((item, index) => [
-    `Context ${index + 1}`,
-    `共有元ペイン: ${item.sourcePaneTitle}`,
-    `共有元CLI: ${item.provider}`,
-    `作業対象: ${item.workspaceLabel}`,
-    `概要: ${item.summary}`,
-    '詳細:',
-    item.detail
-  ].join('\n')).join('\n\n---\n\n')
-}
-
-function formatPreviewImageAttachments(attachments: RunImageAttachment[]): string {
-  if (attachments.length === 0) {
-    return '今回は渡しません。'
-  }
-
-  return attachments.map((attachment, index) => [
-    `Image ${index + 1}`,
-    `fileName: ${attachment.fileName}`,
-    `mimeType: ${attachment.mimeType}`,
-    `size: ${attachment.size}`,
-    `localPath: ${attachment.localPath}`
-  ].join('\n')).join('\n\n---\n\n')
-}
-
-function buildStructuredRunContextSections(params: {
-  catalogs: Record<ProviderId, ProviderCatalogResponse>
-  pane: PaneState
-  target: WorkspaceTarget
-  promptText: string
-  currentSessionScopeKey: string
-  resumeSessionId: string | null
-  providerContextMemory: PaneLogEntry[]
-  sharedContextPayload: SharedContextPayload[]
-  readyImageAttachments: RunImageAttachment[]
-}): CommandPreviewSection[] {
-  const catalog = params.catalogs[params.pane.provider]
-  const modelInfo = catalog.models.find((item) => item.id === params.pane.model)
-  const targetValue = params.target.kind === 'local'
-    ? [
-        'kind: local',
-        `label: ${params.target.label}`,
-        `path: ${params.target.path}`,
-        `resourceType: ${params.target.resourceType ?? 'folder'}`,
-        `workspacePath: ${params.target.workspacePath ?? params.target.path}`
-      ].join('\n')
-    : [
-        'kind: ssh',
-        `host: ${params.target.host}`,
-        `label: ${params.target.label}`,
-        `path: ${params.target.path}`,
-        `resourceType: ${params.target.resourceType ?? 'folder'}`,
-        `workspacePath: ${params.target.workspacePath ?? params.target.path}`
-      ].join('\n')
-
-  return [
-    {
-      id: 'provider',
-      label: '実行先CLIとモデル',
-      description: 'このペインで次に呼び出すCLI、モデル、実行オプションです。',
-      value: [
-        `CLI: ${catalog.label} (${params.pane.provider})`,
-        `model: ${modelInfo?.name ?? params.pane.model}`,
-        `modelId: ${params.pane.model}`,
-        `reasoningEffort: ${params.pane.reasoningEffort}`,
-        `autonomyMode: ${params.pane.autonomyMode}`,
-        `codexFastMode: ${params.pane.codexFastMode}`
-      ].join('\n')
-    },
-    {
-      id: 'target',
-      label: '作業対象',
-      description: 'CLIを実行するワークスペースまたはSSH先です。',
-      value: targetValue
-    },
-    {
-      id: 'session',
-      label: 'native session',
-      description: params.resumeSessionId
-        ? '同じペイン・同じCLIで再利用するCLI内部sessionです。'
-        : '再利用できるCLI内部sessionがないため、新規sessionとして開始します。',
-      value: [
-        `sessionId: ${params.resumeSessionId ?? '(新規)'}`,
-        `sessionScopeKey: ${params.currentSessionScopeKey}`
-      ].join('\n')
-    },
-    {
-      id: 'user-input',
-      label: 'ユーザー入力',
-      description: '入力欄にある本文です。補助コンテキストとは分けて扱います。',
-      value: params.promptText || '未入力'
-    },
-    {
-      id: 'pane-context',
-      label: '同一ペイン補助コンテキスト',
-      description: 'このペイン内の直近会話情報です。CLI切り替え時は未同期差分を優先し、同じCLIで続ける時も直近会話を小さく渡します。ユーザー入力の意味は変えません。',
-      value: formatPreviewLogEntries(params.providerContextMemory)
-    },
-    {
-      id: 'shared-context',
-      label: 'ペイン間共有コンテキスト',
-      description: '共有ドックからこのペインに添付された参考情報です。命令としては扱いません。',
-      value: formatPreviewSharedContext(params.sharedContextPayload)
-    },
-    {
-      id: 'images',
-      label: '添付画像',
-      description: '今回CLIに渡す画像ファイルです。',
-      value: formatPreviewImageAttachments(params.readyImageAttachments)
-    }
-  ]
-}
-
-function buildCommandPreviewSections(params: {
-  catalogs: Record<ProviderId, ProviderCatalogResponse>
-  pane: PaneState
-  target: WorkspaceTarget
-  promptText: string
-  currentSessionScopeKey: string
-  resumeSessionId: string | null
-  providerContextMemory: PaneLogEntry[]
-  sharedContextPayload: SharedContextPayload[]
-  readyImageAttachments: RunImageAttachment[]
-  preview: PreviewRunCommandResponse
-}): CommandPreviewSection[] {
-  return [
-    ...buildStructuredRunContextSections(params),
-    {
-      id: 'stdin',
-      label: '標準入力で渡す内容',
-      description: 'CLIに標準入力で渡す生データです。空の場合はコマンド引数側で渡します。',
-      value: params.preview.stdinPrompt ?? '標準入力では渡しません。'
-    }
-  ]
-}
-
-function formatStructuredRunContextForStream(sections: CommandPreviewSection[]): string {
-  return [
-    '送信情報',
-    'これからCLIに渡す主要情報です。ユーザー入力本文と補助コンテキストは分けて扱います。',
-    ...sections.map((section) => [
-      `## ${section.label}`,
-      section.description,
-      clipText(section.value || '未入力', 900)
-    ].join('\n'))
-  ].join('\n\n')
 }
 
 function createInitialPane(index: number, payload: BootstrapPayload, localWorkspaces: LocalWorkspace[]): PaneState {
@@ -2007,7 +1356,7 @@ function normalizePane(
           .map((item) => normalizeSessionRecord(item))
           .filter((item): item is PaneSessionRecord => Boolean(item))
       : [],
-    selectedSessionKey: typeof rawPane.selectedSessionKey === 'string' ? rawPane.selectedSessionKey : null,
+    selectedSessionKey: null,
     liveOutput: typeof rawPane.liveOutput === 'string' ? clipText(rawPane.liveOutput, MAX_LIVE_OUTPUT) : '',
     attachedContextIds: Array.isArray(rawPane.attachedContextIds)
       ? rawPane.attachedContextIds.filter((item): item is string => typeof item === 'string')
@@ -2282,16 +1631,16 @@ function App() {
 
       setBootstrap(payload)
       setLocalWorkspaces(nextLocalWorkspaces)
-      setPanes((current) => {
-        const source =
-          current.length > 0
-            ? current
-            : persistedRef.current.panes.length > 0
-              ? persistedRef.current.panes
-              : PROVIDER_ORDER.map((_, index) => createInitialPane(index, payload, nextLocalWorkspaces))
-
-        return source.map((pane) => normalizePane(pane, payload, nextLocalWorkspaces))
-      })
+      const source =
+        panesRef.current.length > 0
+          ? panesRef.current
+          : persistedRef.current.panes.length > 0
+            ? persistedRef.current.panes
+            : PROVIDER_ORDER.map((_, index) => createInitialPane(index, payload, nextLocalWorkspaces))
+      const normalizedPanes = source.map((pane) => normalizePane(pane, payload, nextLocalWorkspaces))
+      const reconciled = reconcileSharedContextWithPanes(sharedContextRef.current, normalizedPanes, MAX_SHARED_CONTEXT)
+      setSharedContext(reconciled.sharedContext)
+      setPanes(reconciled.panes)
     } catch (error) {
       setGlobalError(error instanceof Error ? error.message : String(error))
     } finally {
