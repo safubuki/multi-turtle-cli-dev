@@ -2,9 +2,9 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { RunImageAttachment } from './types.js'
-import { APP_ROOT } from './util.js'
+import { RUNTIME_ROOT } from './util.js'
 
-const PROMPT_IMAGE_DIR = path.join(APP_ROOT, '.multi-turtle-runtime', 'prompt-images')
+const PROMPT_IMAGE_DIR = path.join(RUNTIME_ROOT, 'prompt-images')
 const MAX_PROMPT_IMAGE_BYTES = 15 * 1024 * 1024
 const STAGED_IMAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const MIME_EXTENSION_MAP: Record<string, string> = {

@@ -12,7 +12,6 @@ import type {
 import { clipText } from './text'
 
 export function selectPaneContextMemory(pane: PaneState, provider: ProviderId): PaneLogEntry[] {
-  const conversationEntries = pane.logs.filter((entry) => entry.role === 'user' || entry.role === 'assistant')
   const providerSession = pane.providerSessions[provider]
   const lastSharedLogEntryId = providerSession?.lastSharedLogEntryId
   const lastSharedIndex = lastSharedLogEntryId ? pane.logs.findIndex((entry) => entry.id === lastSharedLogEntryId) : -1
@@ -23,7 +22,7 @@ export function selectPaneContextMemory(pane: PaneState, provider: ProviderId): 
     return unsyncedConversationEntries.slice(-4)
   }
 
-  return conversationEntries.slice(-2)
+  return []
 }
 
 function formatPreviewTimestamp(timestamp: number): string {
@@ -148,7 +147,7 @@ export function buildStructuredRunContextSections(params: {
     {
       id: 'pane-context',
       label: '同一ペイン補助コンテキスト',
-      description: 'このペイン内の直近会話情報です。CLI切り替え時は未同期差分を優先し、同じCLIで続ける時も直近会話を小さく渡します。ユーザー入力の意味は変えません。',
+      description: 'このペイン内で対象CLIがまだ見ていない直近会話情報です。主にCLI切り替えなどで未同期差分がある時だけ渡します。ユーザー入力の意味は変えません。',
       value: formatPaneContextMemory(params.providerContextMemory)
     },
     {

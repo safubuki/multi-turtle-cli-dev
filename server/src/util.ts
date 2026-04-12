@@ -1,9 +1,11 @@
 import path from 'path'
+import os from 'os'
 import { fileURLToPath } from 'url'
 
 const CURRENT_FILE = fileURLToPath(import.meta.url)
 export const SERVER_ROOT = path.resolve(path.dirname(CURRENT_FILE), '..')
 export const APP_ROOT = path.resolve(SERVER_ROOT, '..')
+export const RUNTIME_ROOT = path.join(os.tmpdir(), 'multi-turtle-cli-dev-runtime')
 
 export function dedupeStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))]

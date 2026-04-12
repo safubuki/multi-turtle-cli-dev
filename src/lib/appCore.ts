@@ -329,6 +329,26 @@ export function getProviderIssueSummary(provider: ProviderId, message: string, a
   const codexCanEscalate = provider === 'codex' && autonomyMode !== 'max'
 
   if (
+    /fatal:\s*detected dubious ownership in repository/i.test(message)
+  ) {
+    return {
+      displayMessage: 'Git が safe.directory 未設定のため対象リポジトリを拒否しました。対象ワークスペースで git を使うには、そのパスを safe.directory に追加する必要があります。今回の修正で TAKO 自身のリポジトリ配下の一時ファイルは使わないようにしましたが、対象ワークスペース自体の所有者が現在ユーザーと違う場合は別途 Git 設定が必要です。',
+      status: 'attention',
+      statusText: 'Git の安全設定が必要です'
+    }
+  }
+
+  if (
+    /fatal:\s*not a git repository/i.test(message)
+  ) {
+    return {
+      displayMessage: 'CLI 内で git を実行しましたが、現在の作業ディレクトリに .git が見つかりませんでした。今回の修正で CLI の作業ディレクトリは選択中ワークスペースへ明示固定されます。なお、そのワークスペース自体が Git 管理外ならこのエラーは残ります。',
+      status: 'attention',
+      statusText: 'Git リポジトリではありません'
+    }
+  }
+
+  if (
     provider === 'gemini' &&
     /exhausted your capacity on this model|quota will reset after|resource_exhausted|too many requests/i.test(message)
   ) {

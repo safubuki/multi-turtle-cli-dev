@@ -315,7 +315,7 @@ describe('App workspace picker and command preview flows', () => {
     })
   })
 
-  it('実行プレビューで pane context を従来どおり表示する', async () => {
+  it('同一CLIの継続会話では実行プレビューに pane context を付けない', async () => {
     seedPersistedPanes([
       {
         id: 'pane-preview',
@@ -326,9 +326,20 @@ describe('App workspace picker and command preview flows', () => {
         localWorkspacePath: 'C:\\Preview',
         prompt: 'プレビュー確認',
         logs: [
-          { id: 'log-1', role: 'user', text: 'first user prompt', createdAt: 1_700_000_000_000 },
+          { id: 'log-1', role: 'user', text: 'first user prompt', createdAt: 1_700_000_000_000, provider: 'codex', model: 'codex-model' },
           { id: 'log-2', role: 'assistant', text: 'assistant response', createdAt: 1_700_000_010_000, provider: 'codex', model: 'codex-model' }
-        ]
+        ],
+        providerSessions: {
+          codex: {
+            sessionId: 'session-codex',
+            sessionScopeKey: 'local::codex::codex-model::C:\\Preview',
+            lastSharedLogEntryId: 'log-2',
+            lastSharedStreamEntryId: null,
+            updatedAt: 1_700_000_010_000
+          },
+          copilot: { sessionId: null, sessionScopeKey: null, lastSharedLogEntryId: null, lastSharedStreamEntryId: null, updatedAt: null },
+          gemini: { sessionId: null, sessionScopeKey: null, lastSharedLogEntryId: null, lastSharedStreamEntryId: null, updatedAt: null }
+        }
       }
     ])
 
@@ -347,13 +358,10 @@ describe('App workspace picker and command preview flows', () => {
 
     await waitFor(() => {
       expect(apiMocks.previewRunCommand).toHaveBeenCalledTimes(1)
-      expect(apiMocks.previewRunCommand.mock.calls[0]?.[0].memory).toHaveLength(2)
-      expect(apiMocks.previewRunCommand.mock.calls[0]?.[0].memory[0]?.text).toBe('first user prompt')
-      expect(apiMocks.previewRunCommand.mock.calls[0]?.[0].memory[1]?.text).toBe('assistant response')
+      expect(apiMocks.previewRunCommand.mock.calls[0]?.[0].memory).toHaveLength(0)
     })
 
     expect(await screen.findByText('同一ペイン補助コンテキスト')).toBeInTheDocument()
-    expect(screen.getByText(/first user prompt/)).toBeInTheDocument()
-    expect(screen.getByText(/assistant response/)).toBeInTheDocument()
+    expect(screen.getAllByText('今回は渡しません。').length).toBeGreaterThan(0)
   })
 })

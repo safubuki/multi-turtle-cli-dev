@@ -14,7 +14,7 @@ import type {
 } from './types.js'
 import { getProviderCatalogs } from './providerCatalog.js'
 import { buildSshCommandArgs, runRemoteBashCommand, scpTransfer } from './ssh.js'
-import { APP_ROOT, buildRemoteBashBootstrap, dedupeStrings, shellEscapePosix } from './util.js'
+import { RUNTIME_ROOT, APP_ROOT, buildRemoteBashBootstrap, dedupeStrings, shellEscapePosix } from './util.js'
 
 interface RunOptions {
   provider: ProviderId
@@ -69,7 +69,7 @@ const DEFAULT_STATE = (): ParsedRunState => ({
 type CliEncoding = 'auto' | 'utf8' | 'shift_jis'
 
 function createCodexOutputCapturePath(): string {
-  const captureDir = path.join(APP_ROOT, '.multi-turtle-runtime')
+  const captureDir = path.join(RUNTIME_ROOT, 'codex-output')
   fs.mkdirSync(captureDir, { recursive: true })
   return path.join(captureDir, `codex-last-message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`)
 }
@@ -121,6 +121,7 @@ function appendCodexPreviewNotes(notes: string[], autonomyMode: AutonomyMode): v
 function buildCodexExecArgs(
   prefixArgs: string[],
   model: string,
+  workingDirectory: string,
   outputFilePath: string,
   resolvedSessionId: string | null,
   imagePaths: string[],
@@ -130,6 +131,8 @@ function buildCodexExecArgs(
     ? [
         ...prefixArgs,
         'exec',
+        '-C',
+        workingDirectory,
         '--json',
         ...buildCodexModeArgs(autonomyMode),
         '--skip-git-repo-check',
@@ -145,6 +148,8 @@ function buildCodexExecArgs(
     : [
         ...prefixArgs,
         'exec',
+        '-C',
+        workingDirectory,
         '--json',
       ...buildCodexModeArgs(autonomyMode),
         '--skip-git-repo-check',
@@ -886,6 +891,18 @@ function buildGeminiIncludeDirectoryArgs(basePath: string, imageAttachments: Res
   return directories.flatMap((directoryPath) => ['--include-directories', directoryPath])
 }
 
+function resolveLocalWorkingDirectory(target: Extract<WorkspaceTarget, { kind: 'local' }>): string {
+  const workspacePath = target.workspacePath?.trim()
+  const basePath = workspacePath || (target.resourceType === 'file' ? path.dirname(target.path) : target.path)
+  return path.resolve(basePath)
+}
+
+function resolveRemoteWorkingDirectory(target: Extract<WorkspaceTarget, { kind: 'ssh' }>): string {
+  const workspacePath = target.workspacePath?.trim()
+  const basePath = workspacePath || (target.resourceType === 'file' ? path.posix.dirname(target.path) : target.path)
+  return (basePath || '~').trim()
+}
+
 function buildProviderPrompt(options: RunOptions, imageAttachments: ResolvedRunImageAttachment[] = []): string {
   const promptSections = [
     ...(imageAttachments.length > 0 ? [buildAttachedImagePrompt(options.provider, imageAttachments)] : []),
@@ -937,6 +954,10 @@ function spawnCliChild(command: string, args: string[], cwd: string): ChildProce
 }
 
 async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec> {
+  if (options.target.kind !== 'local') {
+    throw new Error('Local launch requires local target.')
+  }
+
   if (options.provider === 'copilot' && options.imageAttachments.length > 0) {
     throw new Error('GitHub Copilot CLI は画像入力に対応していません。Codex CLI または Gemini CLI を選択してください。')
   }
@@ -945,6 +966,7 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
   const resolvedSessionId = sanitizeSessionId(options.sessionId)
   const launcher = resolveCommand(options.provider)
   const resolvedImageAttachments = resolveLocalImageAttachments(options.imageAttachments)
+  const workingDirectory = resolveLocalWorkingDirectory(options.target)
   const providerPrompt = buildProviderPrompt(options, resolvedImageAttachments)
 
   if (options.provider === 'codex') {
@@ -952,6 +974,7 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
     const args = buildCodexExecArgs(
       launcher.prefixArgs,
       options.model,
+      workingDirectory,
       outputFilePath,
       resolvedSessionId,
       resolvedImageAttachments.map((attachment) => attachment.path),
@@ -976,7 +999,7 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
       'stream-json',
       '--approval-mode',
       approvalMode,
-      ...buildGeminiIncludeDirectoryArgs(options.target.path, resolvedImageAttachments),
+      ...buildGeminiIncludeDirectoryArgs(workingDirectory, resolvedImageAttachments),
       '--prompt',
       providerPrompt
     ]
@@ -1004,7 +1027,7 @@ async function buildLocalLaunchSpec(options: RunOptions): Promise<CliLaunchSpec>
     '--no-ask-user',
     '--no-color',
     '--add-dir',
-    options.target.path
+    workingDirectory
   ]
 
   if (supportsReasoning) {
@@ -1038,6 +1061,7 @@ async function buildRemoteLaunchSpecFromResolved(
   const supportsReasoning = await modelSupportsReasoning(options.provider, options.model)
   const resolvedSessionId = sanitizeSessionId(options.sessionId)
   const approvalMode = options.autonomyMode === 'max' ? 'yolo' : 'auto_edit'
+  const workingDirectory = resolveRemoteWorkingDirectory(options.target)
   const providerPrompt = buildProviderPrompt(options, preparedRemoteImages.attachments)
 
   const remoteArgs =
@@ -1045,6 +1069,7 @@ async function buildRemoteLaunchSpecFromResolved(
       ? buildCodexExecArgs(
           ['codex'],
           options.model,
+          workingDirectory,
           REMOTE_CODEX_OUTPUT_PLACEHOLDER,
           resolvedSessionId,
           preparedRemoteImages.attachments.map((attachment) => attachment.path),
@@ -1059,7 +1084,7 @@ async function buildRemoteLaunchSpecFromResolved(
             'stream-json',
             '--approval-mode',
             approvalMode,
-            ...buildGeminiIncludeDirectoryArgs(options.target.path, preparedRemoteImages.attachments),
+            ...buildGeminiIncludeDirectoryArgs(workingDirectory, preparedRemoteImages.attachments),
             '--prompt',
             providerPrompt,
             ...(resolvedSessionId ? ['--resume', resolvedSessionId] : [])
@@ -1076,7 +1101,7 @@ async function buildRemoteLaunchSpecFromResolved(
             '--no-ask-user',
             '--no-color',
             '--add-dir',
-            options.target.path,
+            workingDirectory,
             ...(supportsReasoning ? ['--reasoning-effort', options.reasoningEffort] : []),
             ...(resolvedSessionId ? [`--resume=${resolvedSessionId}`] : []),
             '-p',
@@ -1091,7 +1116,7 @@ async function buildRemoteLaunchSpecFromResolved(
     buildRemoteBashBootstrap(),
     'export TERM=xterm-256color',
     'export COLORTERM=truecolor',
-    `cd ${shellEscapePosix(options.target.path)}`,
+    `cd ${shellEscapePosix(workingDirectory)}`,
     `if ! command -v ${providerCommand} >/dev/null 2>&1; then printf '%s\n' 'Remote ${providerCommand} CLI was not found in PATH after loading shell profiles.' >&2; exit 127; fi`
   ]
 
@@ -1327,6 +1352,7 @@ export async function previewCliRunCommand(options: RunOptions): Promise<{
     const resolvedImageAttachments = resolveLocalImageAttachments(options.imageAttachments)
     const effectivePrompt = buildProviderPrompt(options, resolvedImageAttachments)
     const launchSpec = await buildLocalLaunchSpec(options)
+    const workingDirectory = resolveLocalWorkingDirectory(options.target)
     if (launchSpec.stdinPrompt) {
       notes.push('Codex CLI \u3067\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u672c\u4f53\u3092\u6a19\u6e96\u5165\u529b\u3067\u6e21\u3057\u307e\u3059\u3002')
     }
@@ -1338,7 +1364,7 @@ export async function previewCliRunCommand(options: RunOptions): Promise<{
       commandLine: buildPreviewCommandLine(launchSpec.command, launchSpec.args),
       stdinPrompt: launchSpec.stdinPrompt,
       effectivePrompt,
-      workingDirectory: options.target.path,
+      workingDirectory,
       notes
     }
   }
@@ -1346,6 +1372,7 @@ export async function previewCliRunCommand(options: RunOptions): Promise<{
   const previewRemoteImages = resolveRemotePreviewImageAttachments(options.imageAttachments)
   const effectivePrompt = buildProviderPrompt(options, previewRemoteImages.attachments)
   const launchSpec = await buildRemoteLaunchSpecFromResolved(options, previewRemoteImages)
+  const workingDirectory = resolveRemoteWorkingDirectory(options.target)
   if (launchSpec.stdinPrompt) {
     notes.push('Codex CLI \u3067\u306f\u30d7\u30ed\u30f3\u30d7\u30c8\u672c\u4f53\u3092\u6a19\u6e96\u5165\u529b\u3067\u6e21\u3057\u307e\u3059\u3002')
   }
@@ -1360,7 +1387,7 @@ export async function previewCliRunCommand(options: RunOptions): Promise<{
     commandLine: buildPreviewCommandLine(launchSpec.command, launchSpec.args),
     stdinPrompt: launchSpec.stdinPrompt,
     effectivePrompt,
-    workingDirectory: options.target.path,
+    workingDirectory,
     notes
   }
 }
@@ -1374,7 +1401,7 @@ async function startSingleCliRun(options: RunOptions): Promise<ActiveCliRun> {
   const child = spawnCliChild(
     launchSpec.command,
     launchSpec.args,
-    options.target.kind === 'local' ? options.target.path : APP_ROOT
+    options.target.kind === 'local' ? resolveLocalWorkingDirectory(options.target) : APP_ROOT
   )
 
   child.stdin.on('error', () => {
