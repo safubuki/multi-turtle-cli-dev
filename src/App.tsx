@@ -1,4 +1,4 @@
-﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+﻿import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   XCircle
 } from 'lucide-react'
@@ -8,10 +8,6 @@ import { SharedContextDock } from './components/SharedContextDock'
 import { StageToolbar } from './components/StageToolbar'
 import { SummaryMetrics } from './components/SummaryMetrics'
 import { WorkspacePickerModal } from './components/WorkspacePickerModal'
-import {
-  syncCurrentProviderSettings,
-} from './lib/providerState'
-import { reconcileSharedContextWithPanes } from './lib/sharedContext'
 import { createRunActions } from './lib/runActions'
 import { createSessionContextActions } from './lib/sessionContextActions'
 import { createShellActions } from './lib/shellActions'
@@ -20,10 +16,10 @@ import { createPromptImageActions } from './lib/promptImageActions'
 import { createPaneLifecycleActions } from './lib/paneLifecycleActions'
 import { createPanePresentationActions } from './lib/panePresentationActions'
 import { createPaneProviderActions } from './lib/paneProviderActions'
-import {
-  getManualWorkspaces,
-  mergeLocalWorkspaces
-} from './lib/workspacePaths'
+import { createPaneStateActions } from './lib/paneStateActions'
+import { mergeLocalWorkspaces } from './lib/workspacePaths'
+import { useAppLifecycle } from './lib/useAppLifecycle'
+import { useAppUiEffects } from './lib/useAppUiEffects'
 import { createWorkspaceActions } from './lib/workspaceActions'
 import type {
   BootstrapPayload,
@@ -36,30 +32,15 @@ import type {
 
 import {
   EMPTY_CATALOGS,
-  MAX_SHARED_CONTEXT,
-  PROVIDER_ORDER,
   TITLE_IMAGE_URL,
-  type LayoutMode,
-  appendStreamEntry,
-  fetchBootstrapWithRetry,
-  findReusableSshPane,
-  getPreferredLocalSshKey,
-  mergeLocalSshKeys,
+  type LayoutMode
 } from './lib/appCore'
 import {
-  acquireBodyScrollLock,
   animateReorder,
   getDocumentRect,
 } from './lib/browserUi'
-import {
-  createInitialPane,
-  getPaneVisualStatus,
-  normalizePane
-} from './lib/paneState'
-import {
-  loadPersistedState,
-  persistState
-} from './lib/storage'
+import { getPaneVisualStatus } from './lib/paneState'
+import { loadPersistedState } from './lib/storage'
 
 function App() {
   const persistedRef = useRef(loadPersistedState())
@@ -96,9 +77,6 @@ function App() {
   const promptImageCleanupPathsRef = useRef<Record<string, string[]>>({})
   const matrixTileRectsRef = useRef<Map<string, DOMRect>>(new Map())
   const paneCardRectsRef = useRef<Map<string, DOMRect>>(new Map())
-  const refreshBootstrapInFlightRef = useRef(false)
-  const refreshBootstrapRef = useRef<(() => Promise<void>) | null>(null)
-  const persistTimerRef = useRef<number | null>(null)
   const lastLocalBrowsePathRef = useRef<string | null>(persistedRef.current.lastLocalBrowsePath)
   const runStatusCheckInFlightRef = useRef(false)
 
@@ -108,145 +86,6 @@ function App() {
   paneImageAttachmentsRef.current = paneImageAttachments
   draggedPaneIdRef.current = draggedPaneId
   matrixDropTargetIdRef.current = matrixDropTargetId
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [])
-
-  useEffect(() => {
-    return () => {
-      for (const timer of Object.values(workspaceRefreshTimersRef.current)) {
-        window.clearTimeout(timer)
-      }
-      for (const controller of Object.values(controllersRef.current)) {
-        controller.abort()
-      }
-      for (const controller of Object.values(shellControllersRef.current)) {
-        controller.abort()
-      }
-      cleanupAllPromptImageResources()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!bootstrap) {
-      return
-    }
-
-    if (persistTimerRef.current !== null) {
-      window.clearTimeout(persistTimerRef.current)
-    }
-
-    const persistDelay = panes.some((pane) => pane.runInProgress) ? 1_200 : 300
-    persistTimerRef.current = window.setTimeout(() => {
-      persistState({
-        panes,
-        sharedContext,
-        layout,
-        localWorkspaces,
-        focusedPaneId
-      })
-      persistTimerRef.current = null
-    }, persistDelay)
-
-    return () => {
-      if (persistTimerRef.current !== null) {
-        window.clearTimeout(persistTimerRef.current)
-        persistTimerRef.current = null
-      }
-    }
-  }, [bootstrap, focusedPaneId, layout, localWorkspaces, panes, sharedContext])
-
-  useEffect(() => {
-    if (panes.length === 0) {
-      return
-    }
-
-    if (!focusedPaneId || !panes.some((pane) => pane.id === focusedPaneId)) {
-      setFocusedPaneId(panes[0].id)
-    }
-  }, [focusedPaneId, panes])
-
-  useEffect(() => {
-    setSelectedPaneIds((current) => current.filter((paneId) => panes.some((pane) => pane.id === paneId)))
-  }, [panes])
-
-  const refreshBootstrap = async () => {
-    if (refreshBootstrapInFlightRef.current) {
-      return
-    }
-
-    refreshBootstrapInFlightRef.current = true
-    setLoading(true)
-    setGlobalError(null)
-
-    try {
-      const payload = await fetchBootstrapWithRetry()
-      const nextLocalWorkspaces = mergeLocalWorkspaces(
-        payload.localWorkspaces,
-        getManualWorkspaces(localWorkspacesRef.current),
-        getManualWorkspaces(persistedRef.current.localWorkspaces)
-      )
-
-      setBootstrap(payload)
-      setLocalWorkspaces(nextLocalWorkspaces)
-      const source =
-        panesRef.current.length > 0
-          ? panesRef.current
-          : persistedRef.current.panes.length > 0
-            ? persistedRef.current.panes
-            : PROVIDER_ORDER.map((_, index) => createInitialPane(index, payload, nextLocalWorkspaces))
-      const normalizedPanes = source.map((pane) => normalizePane(pane, payload, nextLocalWorkspaces))
-      const reconciled = reconcileSharedContextWithPanes(sharedContextRef.current, normalizedPanes, MAX_SHARED_CONTEXT)
-      setSharedContext(reconciled.sharedContext)
-      setPanes(reconciled.panes)
-    } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : String(error))
-    } finally {
-      refreshBootstrapInFlightRef.current = false
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    refreshBootstrapRef.current = refreshBootstrap
-  }, [refreshBootstrap])
-
-  useEffect(() => {
-    void refreshBootstrap()
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return
-    }
-
-    const handleWindowFocus = () => {
-      void refreshBootstrapRef.current?.()
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void refreshBootstrapRef.current?.()
-      }
-    }
-
-    window.addEventListener('focus', handleWindowFocus)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => {
-      window.removeEventListener('focus', handleWindowFocus)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!workspacePicker) {
-      return
-    }
-
-    return acquireBodyScrollLock()
-  }, [workspacePicker])
 
   const catalogs = bootstrap?.providers ?? EMPTY_CATALOGS
   const isBootstrapping = loading && !bootstrap
@@ -322,58 +161,13 @@ function App() {
     paneCardRectsRef.current = nextPaneRects
   }, [layout, paneOrderKey, visiblePaneOrderKey])
 
-  const updatePane = (paneId: string, updates: Partial<PaneState>) => {
-    setPanes((current) => current.map((pane) => {
-      if (pane.id !== paneId) {
-        return pane
-      }
-
-      const nextPane = { ...pane, ...updates }
-      if (typeof updates.sshHost !== 'string') {
-        return syncCurrentProviderSettings(nextPane)
-      }
-
-      const reusablePane = findReusableSshPane(paneId, nextPane.sshHost, current)
-      if (!reusablePane) {
-        return nextPane
-      }
-
-      const mergedLocalKeys = mergeLocalSshKeys(nextPane.sshLocalKeys, reusablePane.sshLocalKeys)
-      const hasExplicitKeySelection = Boolean(nextPane.sshSelectedKeyPath.trim() || nextPane.sshIdentityFile.trim())
-      const preferredKey = getPreferredLocalSshKey({ ...nextPane, sshLocalKeys: mergedLocalKeys }, mergedLocalKeys, current)
-
-      if (mergedLocalKeys.length !== nextPane.sshLocalKeys.length) {
-        nextPane.sshLocalKeys = mergedLocalKeys
-      }
-
-      if (!hasExplicitKeySelection) {
-        if (preferredKey) {
-          nextPane.sshSelectedKeyPath = preferredKey.privateKeyPath
-          nextPane.sshIdentityFile = preferredKey.privateKeyPath
-          nextPane.sshPublicKeyText = preferredKey.publicKey
-          nextPane.sshKeyName = preferredKey.name
-          nextPane.sshKeyComment = preferredKey.comment
-        } else if (reusablePane.sshIdentityFile.trim()) {
-          nextPane.sshIdentityFile = reusablePane.sshIdentityFile.trim()
-        }
-      }
-
-      return syncCurrentProviderSettings(nextPane)
-    }))
-  }
-
-  const mutatePane = (paneId: string, updater: (pane: PaneState) => PaneState) => {
-    setPanes((current) => current.map((pane) => (pane.id === paneId ? updater(pane) : pane)))
-  }
-
-  const appendPaneSystemMessage = (paneId: string, text: string) => {
-    const eventAt = Date.now()
-    mutatePane(paneId, (pane) => ({
-      ...pane,
-      streamEntries: appendStreamEntry(pane.streamEntries, 'system', text, eventAt),
-      lastActivityAt: eventAt
-    }))
-  }
+  const {
+    updatePane,
+    mutatePane,
+    appendPaneSystemMessage
+  } = createPaneStateActions({
+    setPanes
+  })
 
   const {
     cleanupAllPromptImageResources,
@@ -467,7 +261,7 @@ function App() {
     handlePreviewRunCommand: previewRunCommand,
     handleRun,
     handleStop,
-    checkBackgroundRunStatuses,
+    checkBackgroundRunStatuses
   } = createRunActions({
     bootstrap,
     panesRef,
@@ -487,6 +281,33 @@ function App() {
     flushQueuedPromptImageCleanup,
     scheduleWorkspaceContentsRefresh,
     setPendingShareSelection
+  })
+
+  useAppLifecycle({
+    persistedRef,
+    bootstrap,
+    panes,
+    sharedContext,
+    layout,
+    localWorkspaces,
+    focusedPaneId,
+    panesRef,
+    localWorkspacesRef,
+    sharedContextRef,
+    controllersRef,
+    shellControllersRef,
+    workspaceRefreshTimersRef,
+    cleanupAllPromptImageResources,
+    setBootstrap,
+    setLocalWorkspaces,
+    setPanes,
+    setSharedContext,
+    setFocusedPaneId,
+    setSelectedPaneIds,
+    setLoading,
+    setGlobalError,
+    setNow,
+    checkBackgroundRunStatuses
   })
 
   const {
@@ -545,6 +366,14 @@ function App() {
     pruneSharedContextForDeletedPanes
   })
 
+  useAppUiEffects({
+    workspacePicker,
+    selectedPane,
+    selectedPaneIds,
+    handleBrowseLocal,
+    handleDeleteSelectedPanes
+  })
+
   const {
     handleMatrixClick,
     handleMatrixDragStart,
@@ -565,74 +394,6 @@ function App() {
     setMatrixDropTargetId,
     scrollToPane
   })
-
-  useEffect(() => {
-    const handleVisibilityOrFocus = () => {
-      if (document.visibilityState === 'visible') {
-        void checkBackgroundRunStatuses()
-      }
-    }
-
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        void checkBackgroundRunStatuses()
-      }
-    }, 5_000)
-
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus)
-    window.addEventListener('focus', handleVisibilityOrFocus)
-    return () => {
-      window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus)
-      window.removeEventListener('focus', handleVisibilityOrFocus)
-    }
-  }, [])
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Delete' || selectedPaneIds.length === 0) {
-        return
-      }
-
-      const activeElement = document.activeElement
-      if (
-        activeElement instanceof HTMLInputElement ||
-        activeElement instanceof HTMLTextAreaElement ||
-        activeElement instanceof HTMLSelectElement ||
-        (activeElement instanceof HTMLElement && activeElement.isContentEditable)
-      ) {
-        return
-      }
-
-      event.preventDefault()
-      handleDeleteSelectedPanes()
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [handleDeleteSelectedPanes, panes, selectedPaneIds])
-
-  useEffect(() => {
-    if (!selectedPane || selectedPane.workspaceMode !== 'local' || !selectedPane.localWorkspacePath) {
-      return
-    }
-
-    if (selectedPane.localBrowserLoading || selectedPane.localBrowserPath) {
-      return
-    }
-
-    void handleBrowseLocal(selectedPane.id, selectedPane.localWorkspacePath)
-  }, [
-    selectedPane,
-    selectedPane?.id,
-    selectedPane?.workspaceMode,
-    selectedPane?.localWorkspacePath,
-    selectedPane?.localBrowserPath,
-    selectedPane?.localBrowserLoading,
-    handleBrowseLocal
-  ])
 
   return (
     <div className="app-shell">
