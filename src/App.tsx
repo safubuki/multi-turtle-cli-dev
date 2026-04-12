@@ -12,16 +12,12 @@ import {
   fetchPaneRunStatus,
   previewRunCommand,
   runPaneStream,
-  runShellStream,
-  stagePromptImage,
   stopPaneRun,
-  unstagePromptImages,
   stopShellRun
 } from './lib/api'
 import {
   appendLiveOutputChunk,
   appendLiveOutputLine,
-  appendShellOutputLine,
   clipText,
   MAX_LIVE_OUTPUT,
   sanitizeTerminalText
@@ -37,11 +33,13 @@ import {
   createEmptyProviderSessions,
   createProviderSettingsFromCatalog,
   getProviderResumeSession,
-  resetProviderSessionState,
   syncCurrentProviderSettings,
   updateProviderSessionState
 } from './lib/providerState'
 import { reconcileSharedContextWithPanes } from './lib/sharedContext'
+import { createSessionContextActions } from './lib/sessionContextActions'
+import { createShellActions } from './lib/shellActions'
+import { createPromptImageActions } from './lib/promptImageActions'
 import {
   getManualWorkspaces,
   mergeLocalWorkspaces
@@ -54,43 +52,31 @@ import type {
   PaneState,
   PreviewRunCommandResponse,
   PromptImageAttachment,
-  PromptImageAttachmentSource,
   ProviderId,
   RunImageAttachment,
   RunStatusResponse,
   RunStreamEvent,
-  ShellRunEvent,
   SharedContextItem,
   WorkspacePickerState
 } from './types'
 
 import {
-  MAX_LOGS,
   MAX_SHARED_CONTEXT,
-  MAX_STREAM_ENTRIES,
   EMPTY_CATALOGS,
   PROVIDER_ORDER,
   TITLE_IMAGE_URL,
   type LayoutMode,
   appendLogEntry,
-  appendSessionRecord,
   appendStreamEntry,
   buildPromptWithImageSummary,
-  buildShellPromptLabel,
   buildTargetFromPane,
-  createArchivedSessionRecord,
   createId,
-  createSharedContextItem,
   fetchBootstrapWithRetry,
   findReusableSshPane,
   getPaneOutputText,
   getPreferredLocalSshKey,
   getProviderIssueSummary,
-  getShareablePayload,
-  hasSessionContent,
   mergeLocalSshKeys,
-  normalizePromptImageFile,
-  readFileAsBase64,
   reorderPanesById,
 } from './lib/appCore'
 import {
@@ -105,7 +91,6 @@ import {
   getPaneVisualStatus,
   isPaneBusyForExecution,
   normalizePane,
-  resetActiveSessionFields,
   statusLabel
 } from './lib/paneState'
 import {
@@ -157,118 +142,6 @@ function App() {
   sharedContextRef.current = sharedContext
   paneImageAttachmentsRef.current = paneImageAttachments
 
-  const revokePromptImagePreview = (attachment: Pick<PromptImageAttachment, 'previewUrl'>) => {
-    if (attachment.previewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(attachment.previewUrl)
-    }
-  }
-
-  const cleanupPromptImageFiles = (localPaths: string[]) => {
-    const normalizedPaths = [...new Set(localPaths.map((entry) => entry.trim()).filter(Boolean))]
-    if (normalizedPaths.length === 0) {
-      return
-    }
-
-    void unstagePromptImages(normalizedPaths).catch(() => undefined)
-  }
-
-  const queuePromptImageCleanup = (paneId: string, localPaths: string[]) => {
-    const normalizedPaths = [...new Set(localPaths.map((entry) => entry.trim()).filter(Boolean))]
-    if (normalizedPaths.length === 0) {
-      return
-    }
-
-    const existing = promptImageCleanupPathsRef.current[paneId] ?? []
-    promptImageCleanupPathsRef.current[paneId] = [...new Set([...existing, ...normalizedPaths])]
-  }
-
-  const flushQueuedPromptImageCleanup = (paneId: string) => {
-    const queuedPaths = promptImageCleanupPathsRef.current[paneId] ?? []
-    if (queuedPaths.length === 0) {
-      return
-    }
-
-    delete promptImageCleanupPathsRef.current[paneId]
-    cleanupPromptImageFiles(queuedPaths)
-  }
-
-  const updatePanePromptImages = (
-    paneId: string,
-    updater: (current: PromptImageAttachment[]) => PromptImageAttachment[]
-  ) => {
-    setPaneImageAttachments((current) => {
-      const existing = current[paneId] ?? []
-      const next = updater(existing)
-      if (next.length === 0) {
-        if (!(paneId in current)) {
-          return current
-        }
-
-        const snapshot = { ...current }
-        delete snapshot[paneId]
-        return snapshot
-      }
-
-      return {
-        ...current,
-        [paneId]: next
-      }
-    })
-  }
-
-  const clearPanePromptImages = (paneId: string, options: { cleanupFiles?: boolean } = {}) => {
-    const existing = paneImageAttachmentsRef.current[paneId] ?? []
-    if (options.cleanupFiles !== false) {
-      cleanupPromptImageFiles(existing.flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
-    }
-
-    setPaneImageAttachments((current) => {
-      for (const attachment of existing) {
-        revokePromptImagePreview(attachment)
-      }
-
-      if (!(paneId in current)) {
-        return current
-      }
-
-      const snapshot = { ...current }
-      delete snapshot[paneId]
-      return snapshot
-    })
-  }
-
-  const clearMultiplePanePromptImages = (paneIds: string[], options: { cleanupFiles?: boolean } = {}) => {
-    const paneIdSet = new Set(paneIds)
-    if (paneIdSet.size === 0) {
-      return
-    }
-
-    if (options.cleanupFiles !== false) {
-      const localPaths = [...paneIdSet].flatMap((paneId) => (paneImageAttachmentsRef.current[paneId] ?? []).flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
-      cleanupPromptImageFiles(localPaths)
-    }
-
-    setPaneImageAttachments((current) => {
-      let changed = false
-      const snapshot = { ...current }
-
-      for (const paneId of paneIdSet) {
-        const existing = snapshot[paneId] ?? []
-        if (existing.length === 0) {
-          continue
-        }
-
-        changed = true
-        for (const attachment of existing) {
-          revokePromptImagePreview(attachment)
-        }
-        delete snapshot[paneId]
-      }
-
-      return changed ? snapshot : current
-    })
-  }
-
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
     return () => window.clearInterval(timer)
@@ -285,16 +158,7 @@ function App() {
       for (const controller of Object.values(shellControllersRef.current)) {
         controller.abort()
       }
-      const pendingPaths = Object.values(promptImageCleanupPathsRef.current).flat()
-      cleanupPromptImageFiles([
-        ...pendingPaths,
-        ...Object.values(paneImageAttachmentsRef.current).flatMap((attachments) => attachments.flatMap((attachment) => attachment.localPath ? [attachment.localPath] : []))
-      ])
-      for (const attachments of Object.values(paneImageAttachmentsRef.current)) {
-        for (const attachment of attachments) {
-          revokePromptImagePreview(attachment)
-        }
-      }
+      cleanupAllPromptImageResources()
     }
   }, [])
 
@@ -545,6 +409,22 @@ function App() {
   }
 
   const {
+    cleanupAllPromptImageResources,
+    clearPanePromptImages,
+    clearMultiplePanePromptImages,
+    queuePromptImageCleanup,
+    flushQueuedPromptImageCleanup,
+    handleAddPromptImages,
+    handleRemovePromptImage
+  } = createPromptImageActions({
+    panesRef,
+    paneImageAttachmentsRef,
+    promptImageCleanupPathsRef,
+    setPaneImageAttachments,
+    updatePane
+  })
+
+  const {
     handleAddLocalWorkspace,
     handleBrowseLocal,
     handleBrowseRemote,
@@ -578,6 +458,42 @@ function App() {
     updatePane,
     mutatePane,
     appendPaneSystemMessage
+  })
+
+  const {
+    setPendingShareSelection,
+    shareFromPane,
+    handleDeleteSharedContext,
+    pruneSharedContextForDeletedPanes,
+    handleStartNewSession,
+    handleResetSession,
+    handleSelectSession,
+    handleResumeSession,
+    handleClearSelectedSessionHistory,
+    handleClearAllSessionHistory
+  } = createSessionContextActions({
+    bootstrap,
+    panesRef,
+    sharedContextRef,
+    localWorkspacesRef,
+    setPanes,
+    setSharedContext,
+    updatePane,
+    mutatePane,
+    appendPaneSystemMessage
+  })
+
+  const {
+    handleRunShell,
+    handleStopShell
+  } = createShellActions({
+    bootstrap,
+    panesRef,
+    localWorkspacesRef,
+    shellControllersRef,
+    shellStopRequestedRef,
+    updatePane,
+    mutatePane
   })
 
   const scrollToPane = (paneId: string) => {
@@ -734,112 +650,6 @@ function App() {
     })
   }
 
-  const handleAddPromptImages = async (paneId: string, files: File[], source: PromptImageAttachmentSource) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    if (pane.provider === 'copilot') {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: 'Copilot では画像添付を使えません',
-        lastError: 'GitHub Copilot CLI は画像入力未対応です。Codex CLI または Gemini CLI を選択してください。'
-      })
-      return
-    }
-
-    const normalizedFiles = files
-      .map((file) => normalizePromptImageFile(file, source))
-      .filter((item): item is { file: File; fileName: string; mimeType: string } => Boolean(item))
-
-    if (normalizedFiles.length === 0) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: '画像ファイルを選択してください',
-        lastError: '添付できるのは画像ファイルのみです。'
-      })
-      return
-    }
-
-    const draftAttachments: PromptImageAttachment[] = normalizedFiles.map(({ file, fileName, mimeType }) => ({
-      id: createId('prompt-image'),
-      fileName,
-      mimeType,
-      size: file.size,
-      localPath: null,
-      previewUrl: URL.createObjectURL(file),
-      status: 'uploading',
-      source,
-      error: null
-    }))
-
-    updatePanePromptImages(paneId, (current) => [...current, ...draftAttachments])
-
-    await Promise.all(draftAttachments.map(async (attachment, index) => {
-      const sourceFile = normalizedFiles[index]
-      if (!sourceFile) {
-        return
-      }
-
-      try {
-        const contentBase64 = await readFileAsBase64(sourceFile.file)
-        const response = await stagePromptImage({
-          fileName: attachment.fileName,
-          mimeType: attachment.mimeType,
-          contentBase64
-        })
-
-        updatePanePromptImages(paneId, (current) =>
-          current.map((item) =>
-            item.id === attachment.id
-              ? {
-                  ...item,
-                  status: 'ready',
-                  localPath: response.attachment.localPath,
-                  error: null
-                }
-              : item
-          )
-        )
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        updatePanePromptImages(paneId, (current) =>
-          current.map((item) =>
-            item.id === attachment.id
-              ? {
-                  ...item,
-                  status: 'error',
-                  localPath: null,
-                  error: message
-                }
-              : item
-          )
-        )
-        updatePane(paneId, {
-          status: 'attention',
-          statusText: '画像添付を確認してください',
-          lastError: `画像を準備できませんでした: ${attachment.fileName}`
-        })
-      }
-    }))
-  }
-
-  const handleRemovePromptImage = (paneId: string, attachmentId: string) => {
-    const existing = paneImageAttachmentsRef.current[paneId] ?? []
-    const targetAttachment = existing.find((attachment) => attachment.id === attachmentId)
-    if (!targetAttachment) {
-      return
-    }
-
-    if (targetAttachment.localPath) {
-      cleanupPromptImageFiles([targetAttachment.localPath])
-    }
-
-    revokePromptImagePreview(targetAttachment)
-    updatePanePromptImages(paneId, (current) => current.filter((attachment) => attachment.id !== attachmentId))
-  }
-
   const handleModelChange = (paneId: string, model: string) => {
     if (!bootstrap) {
       return
@@ -864,208 +674,14 @@ function App() {
         ? pane.reasoningEffort
         : modelInfo.defaultReasoningEffort ?? 'medium'
 
-    mutatePane(paneId, (currentPane) => {
-      const nextPane = syncCurrentProviderSettings({
-        ...currentPane,
-        model: normalizedModel,
-        reasoningEffort,
-        sessionId: null,
-        sessionScopeKey: null,
-        selectedSessionKey: null
-      })
-      return resetProviderSessionState(nextPane, currentPane.provider)
-    })
-  }
-
-  const replaceSourceSharedContext = (sourcePaneId: string, nextSourceContexts: SharedContextItem[]) => {
-    const previousSourceContextIds = sharedContextRef.current
-      .filter((item) => item.sourcePaneId === sourcePaneId)
-      .map((item) => item.id)
-
-    const nextSharedContext = [...nextSourceContexts, ...sharedContextRef.current.filter((item) => item.sourcePaneId !== sourcePaneId)]
-      .slice(0, MAX_SHARED_CONTEXT)
-    const storedSourceContexts = nextSharedContext.filter((item) => item.sourcePaneId === sourcePaneId)
-
-    setSharedContext(nextSharedContext)
-    setPanes((current) =>
-      current.map((pane) => {
-        const baseAttached = pane.attachedContextIds.filter((item) => !previousSourceContextIds.includes(item))
-        const nextAttached = storedSourceContexts
-          .filter((item) => item.targetPaneIds.includes(pane.id) && !item.consumedByPaneIds.includes(pane.id))
-          .map((item) => item.id)
-
-        return {
-          ...pane,
-          attachedContextIds: [...baseAttached, ...nextAttached.filter((item) => !baseAttached.includes(item))]
-        }
-      })
-    )
-  }
-
-  const setPendingShareSelection = (
-    paneId: string,
-    responseOverride: string | undefined,
-    selection: { mode: 'none' | 'global' | 'direct'; targetPaneIds?: string[] }
-  ): boolean => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return false
-    }
-
-    const targetPanes = panesRef.current.filter((item) => item.id !== paneId)
-    const allowedTargetIds = new Set(targetPanes.map((item) => item.id))
-    const normalizedTargetIds = selection.mode === 'global'
-      ? targetPanes.map((item) => item.id)
-      : (selection.targetPaneIds ?? []).filter((item): item is string => typeof item === 'string' && allowedTargetIds.has(item))
-
-    if (selection.mode === 'none' || normalizedTargetIds.length === 0) {
-      replaceSourceSharedContext(paneId, [])
-      updatePane(paneId, {
-        pendingShareGlobal: false,
-        pendingShareTargetIds: []
-      })
-      return true
-    }
-
-    const payload = getShareablePayload(pane)
-    const response = responseOverride ?? payload.text
-    if (!response) {
-      replaceSourceSharedContext(paneId, [])
-      updatePane(paneId, {
-        pendingShareGlobal: selection.mode === 'global',
-        pendingShareTargetIds: selection.mode === 'direct' ? normalizedTargetIds : []
-      })
-      return true
-    }
-
-    updatePane(paneId, {
-      pendingShareGlobal: false,
-      pendingShareTargetIds: []
-    })
-
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
-    const selectedTargetPanes = targetPanes.filter((item) => normalizedTargetIds.includes(item.id))
-
-    const nextSourceContexts = selection.mode === 'global'
-      ? [
-          createSharedContextItem(pane, target, response, {
-            scope: 'global',
-            targetPaneIds: selectedTargetPanes.map((item) => item.id),
-            targetPaneTitles: selectedTargetPanes.map((item) => item.title),
-            contentLabel: payload.contentLabel
-          })
-        ]
-      : selectedTargetPanes.map((targetPane) =>
-          createSharedContextItem(pane, target, response, {
-            scope: 'direct',
-            targetPaneIds: [targetPane.id],
-            targetPaneTitles: [targetPane.title],
-            contentLabel: payload.contentLabel
-          })
-        )
-
-    replaceSourceSharedContext(paneId, nextSourceContexts)
-    return true
-  }
-
-  const shareFromPane = (
-    paneId: string,
-    responseOverride?: string,
-    options?: {
-      scope?: SharedContextItem['scope']
-      targetPaneId?: string
-    }
-  ) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const allTargetIds = panesRef.current.filter((item) => item.id !== paneId).map((item) => item.id)
-    const existingContexts = sharedContextRef.current.filter((item) => item.sourcePaneId === paneId)
-    const globalContext = existingContexts.find((item) => item.scope === 'global') ?? null
-    const isGlobalShareArmed = pane.pendingShareGlobal
-    const directTargetIds = existingContexts
-      .filter((item) => item.scope === 'direct')
-      .flatMap((item) => item.targetPaneIds)
-    const effectiveDirectTargetIds = Array.from(new Set([...directTargetIds, ...pane.pendingShareTargetIds]))
-    const hasShareablePayload = Boolean((responseOverride ?? getShareablePayload(pane).text)?.trim())
-
-    if ((options?.scope ?? 'global') === 'global') {
-      const enabled = setPendingShareSelection(
-        paneId,
-        responseOverride,
-        globalContext || isGlobalShareArmed ? { mode: 'none' } : { mode: 'global' }
-      )
-      if (!enabled) {
-        appendPaneSystemMessage(paneId, '\u5171\u6709\u3067\u304d\u308b\u6700\u65b0\u7d50\u679c\u304c\u307e\u3060\u3042\u308a\u307e\u305b\u3093')
-        return
-      }
-
-      appendPaneSystemMessage(
-        paneId,
-        globalContext || isGlobalShareArmed
-          ? '\u5168\u4f53\u5171\u6709\u3092\u89e3\u9664\u3057\u307e\u3057\u305f'
-          : hasShareablePayload
-            ? '\u6700\u65b0\u7d50\u679c\u3092\u5168\u4f53\u5171\u6709\u306b\u8ffd\u52a0\u3057\u307e\u3057\u305f'
-            : '\u6b21\u56de\u306e\u5fdc\u7b54\u3092\u5168\u4f53\u5171\u6709\u3059\u308b\u3088\u3046\u306b\u8a2d\u5b9a\u3057\u307e\u3057\u305f'
-      )
-      return
-    }
-
-    const targetPaneId = options?.targetPaneId?.trim()
-    if (!targetPaneId) {
-      return
-    }
-
-    const targetPane = panesRef.current.find((item) => item.id === targetPaneId)
-    if (!targetPane) {
-      return
-    }
-
-    if (globalContext || isGlobalShareArmed) {
-      const remainingTargetIds = allTargetIds.filter((id) => id !== targetPaneId)
-      setPendingShareSelection(
-        paneId,
-        responseOverride,
-        remainingTargetIds.length > 0 ? { mode: 'direct', targetPaneIds: remainingTargetIds } : { mode: 'none' }
-      )
-      appendPaneSystemMessage(paneId, `${targetPane.title} \u3092\u5171\u6709\u5148\u304b\u3089\u5916\u3057\u307e\u3057\u305f`)
-      return
-    }
-
-    const nextTargetIds = effectiveDirectTargetIds.includes(targetPaneId)
-      ? effectiveDirectTargetIds.filter((id) => id !== targetPaneId)
-      : [...effectiveDirectTargetIds, targetPaneId]
-
-    const enabled = setPendingShareSelection(
-      paneId,
-      responseOverride,
-      nextTargetIds.length > 0 ? { mode: 'direct', targetPaneIds: nextTargetIds } : { mode: 'none' }
-    )
-    if (!enabled) {
-      appendPaneSystemMessage(paneId, '\u5171\u6709\u3067\u304d\u308b\u6700\u65b0\u7d50\u679c\u304c\u307e\u3060\u3042\u308a\u307e\u305b\u3093')
-      return
-    }
-
-    appendPaneSystemMessage(
-      paneId,
-      effectiveDirectTargetIds.includes(targetPaneId)
-        ? `${targetPane.title} \u3078\u306e\u500b\u5225\u5171\u6709\u3092\u89e3\u9664\u3057\u307e\u3057\u305f`
-        : hasShareablePayload
-          ? `${targetPane.title} \u3078\u500b\u5225\u5171\u6709\u3057\u307e\u3057\u305f`
-          : `${targetPane.title} \u3078\u306e1\u56de\u5171\u6709\u3092\u4e88\u7d04\u3057\u307e\u3057\u305f`
-    )
-  }
-
-  const handleDeleteSharedContext = (contextId: string) => {
-    setSharedContext((current) => current.filter((item) => item.id !== contextId))
-    setPanes((current) =>
-      current.map((pane) => ({
-        ...pane,
-        attachedContextIds: pane.attachedContextIds.filter((item) => item !== contextId)
-      }))
-    )
+    mutatePane(paneId, (currentPane) => syncCurrentProviderSettings({
+      ...currentPane,
+      model: normalizedModel,
+      reasoningEffort,
+      sessionId: null,
+      sessionScopeKey: null,
+      selectedSessionKey: null
+    }))
   }
 
   const handleStreamEvent = (paneId: string, event: RunStreamEvent) => {
@@ -1879,9 +1495,7 @@ function App() {
 
     clearMultiplePanePromptImages(ids)
 
-    const removedContextIds = sharedContextRef.current
-      .filter((item) => ids.includes(item.sourcePaneId))
-      .map((item) => item.id)
+    const removedContextIds = pruneSharedContextForDeletedPanes(ids)
 
     for (const paneId of ids) {
       stopRequestedRef.current.add(paneId)
@@ -1893,21 +1507,6 @@ function App() {
       void stopPaneRun(paneId).catch(() => undefined)
       void stopShellRun(paneId).catch(() => undefined)
     }
-
-    setSharedContext((current) =>
-      current
-        .filter((item) => !ids.includes(item.sourcePaneId))
-        .map((item) =>
-          item.targetPaneIds.some((targetPaneId) => ids.includes(targetPaneId))
-            ? {
-                ...item,
-                targetPaneIds: item.targetPaneIds.filter((id) => !ids.includes(id)),
-                targetPaneTitles: item.targetPaneTitles.filter((_, index) => !ids.includes(item.targetPaneIds[index]))
-              }
-            : item
-        )
-        .filter((item) => item.scope !== 'direct' || item.targetPaneIds.length > 0)
-    )
 
     let nextFocusId: string | null = null
     setPanes((current) => {
@@ -2029,77 +1628,6 @@ function App() {
     setFocusedPaneId(duplicated.id)
   }
 
-  const handleStartNewSession = (paneId: string) => {
-    mutatePane(paneId, (pane) => {
-      const nextHistory = hasSessionContent(pane)
-        ? appendSessionRecord(pane.sessionHistory, createArchivedSessionRecord(pane))
-        : pane.sessionHistory
-
-      return {
-        ...resetActiveSessionFields(pane),
-        sessionHistory: nextHistory
-      }
-    })
-  }
-
-  const handleResetSession = (paneId: string) => {
-    mutatePane(paneId, (pane) => resetActiveSessionFields(pane))
-  }
-
-  const handleSelectSession = (paneId: string, sessionKey: string | null) => {
-    mutatePane(paneId, (pane) => ({
-      ...pane,
-      selectedSessionKey: sessionKey
-    }))
-  }
-
-  const handleResumeSession = (paneId: string, sessionKey: string | null) => {
-    if (!sessionKey) {
-      return
-    }
-
-    mutatePane(paneId, (pane) => {
-      const selectedSession = pane.sessionHistory.find((session) => session.key === sessionKey)
-      if (!selectedSession?.sessionId) {
-        return pane
-      }
-
-      const latestUser = [...selectedSession.logs].reverse().find((entry) => entry.role === 'user') ?? null
-      const latestAssistant = [...selectedSession.logs].reverse().find((entry) => entry.role === 'assistant') ?? null
-
-      const sessionScopeKey = buildPaneSessionScopeKey(pane)
-      return updateProviderSessionState({
-        ...pane,
-        prompt: '',
-        status: 'idle',
-        statusText: statusLabel('idle'),
-        runInProgress: false,
-        logs: selectedSession.logs.slice(-MAX_LOGS),
-        streamEntries: selectedSession.streamEntries.slice(-MAX_STREAM_ENTRIES),
-        selectedSessionKey: null,
-        liveOutput: '',
-        sessionId: selectedSession.sessionId,
-        sessionScopeKey,
-        currentRequestText: latestUser?.text ?? null,
-        currentRequestAt: latestUser?.createdAt ?? null,
-        stopRequested: false,
-        stopRequestAvailable: false,
-        lastRunAt: selectedSession.updatedAt,
-        runningSince: null,
-        lastActivityAt: selectedSession.updatedAt,
-        lastFinishedAt: selectedSession.updatedAt,
-        lastError: null,
-        lastResponse: latestAssistant?.text ?? null
-      }, pane.provider, {
-        sessionId: selectedSession.sessionId,
-        sessionScopeKey,
-        lastSharedLogEntryId: selectedSession.logs.at(-1)?.id ?? null,
-        lastSharedStreamEntryId: selectedSession.streamEntries.at(-1)?.id ?? null,
-        updatedAt: selectedSession.updatedAt
-      })
-    })
-  }
-
   const copyPaneText = async (paneId: string, text: string | null, _successMessage: string): Promise<boolean> => {
     if (!text?.trim()) {
       return false
@@ -2129,237 +1657,6 @@ function App() {
 
   const handleCopyText = async (paneId: string, text: string, successMessage: string) => {
     return copyPaneText(paneId, text, successMessage)
-  }
-
-  const handleClearSelectedSessionHistory = (paneId: string, sessionKey: string | null) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const confirmMessage = sessionKey ? '選択中のセッション履歴をクリアしますか？' : '現在のセッション履歴をクリアしますか？'
-    if (!window.confirm(confirmMessage)) {
-      return
-    }
-
-    mutatePane(paneId, (currentPane) => {
-      if (sessionKey) {
-        return {
-          ...currentPane,
-          sessionHistory: currentPane.sessionHistory.filter((session) => session.key !== sessionKey),
-          selectedSessionKey: currentPane.selectedSessionKey === sessionKey ? null : currentPane.selectedSessionKey
-        }
-      }
-
-      return resetActiveSessionFields(currentPane)
-    })
-  }
-
-  const handleClearAllSessionHistory = (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    if (!hasSessionContent(pane) && pane.sessionHistory.length === 0) {
-      return
-    }
-
-    if (!window.confirm('このペインの会話履歴とストリーム履歴をすべてクリアしますか？')) {
-      return
-    }
-
-    mutatePane(paneId, (currentPane) => ({
-      ...resetActiveSessionFields(currentPane),
-      sessionHistory: []
-    }))
-  }
-
-  const handleRunShell = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const command = pane.shellCommand.trim()
-    if (!command) {
-      updatePane(paneId, {
-        shellCommand: '',
-        shellHistoryIndex: null,
-        shellLastError: null
-      })
-      return
-    }
-
-    if (/^(clear|cls)$/i.test(command)) {
-      updatePane(paneId, {
-        shellCommand: '',
-        shellHistoryIndex: null,
-        shellOutput: '',
-        shellLastExitCode: null,
-        shellLastError: null,
-        shellLastRunAt: Date.now()
-      })
-      return
-    }
-
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
-    if (!target) {
-      mutatePane(paneId, (current) => ({
-        ...current,
-        shellCommand: '',
-        shellHistoryIndex: null,
-        shellLastError: 'ワークスペースまたは SSH 接続を設定してください',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] ワークスペースまたは SSH 接続を設定してください'),
-        shellLastRunAt: Date.now()
-      }))
-      return
-    }
-
-    if (!bootstrap?.features.shell) {
-      mutatePane(paneId, (current) => ({
-        ...current,
-        shellCommand: '',
-        shellHistoryIndex: null,
-        shellLastError: '簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] 簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。'),
-        shellLastRunAt: Date.now()
-      }))
-      return
-    }
-
-    if (shellControllersRef.current[paneId]) {
-      return
-    }
-
-    const cwd = pane.workspaceMode === 'local'
-      ? (pane.localShellPath.trim() || pane.localWorkspacePath.trim())
-      : (pane.remoteShellPath.trim() || pane.remoteWorkspacePath.trim())
-    const nextShellHistory = pane.shellHistory[pane.shellHistory.length - 1] === command
-      ? pane.shellHistory
-      : [...pane.shellHistory, command].slice(-50)
-
-    const startedAt = Date.now()
-    const controller = new AbortController()
-    shellControllersRef.current[paneId] = controller
-    shellStopRequestedRef.current.delete(paneId)
-
-    updatePane(paneId, {
-      shellRunning: true,
-      shellCommand: '',
-      shellHistory: nextShellHistory,
-      shellHistoryIndex: null,
-      shellLastError: null,
-      shellLastExitCode: null,
-      shellLastRunAt: startedAt,
-      shellOutput: appendShellOutputLine(pane.shellOutput, `${buildShellPromptLabel(pane, cwd)}${command}`)
-    })
-
-    try {
-      await runShellStream(
-        {
-          paneId,
-          target,
-          command,
-          cwd: cwd || null
-        },
-        (event: ShellRunEvent) => {
-          const eventTime = Date.now()
-          mutatePane(paneId, (current) => {
-            if (event.type === 'stdout') {
-              return {
-                ...current,
-                shellOutput: appendShellOutputLine(current.shellOutput, event.text),
-                shellLastRunAt: eventTime
-              }
-            }
-
-            if (event.type === 'stderr') {
-              return {
-                ...current,
-                shellOutput: appendShellOutputLine(current.shellOutput, event.text),
-                shellLastRunAt: eventTime
-              }
-            }
-
-            if (event.type === 'cwd') {
-              return current.workspaceMode === 'local'
-                ? {
-                    ...current,
-                    localShellPath: event.cwd,
-                    shellLastRunAt: eventTime
-                  }
-                : {
-                    ...current,
-                    remoteShellPath: event.cwd,
-                    shellLastRunAt: eventTime
-                  }
-            }
-
-            if (event.type === 'exit') {
-              return current.workspaceMode === 'local'
-                ? {
-                    ...current,
-                    shellRunning: false,
-                    localShellPath: event.cwd,
-                    shellLastExitCode: event.exitCode,
-                    shellLastError: null,
-                    shellLastRunAt: eventTime
-                  }
-                : {
-                    ...current,
-                    shellRunning: false,
-                    remoteShellPath: event.cwd,
-                    shellLastExitCode: event.exitCode,
-                    shellLastError: null,
-                    shellLastRunAt: eventTime
-                  }
-            }
-
-            return current
-          })
-        },
-        controller.signal
-      )
-    } catch (error) {
-      if (!shellStopRequestedRef.current.has(paneId)) {
-        const message = error instanceof Error ? error.message : String(error)
-        mutatePane(paneId, (current) => ({
-          ...current,
-          shellRunning: false,
-          shellLastError: message,
-          shellOutput: appendShellOutputLine(current.shellOutput, `[error] ${message}`),
-          shellLastRunAt: Date.now()
-        }))
-      }
-    } finally {
-      delete shellControllersRef.current[paneId]
-      shellStopRequestedRef.current.delete(paneId)
-      mutatePane(paneId, (current) => ({
-        ...current,
-        shellRunning: false
-      }))
-    }
-  }
-
-  const handleStopShell = async (paneId: string) => {
-    shellStopRequestedRef.current.add(paneId)
-    shellControllersRef.current[paneId]?.abort()
-    delete shellControllersRef.current[paneId]
-
-    try {
-      await stopShellRun(paneId)
-    } catch {
-      // ignore best-effort stop
-    }
-
-    mutatePane(paneId, (pane) => ({
-      ...pane,
-      shellRunning: false,
-      shellLastError: null,
-      shellOutput: appendShellOutputLine(pane.shellOutput, '^C'),
-      shellLastRunAt: Date.now()
-    }))
   }
 
   useEffect(() => {
