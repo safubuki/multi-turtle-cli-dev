@@ -4,3 +4,4 @@ server/node_modules/
 server/dist/
 .DS_Store
 .multi-turtle-runtime/
+blog/

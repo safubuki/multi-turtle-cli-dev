@@ -20,7 +20,7 @@ import {
   scpTransfer
 } from './ssh.js'
 import { specSections } from './spec.js'
-import type { ActiveCliRun, ActiveShellRun, AutonomyMode, RunRequestBody, RunStreamEvent, ShellRunEvent, ShellRunRequestBody, SshConnectionOptions } from './types.js'
+import type { ActiveCliRun, ActiveShellRun, AutonomyMode, CliExecResult, RunRequestBody, RunStreamEvent, ShellRunEvent, ShellRunRequestBody, SshConnectionOptions } from './types.js'
 import { openInCommandPrompt, openInFileManager, openInVsCode } from './vscode.js'
 import { browseLocalDirectory, createLocalDirectory, discoverLocalWorkspaces, listLocalBrowseRoots } from './workspaces.js'
 
@@ -28,6 +28,8 @@ const app = express()
 const port = Number(process.env.PORT || 3001)
 const activeRuns = new Map<string, ActiveCliRun>()
 const activeShellRuns = new Map<string, ActiveShellRun>()
+const completedRuns = new Map<string, { result: CliExecResult; completedAt: number } | { error: string; completedAt: number }>()
+const COMPLETED_RUN_TTL_MS = 30 * 60 * 1_000
 
 app.use(cors())
 app.use(express.json({ limit: '25mb' }))
@@ -191,6 +193,23 @@ function writeStreamEvent(res: express.Response, event: RunStreamEvent): void {
 function clearActiveRun(paneId: string, run: ActiveCliRun): void {
   if (activeRuns.get(paneId) === run) {
     activeRuns.delete(paneId)
+  }
+}
+
+function rememberCompletedRun(paneId: string, result: CliExecResult): void {
+  completedRuns.set(paneId, { result, completedAt: Date.now() })
+}
+
+function rememberFailedRun(paneId: string, error: string): void {
+  completedRuns.set(paneId, { error, completedAt: Date.now() })
+}
+
+function pruneCompletedRuns(): void {
+  const expiresBefore = Date.now() - COMPLETED_RUN_TTL_MS
+  for (const [paneId, record] of completedRuns.entries()) {
+    if (record.completedAt < expiresBefore) {
+      completedRuns.delete(paneId)
+    }
   }
 }
 
@@ -944,11 +963,11 @@ app.post('/api/run/stream', async (req, res) => {
   res.flushHeaders?.()
 
   let run: ActiveCliRun | null = null
+  let clientDisconnected = false
 
   req.on('close', () => {
-    if (!res.writableEnded && run) {
-      run.stop()
-      clearActiveRun(body.paneId, run)
+    if (!res.writableEnded) {
+      clientDisconnected = true
     }
   })
 
@@ -970,6 +989,11 @@ app.post('/api/run/stream', async (req, res) => {
 
     const result = await run.promise
     clearActiveRun(body.paneId, run)
+    if (clientDisconnected || res.destroyed || res.writableEnded) {
+      rememberCompletedRun(body.paneId, result)
+      return
+    }
+
     writeStreamEvent(res, {
       type: 'final',
       response: result.response,
@@ -984,6 +1008,11 @@ app.post('/api/run/stream', async (req, res) => {
       clearActiveRun(body.paneId, run)
     }
 
+    if (clientDisconnected || res.destroyed || res.writableEnded) {
+      rememberFailedRun(body.paneId, String(error))
+      return
+    }
+
     writeStreamEvent(res, {
       type: 'error',
       message: String(error)
@@ -993,6 +1022,55 @@ app.post('/api/run/stream', async (req, res) => {
       res.end()
     }
   }
+})
+
+app.get('/api/run/status/:paneId', (req, res) => {
+  pruneCompletedRuns()
+  const paneId = String(req.params.paneId ?? '').trim()
+  if (!paneId) {
+    res.status(400).json({
+      success: false,
+      status: 'error',
+      error: 'paneId required'
+    })
+    return
+  }
+
+  if (activeRuns.has(paneId)) {
+    res.json({
+      success: true,
+      status: 'running'
+    })
+    return
+  }
+
+  const completed = completedRuns.get(paneId)
+  if (!completed) {
+    res.json({
+      success: true,
+      status: 'idle'
+    })
+    return
+  }
+
+  completedRuns.delete(paneId)
+  if ('result' in completed) {
+    res.json({
+      success: true,
+      status: 'completed',
+      result: {
+        success: true,
+        ...completed.result
+      }
+    })
+    return
+  }
+
+  res.json({
+    success: true,
+    status: 'error',
+    error: completed.error
+  })
 })
 
 app.post('/api/run/stop', (req, res) => {

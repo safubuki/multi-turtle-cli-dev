@@ -21,6 +21,7 @@ import {
   deleteSshKey,
   fetchBootstrap,
   fetchLocalBrowseRoots,
+  fetchPaneRunStatus,
   fetchRemoteWorkspaces,
   generateSshKey,
   inspectSshHost,
@@ -62,6 +63,7 @@ import type {
   ReasoningEffort,
   RemoteDirectoryEntry,
   RunImageAttachment,
+  RunStatusResponse,
   RunStreamEvent,
   ShellRunEvent,
   SharedContextPayload,
@@ -94,6 +96,7 @@ const STORAGE_KEYS = {
   sharedContext: 'multi-turtle-cli-dev/shared-context-v2',
   layout: 'multi-turtle-cli-dev/layout-v2',
   localWorkspaces: 'multi-turtle-cli-dev/local-workspaces-v2',
+  lastLocalBrowsePath: 'multi-turtle-cli-dev/last-local-browse-path-v1',
   focusedPane: 'multi-turtle-cli-dev/focused-pane-v2'
 } as const
 const MAX_LOGS = 24
@@ -708,6 +711,64 @@ function mergeLocalWorkspaces(...groups: Array<Array<Partial<LocalWorkspace>> | 
     }
     return left.label.localeCompare(right.label, 'ja')
   })
+}
+
+function isAppLocalWorkspacePath(targetPath: string, workspaces: LocalWorkspace[]): boolean {
+  const normalizedTargetPath = normalizeComparablePath(targetPath).toLowerCase()
+  if (!normalizedTargetPath) {
+    return false
+  }
+
+  return workspaces.some((workspace) =>
+    workspace.source === 'app' &&
+    normalizeComparablePath(workspace.path).toLowerCase() === normalizedTargetPath
+  )
+}
+
+function getPreferredManualLocalWorkspace(workspaces: LocalWorkspace[]): LocalWorkspace | null {
+  return workspaces.find((workspace) => workspace.source !== 'app') ?? null
+}
+
+function isWindowsDriveRootPath(targetPath: string): boolean {
+  return /^[A-Za-z]:[\\/]?$/.test(targetPath.trim())
+}
+
+function getDefaultLocalBrowsePath(roots: LocalBrowseRoot[], hostPlatform: BootstrapPayload['hostPlatform'] | undefined): string {
+  const visibleRoots = roots.filter(isLocalWorkspacePickerRootVisible)
+  const driveRoot = visibleRoots.find((root) => isWindowsDriveRootPath(root.path))
+
+  if (hostPlatform === 'windows' || (hostPlatform === undefined && driveRoot)) {
+    return driveRoot?.path ?? visibleRoots[0]?.path ?? ''
+  }
+
+  return visibleRoots.find((root) => {
+    const label = root.label.trim().toLowerCase()
+    return label === 'home' || label === '\u30db\u30fc\u30e0'
+  })?.path ?? visibleRoots[0]?.path ?? ''
+}
+
+function chooseInitialLocalWorkspacePath(workspaces: LocalWorkspace[]): string {
+  return getPreferredManualLocalWorkspace(workspaces)?.path ?? ''
+}
+
+function chooseLocalWorkspacePickerStartPath(params: {
+  pane: PaneState | undefined
+  workspaces: LocalWorkspace[]
+  roots: LocalBrowseRoot[]
+  lastLocalBrowsePath: string | null
+  hostPlatform: BootstrapPayload['hostPlatform'] | undefined
+}): string {
+  const lastLocalBrowsePath = params.lastLocalBrowsePath?.trim()
+  if (lastLocalBrowsePath) {
+    return lastLocalBrowsePath
+  }
+
+  const paneWorkspacePath = params.pane?.localWorkspacePath.trim()
+  if (paneWorkspacePath && !isAppLocalWorkspacePath(paneWorkspacePath, params.workspaces)) {
+    return paneWorkspacePath
+  }
+
+  return getDefaultLocalBrowsePath(params.roots, params.hostPlatform)
 }
 
 function appendLogEntry(entries: PaneLogEntry[], entry: PaneLogEntry): PaneLogEntry[] {
@@ -1407,7 +1468,7 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
   const provider = PROVIDER_ORDER[index % PROVIDER_ORDER.length]
   const providerSettings = createProviderSettingsMap(payload.providers)
   const providerSetting = providerSettings[provider]
-  const firstWorkspace = localWorkspaces[0]
+  const initialWorkspacePath = chooseInitialLocalWorkspacePath(localWorkspaces)
 
   return {
     id: createId('pane'),
@@ -1429,14 +1490,14 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     shellOutput: '',
     shellHistory: [],
     shellHistoryIndex: null,
-    localShellPath: firstWorkspace?.path ?? '',
+    localShellPath: initialWorkspacePath,
     remoteShellPath: '',
     shellRunning: false,
     shellLastExitCode: null,
     shellLastError: null,
     shellLastRunAt: null,
     workspaceMode: 'local',
-    localWorkspacePath: firstWorkspace?.path ?? '',
+    localWorkspacePath: initialWorkspacePath,
     localBrowserPath: '',
     localBrowserEntries: [],
     localBrowserLoading: false,
@@ -1457,7 +1518,7 @@ function createInitialPane(index: number, payload: BootstrapPayload, localWorksp
     sshActionState: 'idle',
     sshActionMessage: null,
     sshPasswordPulseAt: 0,
-    sshLocalPath: firstWorkspace?.path ?? '',
+    sshLocalPath: initialWorkspacePath,
     sshRemotePath: '',
     remoteWorkspacePath: '',
     remoteWorkspaces: [],
@@ -1719,9 +1780,11 @@ function loadPersistedState(): {
   sharedContext: SharedContextItem[]
   layout: LayoutMode
   localWorkspaces: LocalWorkspace[]
+  lastLocalBrowsePath: string | null
   focusedPaneId: string | null
 } {
   const layout = readJsonStorage<LayoutMode>(STORAGE_KEYS.layout, 'triple')
+  const lastLocalBrowsePath = readJsonStorage<string | null>(STORAGE_KEYS.lastLocalBrowsePath, null)
 
   return {
     panes: readJsonStorage<Partial<PaneState>[]>(STORAGE_KEYS.panes, []),
@@ -1730,6 +1793,7 @@ function loadPersistedState(): {
       .filter((item): item is SharedContextItem => Boolean(item)),
     layout: layout === 'quad' || layout === 'focus' ? layout : 'triple',
     localWorkspaces: mergeLocalWorkspaces(readJsonStorage<LocalWorkspace[]>(STORAGE_KEYS.localWorkspaces, [])),
+    lastLocalBrowsePath: typeof lastLocalBrowsePath === 'string' && lastLocalBrowsePath.trim() ? lastLocalBrowsePath.trim() : null,
     focusedPaneId: readJsonStorage<string | null>(STORAGE_KEYS.focusedPane, null)
   }
 }
@@ -1833,7 +1897,7 @@ function normalizePane(
   }
   const workspaceMode = rawPane.workspaceMode === 'ssh' ? 'ssh' : 'local'
   const persistedLocalWorkspacePath = typeof rawPane.localWorkspacePath === 'string' ? rawPane.localWorkspacePath.trim() : ''
-  const localWorkspacePath = persistedLocalWorkspacePath || localWorkspaces[0]?.path || ''
+  const localWorkspacePath = persistedLocalWorkspacePath || chooseInitialLocalWorkspacePath(localWorkspaces)
   const rawStatus = rawPane.status ?? 'idle'
   const rawLastError = typeof rawPane.lastError === 'string' && rawPane.lastError.trim() ? rawPane.lastError : null
   const hasPersistedRunActivity =
@@ -1994,6 +2058,7 @@ function App() {
   const controllersRef = useRef<Record<string, AbortController>>({})
   const stopRequestedRef = useRef<Set<string>>(new Set())
   const streamErroredRef = useRef<Set<string>>(new Set())
+  const streamStatusThrottleRef = useRef<Record<string, { text: string; at: number }>>({})
   const shellControllersRef = useRef<Record<string, AbortController>>({})
   const shellStopRequestedRef = useRef<Set<string>>(new Set())
   const workspaceRefreshTimersRef = useRef<Record<string, number>>({})
@@ -2006,6 +2071,8 @@ function App() {
   const refreshBootstrapInFlightRef = useRef(false)
   const refreshBootstrapRef = useRef<(() => Promise<void>) | null>(null)
   const persistTimerRef = useRef<number | null>(null)
+  const lastLocalBrowsePathRef = useRef<string | null>(persistedRef.current.lastLocalBrowsePath)
+  const runStatusCheckInFlightRef = useRef(false)
 
   panesRef.current = panes
   localWorkspacesRef.current = localWorkspaces
@@ -2162,6 +2229,7 @@ function App() {
       window.clearTimeout(persistTimerRef.current)
     }
 
+    const persistDelay = panes.some((pane) => pane.runInProgress) ? 1_200 : 300
     persistTimerRef.current = window.setTimeout(() => {
       persistState({
         panes,
@@ -2171,7 +2239,7 @@ function App() {
         focusedPaneId
       })
       persistTimerRef.current = null
-    }, 180)
+    }, persistDelay)
 
     return () => {
       if (persistTimerRef.current !== null) {
@@ -2401,6 +2469,18 @@ function App() {
       streamEntries: appendStreamEntry(pane.streamEntries, 'system', text, eventAt),
       lastActivityAt: eventAt
     }))
+  }
+
+  const rememberLastLocalBrowsePath = (targetPath: string) => {
+    const normalizedPath = targetPath.trim()
+    if (!normalizedPath) {
+      return
+    }
+
+    lastLocalBrowsePathRef.current = normalizedPath
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(STORAGE_KEYS.lastLocalBrowsePath, JSON.stringify(normalizedPath))
+    }
   }
 
   const scheduleWorkspaceContentsRefresh = (paneId: string, delay = 240) => {
@@ -2979,6 +3059,13 @@ function App() {
     if (event.type === 'status' || event.type === 'tool' || event.type === 'stderr') {
       const kind = event.type === 'status' ? 'status' : event.type === 'tool' ? 'tool' : 'stderr'
       const normalizedText = sanitizeTerminalText(event.text).trim()
+      if (event.type === 'status' && /^(assistant\.)?reasoning_delta$/u.test(normalizedText)) {
+        const throttleState = streamStatusThrottleRef.current[paneId]
+        if (throttleState?.text === normalizedText && eventAt - throttleState.at < 5_000) {
+          return
+        }
+        streamStatusThrottleRef.current[paneId] = { text: normalizedText, at: eventAt }
+      }
       mutatePane(paneId, (pane) => {
         const issueSummary = event.type === 'stderr' ? getProviderIssueSummary(pane.provider, normalizedText, pane.autonomyMode) : null
         const nextStreamEntries = issueSummary && !pane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
@@ -3112,6 +3199,170 @@ function App() {
       scheduleWorkspaceContentsRefresh(paneId)
     }
   }
+
+  const applyRecoveredRunStatus = (paneId: string, status: RunStatusResponse) => {
+    const eventAt = Date.now()
+    if (status.status === 'running') {
+      mutatePane(paneId, (pane) => ({
+        ...pane,
+        status: 'running',
+        statusText: '\u5b9f\u884c\u4e2d',
+        runInProgress: true,
+        runningSince: pane.runningSince ?? pane.lastRunAt ?? eventAt,
+        lastActivityAt: eventAt
+      }))
+      return
+    }
+
+    if (status.status === 'completed' && status.result) {
+      const result = status.result
+      const finalText = clipText(sanitizeTerminalText(result.response).trim(), MAX_LIVE_OUTPUT)
+      mutatePane(paneId, (pane) => {
+        if (!pane.runInProgress && pane.lastResponse === finalText) {
+          return pane
+        }
+
+        const assistantEntry: PaneLogEntry = {
+          id: createId('log'),
+          role: 'assistant',
+          text: finalText,
+          createdAt: eventAt,
+          provider: pane.provider,
+          model: pane.model
+        }
+        const nextLogs = finalText ? appendLogEntry(pane.logs, assistantEntry) : pane.logs
+        const nextSessionId = result.sessionId ?? pane.sessionId
+        const nextSessionScopeKey = buildPaneSessionScopeKey(pane)
+        const warningMessage = typeof result.warningMessage === 'string' && result.warningMessage.trim() ? result.warningMessage.trim() : null
+        const warningStatusText = typeof result.warningStatusText === 'string' && result.warningStatusText.trim() ? result.warningStatusText.trim() : null
+        const recoveredMessage = `\u30d0\u30c3\u30af\u30b0\u30e9\u30a6\u30f3\u5b9f\u884c\u306e\u7d50\u679c\u3092\u5fa9\u5143: ${statusLabel(result.statusHint)}`
+        const streamEntriesWithRecovery = appendStreamEntry(pane.streamEntries, 'system', recoveredMessage, eventAt, pane.provider, pane.model)
+        const streamEntriesWithWarning = warningMessage && !streamEntriesWithRecovery.some((entry) => entry.kind === 'system' && entry.text === warningMessage)
+          ? appendStreamEntry(streamEntriesWithRecovery, 'system', warningMessage, eventAt, pane.provider, pane.model)
+          : streamEntriesWithRecovery
+
+        return updateProviderSessionState({
+          ...pane,
+          logs: nextLogs,
+          status: result.statusHint,
+          statusText: result.statusHint === 'attention'
+            ? warningStatusText ?? (pane.lastError ? pane.statusText : statusLabel('attention'))
+            : statusLabel(result.statusHint),
+          runInProgress: false,
+          runningSince: null,
+          stopRequested: false,
+          stopRequestAvailable: false,
+          lastActivityAt: eventAt,
+          lastFinishedAt: eventAt,
+          lastError: result.statusHint === 'error'
+            ? '\u51e6\u7406\u304c\u30a8\u30e9\u30fc\u3067\u7d42\u4e86\u3057\u307e\u3057\u305f'
+            : warningMessage ?? (result.statusHint === 'attention' ? pane.lastError : null),
+          lastResponse: finalText,
+          liveOutput: finalText ? appendLiveOutputLine(pane.liveOutput, finalText) : pane.liveOutput,
+          sessionId: nextSessionId,
+          sessionScopeKey: nextSessionScopeKey,
+          streamEntries: streamEntriesWithWarning
+        }, pane.provider, {
+          sessionId: nextSessionId,
+          sessionScopeKey: nextSessionScopeKey,
+          lastSharedLogEntryId: finalText ? assistantEntry.id : pane.providerSessions[pane.provider].lastSharedLogEntryId,
+          lastSharedStreamEntryId: streamEntriesWithWarning.at(-1)?.id ?? pane.providerSessions[pane.provider].lastSharedStreamEntryId,
+          updatedAt: eventAt
+        })
+      })
+      scheduleWorkspaceContentsRefresh(paneId)
+      return
+    }
+
+    if (status.status === 'error') {
+      const message = status.error ?? '\u30d0\u30c3\u30af\u30b0\u30e9\u30a6\u30f3\u5b9f\u884c\u306e\u72b6\u614b\u78ba\u8a8d\u3067\u5931\u6557\u3057\u307e\u3057\u305f\u3002'
+      mutatePane(paneId, (pane) => ({
+        ...pane,
+        status: 'attention',
+        statusText: '\u5b9f\u884c\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
+        runInProgress: false,
+        runningSince: null,
+        stopRequested: false,
+        stopRequestAvailable: true,
+        lastActivityAt: eventAt,
+        lastFinishedAt: eventAt,
+        lastError: message,
+        streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', message, eventAt, pane.provider, pane.model)
+      }))
+      return
+    }
+
+    if (status.status === 'idle') {
+      mutatePane(paneId, (pane) => {
+        if (!pane.runInProgress) {
+          return pane
+        }
+
+        return {
+          ...pane,
+          status: 'attention',
+          statusText: '\u5b9f\u884c\u72b6\u614b\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093',
+          runInProgress: false,
+          runningSince: null,
+          stopRequested: false,
+          stopRequestAvailable: false,
+          lastActivityAt: eventAt,
+          lastFinishedAt: eventAt,
+          lastError: '\u30b5\u30fc\u30d0\u30fc\u5074\u3067\u5b9f\u884c\u4e2d\u307e\u305f\u306f\u5b8c\u4e86\u6e08\u307f\u306e\u72b6\u614b\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002',
+          streamEntries: appendStreamEntry(pane.streamEntries, 'system', '\u30b5\u30fc\u30d0\u30fc\u5074\u306e\u5b9f\u884c\u72b6\u614b\u306f idle \u3067\u3057\u305f', eventAt, pane.provider, pane.model)
+        }
+      })
+    }
+  }
+
+  const checkBackgroundRunStatuses = async () => {
+    if (runStatusCheckInFlightRef.current) {
+      return
+    }
+
+    const runningPaneIds = panesRef.current.filter((pane) => pane.runInProgress).map((pane) => pane.id)
+    if (runningPaneIds.length === 0) {
+      return
+    }
+
+    runStatusCheckInFlightRef.current = true
+    try {
+      await Promise.all(runningPaneIds.map(async (paneId) => {
+        try {
+          const status = await fetchPaneRunStatus(paneId)
+          if (status.status !== 'running') {
+            applyRecoveredRunStatus(paneId, status)
+          }
+        } catch {
+          // Keep the local running state. A transient status check failure should not stop the pane.
+        }
+      }))
+    } finally {
+      runStatusCheckInFlightRef.current = false
+    }
+  }
+
+  useEffect(() => {
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void checkBackgroundRunStatuses()
+      }
+    }
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void checkBackgroundRunStatuses()
+      }
+    }, 5_000)
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus)
+    window.addEventListener('focus', handleVisibilityOrFocus)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus)
+      window.removeEventListener('focus', handleVisibilityOrFocus)
+    }
+  }, [])
 
   const preparePaneRunPayload = (paneId: string, promptOverride?: string, options: { allowEmptyPrompt?: boolean } = {}) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
@@ -3450,6 +3701,13 @@ function App() {
           }
         })
         scheduleWorkspaceContentsRefresh(paneId)
+        void fetchPaneRunStatus(paneId)
+          .then((status) => {
+            if (status.status !== 'idle') {
+              applyRecoveredRunStatus(paneId, status)
+            }
+          })
+          .catch(() => undefined)
       }
 
       if (stopped) {
@@ -3916,6 +4174,7 @@ function App() {
     try {
       const payload = await browseLocalDirectory(selectedPath)
       const nextWorkspacePath = payload.path.trim() || selectedPath
+      rememberLastLocalBrowsePath(nextWorkspacePath)
       mutatePane(paneId, (pane) => ({
         ...pane,
         workspaceMode: 'local',
@@ -3955,6 +4214,7 @@ function App() {
     try {
       if (workspacePicker.mode === 'local') {
         const payload = await browseLocalDirectory(normalizedTargetPath)
+        rememberLastLocalBrowsePath(payload.path)
         setWorkspacePicker((current) =>
           current
             ? {
@@ -4013,12 +4273,11 @@ function App() {
 
   const handleOpenWorkspacePicker = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
-    const startPath = pane?.localWorkspacePath || localWorkspacesRef.current[0]?.path || ''
 
     setWorkspacePicker({
       mode: 'local',
       paneId,
-      path: startPath,
+      path: '',
       entries: [],
       roots: [],
       loading: true,
@@ -4026,10 +4285,26 @@ function App() {
     })
 
     try {
-      const [rootsPayload, directoryPayload] = await Promise.all([
-        fetchLocalBrowseRoots(),
-        browseLocalDirectory(startPath)
-      ])
+      const rootsPayload = await fetchLocalBrowseRoots()
+      const visibleRoots = rootsPayload.roots.filter(isLocalWorkspacePickerRootVisible)
+      const defaultPath = getDefaultLocalBrowsePath(rootsPayload.roots, bootstrap?.hostPlatform)
+      const requestedStartPath = chooseLocalWorkspacePickerStartPath({
+        pane,
+        workspaces: localWorkspacesRef.current,
+        roots: rootsPayload.roots,
+        lastLocalBrowsePath: lastLocalBrowsePathRef.current,
+        hostPlatform: bootstrap?.hostPlatform
+      })
+      const startPath = requestedStartPath || defaultPath
+      let directoryPayload: Awaited<ReturnType<typeof browseLocalDirectory>>
+      try {
+        directoryPayload = await browseLocalDirectory(startPath)
+      } catch (error) {
+        if (!defaultPath || normalizeComparablePath(defaultPath).toLowerCase() === normalizeComparablePath(startPath).toLowerCase()) {
+          throw error
+        }
+        directoryPayload = await browseLocalDirectory(defaultPath)
+      }
 
       setWorkspacePicker({
         mode: 'local',
@@ -4039,15 +4314,16 @@ function App() {
           label: entry.label,
           path: entry.path
         })),
-        roots: rootsPayload.roots.filter(isLocalWorkspacePickerRootVisible),
+        roots: visibleRoots,
         loading: false,
         error: null
       })
+      rememberLastLocalBrowsePath(directoryPayload.path)
     } catch (error) {
       setWorkspacePicker({
         mode: 'local',
         paneId,
-        path: startPath,
+        path: '',
         entries: [],
         roots: [],
         loading: false,

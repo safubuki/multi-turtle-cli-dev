@@ -1193,10 +1193,16 @@ export function TerminalPane({
     ? promptImageAttachments.find((attachment) => attachment.id === expandedPromptImageId) ?? null
     : null
   const hasVisibleSessionContent = hasVisibleConversation || hasVisibleStream
-  const visibleConversationEntries = useMemo(() => [...visibleSession.logs].reverse(), [visibleSession.logs])
-  const visibleStreamEntries = useMemo(() => [...visibleSession.streamEntries].reverse(), [visibleSession.streamEntries])
-  const conversationCopyText = visibleConversationEntries.map((entry) => formatConversationEntryForCopy(entry, pane.provider)).join('\n\n').trim()
-  const streamCopyText = visibleStreamEntries.map((entry) => formatStreamEntryForCopy(entry)).join('\n\n').trim()
+  const visibleConversationEntries = useMemo(() => (isRunLogsExpanded ? [...visibleSession.logs].reverse() : []), [isRunLogsExpanded, visibleSession.logs])
+  const visibleStreamEntries = useMemo(() => (isRunLogsExpanded ? [...visibleSession.streamEntries].reverse() : []), [isRunLogsExpanded, visibleSession.streamEntries])
+  const conversationCopyText = useMemo(
+    () => (isRunLogsExpanded ? visibleConversationEntries.map((entry) => formatConversationEntryForCopy(entry, pane.provider)).join('\n\n').trim() : ''),
+    [isRunLogsExpanded, pane.provider, visibleConversationEntries]
+  )
+  const streamCopyText = useMemo(
+    () => (isRunLogsExpanded ? visibleStreamEntries.map((entry) => formatStreamEntryForCopy(entry)).join('\n\n').trim() : ''),
+    [isRunLogsExpanded, visibleStreamEntries]
+  )
   const activeRunLogsTab = runLogsMode === 'conversation'
     ? 'conversation'
     : runLogsTab === 'stream' && hasVisibleStream
@@ -2438,7 +2444,7 @@ export function TerminalPane({
       )}
 
       {isCommandPreviewOpen ? (
-        <div className="output-modal-backdrop" onClick={() => setIsCommandPreviewOpen(false)}>
+        <div className="output-modal-backdrop">
           <div className="output-modal command-preview-modal" onClick={(event) => event.stopPropagation()}>
             <div className="panel-header slim">
               <div><h3>{UI.commandPreviewTitle}</h3><p>{pane.title}</p></div>

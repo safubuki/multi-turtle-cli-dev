@@ -10,6 +10,7 @@ import type {
   PreviewRunCommandResponse,
   RunPaneRequest,
   RunPaneResponse,
+  RunStatusResponse,
   RunStreamEvent,
   ShellRunEvent,
   ShellRunRequest,
@@ -117,6 +118,10 @@ export function runPane(payload: RunPaneRequest): Promise<RunPaneResponse> {
     },
     body: JSON.stringify(payload)
   })
+}
+
+export function fetchPaneRunStatus(paneId: string): Promise<RunStatusResponse> {
+  return requestJson<RunStatusResponse>(`/api/run/status/${encodeURIComponent(paneId)}`)
 }
 
 export async function runPaneStream(

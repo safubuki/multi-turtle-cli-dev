@@ -354,6 +354,13 @@ export interface RunPaneResponse {
   warningStatusText?: string | null
 }
 
+export interface RunStatusResponse {
+  success: boolean
+  status: 'idle' | 'running' | 'completed' | 'error'
+  result?: RunPaneResponse | null
+  error?: string | null
+}
+
 export interface PreviewRunCommandRequest extends RunPaneRequest {}
 
 export interface CommandPreviewSection {
