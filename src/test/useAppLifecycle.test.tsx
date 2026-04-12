@@ -154,6 +154,64 @@ function useHarness() {
   }
 }
 
+function useCleanupRegressionHarness(cleanupAllPromptImageResources: () => void) {
+  const persistedRef = useRef(loadPersistedState())
+  const [bootstrap] = useState<BootstrapPayload | null>(null)
+  const [panes] = useState<PaneState[]>([])
+  const [sharedContext] = useState<SharedContextItem[]>([])
+  const [layout] = useState<LayoutMode>('triple')
+  const [localWorkspaces] = useState<LocalWorkspace[]>([])
+  const [focusedPaneId] = useState<string | null>(null)
+  const [, setSelectedPaneIds] = useState<string[]>([])
+  const [, setLoading] = useState(true)
+  const [, setGlobalError] = useState<string | null>(null)
+  const [, setNow] = useState(Date.now())
+
+  const panesRef = useRef<PaneState[]>(panes)
+  const localWorkspacesRef = useRef<LocalWorkspace[]>(localWorkspaces)
+  const sharedContextRef = useRef<SharedContextItem[]>(sharedContext)
+  const controllersRef = useRef<Record<string, AbortController>>({
+    'pane-1': { abort: vi.fn() } as unknown as AbortController
+  })
+  const shellControllersRef = useRef<Record<string, AbortController>>({
+    'pane-1': { abort: vi.fn() } as unknown as AbortController
+  })
+  const workspaceRefreshTimersRef = useRef<Record<string, number>>({})
+  const checkBackgroundRunStatuses = useRef(vi.fn(async () => undefined))
+
+  useAppLifecycle({
+    persistedRef,
+    bootstrap,
+    panes,
+    sharedContext,
+    layout,
+    localWorkspaces,
+    focusedPaneId,
+    panesRef,
+    localWorkspacesRef,
+    sharedContextRef,
+    controllersRef,
+    shellControllersRef,
+    workspaceRefreshTimersRef,
+    cleanupAllPromptImageResources,
+    setBootstrap: vi.fn(),
+    setLocalWorkspaces: vi.fn(),
+    setPanes: vi.fn(),
+    setSharedContext: vi.fn(),
+    setFocusedPaneId: vi.fn(),
+    setSelectedPaneIds,
+    setLoading,
+    setGlobalError,
+    setNow,
+    checkBackgroundRunStatuses: checkBackgroundRunStatuses.current
+  })
+
+  return {
+    controllerAbort: controllersRef.current['pane-1']?.abort as unknown as ReturnType<typeof vi.fn>,
+    shellControllerAbort: shellControllersRef.current['pane-1']?.abort as unknown as ReturnType<typeof vi.fn>
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   Object.defineProperty(document, 'visibilityState', {
@@ -212,5 +270,31 @@ describe('useAppLifecycle', () => {
     })
 
     expect(harness.result.current.checkBackgroundRunStatuses).toHaveBeenCalled()
+  })
+
+  it('cleanup callback の identity が変わっても rerender で controller を abort しない', () => {
+    appCoreMocks.fetchBootstrapWithRetry.mockReturnValue(new Promise(() => undefined))
+    const firstCleanup = vi.fn()
+    const secondCleanup = vi.fn()
+
+    const harness = renderHook(({ cleanupFn }) => useCleanupRegressionHarness(cleanupFn), {
+      initialProps: {
+        cleanupFn: firstCleanup
+      }
+    })
+
+    harness.rerender({ cleanupFn: secondCleanup })
+
+    expect(harness.result.current.controllerAbort).not.toHaveBeenCalled()
+    expect(harness.result.current.shellControllerAbort).not.toHaveBeenCalled()
+    expect(firstCleanup).not.toHaveBeenCalled()
+    expect(secondCleanup).not.toHaveBeenCalled()
+
+    harness.unmount()
+
+    expect(harness.result.current.controllerAbort).toHaveBeenCalledTimes(1)
+    expect(harness.result.current.shellControllerAbort).toHaveBeenCalledTimes(1)
+    expect(firstCleanup).not.toHaveBeenCalled()
+    expect(secondCleanup).toHaveBeenCalledTimes(1)
   })
 })

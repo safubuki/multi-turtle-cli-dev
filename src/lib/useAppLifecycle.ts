@@ -63,6 +63,9 @@ export function useAppLifecycle(params: UseAppLifecycleParams) {
   const refreshBootstrapInFlightRef = useRef(false)
   const refreshBootstrapRef = useRef<(() => Promise<void>) | null>(null)
   const persistTimerRef = useRef<number | null>(null)
+  const cleanupAllPromptImageResourcesRef = useRef(cleanupAllPromptImageResources)
+
+  cleanupAllPromptImageResourcesRef.current = cleanupAllPromptImageResources
 
   const refreshBootstrap = useCallback(async () => {
     if (refreshBootstrapInFlightRef.current) {
@@ -117,9 +120,9 @@ export function useAppLifecycle(params: UseAppLifecycleParams) {
       for (const controller of Object.values(shellControllersRef.current)) {
         controller.abort()
       }
-      cleanupAllPromptImageResources()
+      cleanupAllPromptImageResourcesRef.current()
     }
-  }, [cleanupAllPromptImageResources, controllersRef, shellControllersRef, workspaceRefreshTimersRef])
+  }, [])
 
   useEffect(() => {
     if (!bootstrap) {
