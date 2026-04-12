@@ -9,31 +9,14 @@ import { StageToolbar } from './components/StageToolbar'
 import { SummaryMetrics } from './components/SummaryMetrics'
 import { WorkspacePickerModal } from './components/WorkspacePickerModal'
 import {
-  browseRemoteDirectory,
-  browseLocalDirectory,
-  createLocalDirectory,
-  createRemoteDirectory,
-  deleteSshKey,
-  fetchLocalBrowseRoots,
   fetchPaneRunStatus,
-  fetchRemoteWorkspaces,
-  generateSshKey,
-  inspectSshHost,
-  installSshKey,
-  openTargetInFileManager,
-  openTargetInCommandPrompt,
-  openWorkspaceInVsCode,
-  pickLocalWorkspace,
-  pickSaveFilePath,
   previewRunCommand,
-  removeKnownHost,
   runPaneStream,
   runShellStream,
   stagePromptImage,
   stopPaneRun,
   unstagePromptImages,
-  stopShellRun,
-  transferSshPath,
+  stopShellRun
 } from './lib/api'
 import {
   appendLiveOutputChunk,
@@ -53,7 +36,6 @@ import {
   buildPaneSessionScopeKey,
   createEmptyProviderSessions,
   createProviderSettingsFromCatalog,
-  getCurrentProviderSettings,
   getProviderResumeSession,
   resetProviderSessionState,
   syncCurrentProviderSettings,
@@ -61,22 +43,10 @@ import {
 } from './lib/providerState'
 import { reconcileSharedContextWithPanes } from './lib/sharedContext'
 import {
-  buildLocalWorkspacePickerEntries,
-  buildLocalWorkspaceRecord,
-  buildRemoteWorkspacePickerEntries,
-  buildRemoteWorkspacePickerRoots,
-  chooseLocalWorkspacePickerStartPath,
-  clampLocalPathToWorkspace,
-  createWorkspacePickerState,
-  getDefaultLocalBrowsePath,
   getManualWorkspaces,
-  isLocalWorkspacePickerRootVisible,
-  mergeLocalWorkspaces,
-  normalizeComparablePath,
-  patchWorkspacePickerState,
-  resolveLinkedLocalPath,
-  resolveLinkedRemotePath
+  mergeLocalWorkspaces
 } from './lib/workspacePaths'
+import { createWorkspaceActions } from './lib/workspaceActions'
 import type {
   BootstrapPayload,
   LocalWorkspace,
@@ -91,8 +61,7 @@ import type {
   RunStreamEvent,
   ShellRunEvent,
   SharedContextItem,
-  WorkspacePickerState,
-  WorkspaceTarget
+  WorkspacePickerState
 } from './types'
 
 import {
@@ -108,8 +77,6 @@ import {
   appendStreamEntry,
   buildPromptWithImageSummary,
   buildShellPromptLabel,
-  buildSshConnectionFromPane,
-  buildSshLabel,
   buildTargetFromPane,
   createArchivedSessionRecord,
   createId,
@@ -134,7 +101,6 @@ import {
 } from './lib/browserUi'
 import {
   applyBackgroundActionFailure,
-  applyBackgroundActionSuccess,
   createInitialPane,
   getPaneVisualStatus,
   isPaneBusyForExecution,
@@ -144,8 +110,7 @@ import {
 } from './lib/paneState'
 import {
   loadPersistedState,
-  persistState,
-  STORAGE_KEYS
+  persistState
 } from './lib/storage'
 
 function App() {
@@ -579,50 +544,41 @@ function App() {
     }))
   }
 
-  const rememberLastLocalBrowsePath = (targetPath: string) => {
-    const normalizedPath = targetPath.trim()
-    if (!normalizedPath) {
-      return
-    }
-
-    lastLocalBrowsePathRef.current = normalizedPath
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEYS.lastLocalBrowsePath, JSON.stringify(normalizedPath))
-    }
-  }
-
-  const scheduleWorkspaceContentsRefresh = (paneId: string, delay = 240) => {
-    const existingTimer = workspaceRefreshTimersRef.current[paneId]
-    if (existingTimer) {
-      window.clearTimeout(existingTimer)
-    }
-
-    workspaceRefreshTimersRef.current[paneId] = window.setTimeout(() => {
-      delete workspaceRefreshTimersRef.current[paneId]
-
-      const pane = panesRef.current.find((item) => item.id === paneId)
-      if (!pane) {
-        return
-      }
-
-      if (pane.workspaceMode === 'local') {
-        const targetPath = pane.localBrowserPath.trim() || pane.localWorkspacePath.trim()
-        if (targetPath) {
-          void handleBrowseLocal(paneId, targetPath)
-        }
-        return
-      }
-
-      const targetPath = pane.remoteBrowserPath.trim() || pane.remoteWorkspacePath.trim()
-      if (pane.sshHost.trim() && targetPath) {
-        void handleBrowseRemote(paneId, targetPath)
-      }
-    }, delay)
-  }
-
-  const handleRefreshWorkspaceContents = (paneId: string) => {
-    scheduleWorkspaceContentsRefresh(paneId, 0)
-  }
+  const {
+    handleAddLocalWorkspace,
+    handleBrowseLocal,
+    handleBrowseRemote,
+    handleBrowseWorkspacePicker,
+    handleConfirmWorkspacePicker,
+    handleCreateRemoteDirectory,
+    handleCreateWorkspacePickerDirectory,
+    handleDeleteSshKey,
+    handleGenerateSshKey,
+    handleInstallSshPublicKey,
+    handleLoadRemote,
+    handleOpenCommandPrompt,
+    handleOpenFileManager,
+    handleOpenPathInVsCode,
+    handleOpenRemoteWorkspacePicker,
+    handleOpenWorkspace,
+    handleRefreshWorkspaceContents,
+    handleRemoveKnownHost,
+    handleTransferSshPath,
+    scheduleWorkspaceContentsRefresh
+  } = createWorkspaceActions({
+    bootstrap,
+    panesRef,
+    localWorkspacesRef,
+    lastLocalBrowsePathRef,
+    workspaceRefreshTimersRef,
+    workspacePicker,
+    setPanes,
+    setLocalWorkspaces,
+    setWorkspacePicker,
+    updatePane,
+    mutatePane,
+    appendPaneSystemMessage
+  })
 
   const scrollToPane = (paneId: string) => {
     window.requestAnimationFrame(() => {
@@ -2219,400 +2175,6 @@ function App() {
     }))
   }
 
-  const handleBrowseLocal = async (paneId: string, targetPath: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const workspaceRoot = pane.localWorkspacePath.trim()
-    const nextPath = workspaceRoot ? clampLocalPathToWorkspace(targetPath, workspaceRoot) : targetPath.trim()
-    if (!nextPath) {
-      return
-    }
-
-    updatePane(paneId, {
-      localBrowserLoading: true
-    })
-
-    try {
-      const payload = await browseLocalDirectory(nextPath)
-      mutatePane(paneId, (pane) => ({
-        ...pane,
-        localBrowserLoading: false,
-        localBrowserPath: payload.path,
-        localBrowserEntries: payload.entries,
-        lastError: null
-      }))
-    } catch (error) {
-      updatePane(paneId, {
-        localBrowserLoading: false,
-        status: 'error',
-        statusText: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u306e\u5185\u5bb9\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  const handleSelectLocalWorkspace = async (paneId: string, workspacePath: string) => {
-    const selectedPath = workspacePath.trim()
-    if (!selectedPath) {
-      return
-    }
-
-    updatePane(paneId, {
-      workspaceMode: 'local',
-      localWorkspacePath: selectedPath,
-      localBrowserPath: '',
-      localBrowserEntries: [],
-      localBrowserLoading: true
-    })
-
-    try {
-      const payload = await browseLocalDirectory(selectedPath)
-      const nextWorkspacePath = payload.path.trim() || selectedPath
-      rememberLastLocalBrowsePath(nextWorkspacePath)
-      mutatePane(paneId, (pane) => ({
-        ...pane,
-        workspaceMode: 'local',
-        localWorkspacePath: nextWorkspacePath,
-        localBrowserPath: nextWorkspacePath,
-        localBrowserEntries: payload.entries,
-        localShellPath: nextWorkspacePath,
-        localBrowserLoading: false,
-        lastError: null
-      }))
-    } catch (error) {
-      updatePane(paneId, {
-        localBrowserLoading: false,
-        status: 'error',
-        statusText: '\u30d5\u30a9\u30eb\u30c0\u5185\u5bb9\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  const handleBrowseWorkspacePicker = async (targetPath: string) => {
-    const normalizedTargetPath = targetPath.trim()
-    if (!workspacePicker || !normalizedTargetPath) {
-      return
-    }
-
-    setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-      loading: true,
-      error: null
-    }))
-
-    try {
-      if (workspacePicker.mode === 'local') {
-        const payload = await browseLocalDirectory(normalizedTargetPath)
-        rememberLastLocalBrowsePath(payload.path)
-        setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-          path: payload.path,
-          entries: buildLocalWorkspacePickerEntries(payload.entries),
-          loading: false,
-          error: null
-        }))
-      } else {
-        const pane = panesRef.current.find((item) => item.id === workspacePicker.paneId)
-        if (!pane || !pane.sshHost.trim()) {
-          throw new Error('SSH 接続先が未設定です。')
-        }
-
-        const payload = await browseRemoteDirectory(
-          pane.sshHost.trim(),
-          normalizedTargetPath,
-          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-        )
-
-        setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-          path: payload.path,
-          entries: buildRemoteWorkspacePickerEntries(payload.entries),
-          roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], payload.homeDirectory),
-          loading: false,
-          error: null
-        }))
-      }
-    } catch (error) {
-      setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-        loading: false,
-        error: error instanceof Error ? error.message : String(error)
-      }))
-    }
-  }
-
-  const handleOpenWorkspacePicker = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-
-    setWorkspacePicker(createWorkspacePickerState({
-      mode: 'local',
-      paneId,
-      loading: true,
-      error: null
-    }))
-
-    try {
-      const rootsPayload = await fetchLocalBrowseRoots()
-      const visibleRoots = rootsPayload.roots.filter(isLocalWorkspacePickerRootVisible)
-      const defaultPath = getDefaultLocalBrowsePath(rootsPayload.roots, bootstrap?.hostPlatform)
-      const requestedStartPath = chooseLocalWorkspacePickerStartPath({
-        pane,
-        workspaces: localWorkspacesRef.current,
-        roots: rootsPayload.roots,
-        lastLocalBrowsePath: lastLocalBrowsePathRef.current,
-        hostPlatform: bootstrap?.hostPlatform
-      })
-      const startPath = requestedStartPath || defaultPath
-      let directoryPayload: Awaited<ReturnType<typeof browseLocalDirectory>>
-      try {
-        directoryPayload = await browseLocalDirectory(startPath)
-      } catch (error) {
-        if (!defaultPath || normalizeComparablePath(defaultPath).toLowerCase() === normalizeComparablePath(startPath).toLowerCase()) {
-          throw error
-        }
-        directoryPayload = await browseLocalDirectory(defaultPath)
-      }
-
-      setWorkspacePicker(createWorkspacePickerState({
-        mode: 'local',
-        paneId,
-        path: directoryPayload.path,
-        entries: buildLocalWorkspacePickerEntries(directoryPayload.entries),
-        roots: visibleRoots,
-        loading: false,
-        error: null
-      }))
-      rememberLastLocalBrowsePath(directoryPayload.path)
-    } catch (error) {
-      setWorkspacePicker(createWorkspacePickerState({
-        mode: 'local',
-        paneId,
-        loading: false,
-        error: error instanceof Error ? error.message : String(error)
-      }))
-    }
-  }
-
-  const handleOpenRemoteWorkspacePicker = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim()) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: '先にリモートに接続してください',
-        lastError: 'リモートワークスペースを選択する前に SSH 接続が必要です。'
-      })
-      return
-    }
-
-    const startPath = pane.remoteWorkspacePath || pane.remoteBrowserPath || pane.remoteHomeDirectory || '~'
-    const roots = buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], pane.remoteHomeDirectory)
-
-    setWorkspacePicker(createWorkspacePickerState({
-      mode: 'ssh',
-      paneId,
-      path: startPath,
-      roots,
-      loading: true,
-      error: null
-    }))
-
-    try {
-      const payload = await browseRemoteDirectory(
-        pane.sshHost.trim(),
-        startPath,
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-      )
-
-      setWorkspacePicker(createWorkspacePickerState({
-        mode: 'ssh',
-        paneId,
-        path: payload.path,
-        entries: buildRemoteWorkspacePickerEntries(payload.entries),
-        roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], payload.homeDirectory),
-        loading: false,
-        error: null
-      }))
-    } catch (error) {
-      setWorkspacePicker(createWorkspacePickerState({
-        mode: 'ssh',
-        paneId,
-        path: startPath,
-        roots,
-        loading: false,
-        error: error instanceof Error ? error.message : String(error)
-      }))
-    }
-  }
-
-  const handleConfirmWorkspacePicker = async () => {
-    if (!workspacePicker?.path) {
-      return
-    }
-
-    if (workspacePicker.mode === 'local') {
-      const workspace = buildLocalWorkspaceRecord(workspacePicker.path)
-      setLocalWorkspaces((current) => mergeLocalWorkspaces([workspace], current))
-      await handleSelectLocalWorkspace(workspacePicker.paneId, workspace.path)
-    } else {
-      const selectedPath = workspacePicker.path
-      updatePane(workspacePicker.paneId, {
-        workspaceMode: 'ssh',
-        remoteWorkspacePath: selectedPath,
-        sshRemotePath: selectedPath,
-        remoteShellPath: selectedPath,
-        status: 'idle',
-        statusText: 'リモートワークスペースを選択しました',
-        lastError: null
-      })
-      void handleBrowseRemote(workspacePicker.paneId, selectedPath)
-    }
-
-    setWorkspacePicker(null)
-  }
-
-  const handleAddLocalWorkspace = async (paneId: string) => {
-    await handleOpenWorkspacePicker(paneId)
-  }
-
-  const handleCreateWorkspacePickerDirectory = async () => {
-    if (!workspacePicker?.path || workspacePicker.loading) {
-      return
-    }
-
-    const folderName = window.prompt('作成するフォルダ名', '')
-    if (folderName === null) {
-      return
-    }
-
-    const trimmedName = folderName.trim()
-    if (!trimmedName) {
-      setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-        error: '新しいフォルダ名を入力してください。'
-      }))
-      return
-    }
-
-    const parentPath = workspacePicker.path
-    setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-      loading: true,
-      error: null
-    }))
-
-    try {
-      if (workspacePicker.mode === 'local') {
-        const payload = await createLocalDirectory(parentPath, trimmedName)
-        const directoryPayload = await browseLocalDirectory(payload.path)
-        setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-          path: directoryPayload.path,
-          entries: buildLocalWorkspacePickerEntries(directoryPayload.entries),
-          loading: false,
-          error: null
-        }))
-      } else {
-        const pane = panesRef.current.find((item) => item.id === workspacePicker.paneId)
-        if (!pane || !pane.sshHost.trim()) {
-          throw new Error('SSH 接続先が未設定です。')
-        }
-
-        const payload = await createRemoteDirectory(
-          pane.sshHost.trim(),
-          parentPath,
-          trimmedName,
-          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-        )
-        const directoryPayload = await browseRemoteDirectory(
-          pane.sshHost.trim(),
-          payload.path,
-          buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-        )
-
-        setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-          path: directoryPayload.path,
-          entries: buildRemoteWorkspacePickerEntries(directoryPayload.entries),
-          roots: buildRemoteWorkspacePickerRoots(bootstrap?.remoteRoots ?? [], directoryPayload.homeDirectory),
-          loading: false,
-          error: null
-        }))
-      }
-    } catch (error) {
-      setWorkspacePicker((current) => patchWorkspacePickerState(current, {
-        loading: false,
-        error: error instanceof Error ? error.message : String(error)
-      }))
-    }
-  }
-
-  const handleOpenWorkspace = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
-    if (!target) {
-      return
-    }
-
-    try {
-      await openWorkspaceInVsCode(target)
-      const completedAt = Date.now()
-      mutatePane(paneId, (currentPane) => applyBackgroundActionSuccess(currentPane, 'VSCode \u3092\u8d77\u52d5\u3057\u307e\u3057\u305f', completedAt))
-    } catch (error) {
-      const failedAt = Date.now()
-      const message = error instanceof Error ? error.message : String(error)
-      mutatePane(paneId, (currentPane) => applyBackgroundActionFailure(currentPane, 'VSCode \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f', message, failedAt))
-    }
-  }
-
-  const handleOpenFileManager = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || pane.workspaceMode !== 'local') {
-      return
-    }
-
-    const targetPath = pane.localBrowserPath.trim() || pane.localWorkspacePath.trim()
-    if (!targetPath) {
-      return
-    }
-
-    try {
-      await openTargetInFileManager({
-        kind: 'local',
-        path: targetPath,
-        label: targetPath,
-        resourceType: 'folder'
-      })
-      const completedAt = Date.now()
-      mutatePane(paneId, (currentPane) => applyBackgroundActionSuccess(currentPane, 'Explorer を起動しました', completedAt))
-    } catch (error) {
-      const failedAt = Date.now()
-      const message = error instanceof Error ? error.message : String(error)
-      mutatePane(paneId, (currentPane) => applyBackgroundActionFailure(currentPane, 'Explorer の起動に失敗しました', message, failedAt))
-    }
-  }
-
-  const handleOpenCommandPrompt = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const target = buildTargetFromPane(pane, localWorkspacesRef.current, bootstrap?.sshHosts ?? [], panesRef.current)
-    if (!target) {
-      return
-    }
-
-    try {
-      await openTargetInCommandPrompt(target)
-      const completedAt = Date.now()
-      mutatePane(paneId, (currentPane) => applyBackgroundActionSuccess(currentPane, '\u30bf\u30fc\u30df\u30ca\u30eb\u3092\u8d77\u52d5\u3057\u307e\u3057\u305f', completedAt))
-    } catch (error) {
-      const failedAt = Date.now()
-      const message = error instanceof Error ? error.message : String(error)
-      mutatePane(paneId, (currentPane) => applyBackgroundActionFailure(currentPane, '\u30bf\u30fc\u30df\u30ca\u30eb\u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f', message, failedAt))
-    }
-  }
-
   const handleRunShell = async (paneId: string) => {
     const pane = panesRef.current.find((item) => item.id === paneId)
     if (!pane) {
@@ -2647,8 +2209,8 @@ function App() {
         ...current,
         shellCommand: '',
         shellHistoryIndex: null,
-        shellLastError: '\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u307e\u305f\u306f SSH \u63a5\u7d9a\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] \u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9\u307e\u305f\u306f SSH \u63a5\u7d9a\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044'),
+        shellLastError: 'ワークスペースまたは SSH 接続を設定してください',
+        shellOutput: appendShellOutputLine(current.shellOutput, '[error] ワークスペースまたは SSH 接続を設定してください'),
         shellLastRunAt: Date.now()
       }))
       return
@@ -2659,8 +2221,8 @@ function App() {
         ...current,
         shellCommand: '',
         shellHistoryIndex: null,
-        shellLastError: '\u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
-        shellOutput: appendShellOutputLine(current.shellOutput, '[error] \u7c21\u6613\u5185\u8535\u30bf\u30fc\u30df\u30ca\u30eb API \u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002TAKO \u306e\u30b5\u30fc\u30d0\u30fc\u3092\u518d\u8d77\u52d5\u3057\u3066\u304f\u3060\u3055\u3044\u3002'),
+        shellLastError: '簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。',
+        shellOutput: appendShellOutputLine(current.shellOutput, '[error] 簡易内蔵ターミナル API が見つかりません。TAKO のサーバーを再起動してください。'),
         shellLastRunAt: Date.now()
       }))
       return
@@ -2800,710 +2362,6 @@ function App() {
     }))
   }
 
-  const handleOpenPathInVsCode = async (paneId: string, path: string, resourceType: 'folder' | 'file') => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !path.trim()) {
-      return
-    }
-
-    const resolvedPath =
-      pane.workspaceMode === 'local'
-        ? resolveLinkedLocalPath(path, pane.localWorkspacePath.trim())
-        : resolveLinkedRemotePath(path, pane.remoteWorkspacePath.trim())
-
-    if (!resolvedPath) {
-      return
-    }
-
-    const target: WorkspaceTarget =
-      pane.workspaceMode === 'local'
-        ? {
-            kind: 'local',
-            path: resolvedPath,
-            label: resolvedPath,
-            resourceType,
-            workspacePath: pane.localWorkspacePath.trim()
-          }
-        : {
-            kind: 'ssh',
-            host: pane.sshHost.trim(),
-            path: resolvedPath,
-            label: buildSshLabel(pane.sshHost.trim(), resolvedPath, buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)),
-            resourceType,
-            workspacePath: pane.remoteWorkspacePath.trim(),
-            connection: buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-          }
-
-    try {
-      await openWorkspaceInVsCode(target)
-    } catch (error) {
-      updatePane(paneId, {
-        status: 'error',
-        statusText: 'VSCode \u306e\u8d77\u52d5\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  const handleLoadRemote = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim()) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: 'SSH ホストを入力してください',
-        lastError: 'SSH ホストが未設定です。'
-      })
-      return
-    }
-
-    const host = pane.sshHost.trim()
-    const connection = buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-    const requestedBrowsePath = pane.remoteBrowserPath || pane.remoteWorkspacePath || undefined
-    const startedAt = Date.now()
-    updatePane(paneId, {
-      status: 'running',
-      statusText: 'SSH 接続を確認中です',
-      runningSince: startedAt,
-      lastActivityAt: startedAt,
-      lastError: null,
-      remoteBrowserLoading: true,
-      sshActionState: 'running',
-      sshActionMessage: `${host} に接続しています...`
-    })
-
-    try {
-      let browsePayload: Awaited<ReturnType<typeof browseRemoteDirectory>> | null = null
-      let browseFallbackWarning: string | null = null
-
-      try {
-        browsePayload = await browseRemoteDirectory(host, requestedBrowsePath, connection)
-      } catch (error) {
-        if (!requestedBrowsePath) {
-          throw error
-        }
-
-        try {
-          browsePayload = await browseRemoteDirectory(host, undefined, connection)
-          browseFallbackWarning = `指定したリモートパスを開けなかったため、ホームディレクトリを表示しています: ${requestedBrowsePath}`
-        } catch {
-          throw error
-        }
-      }
-
-      if (!browsePayload) {
-        throw new Error('remote browse failed')
-      }
-
-      const browseCompletedAt = Date.now()
-      setPanes((current) =>
-        current.map((item) => {
-          if (item.id !== paneId) {
-            return item
-          }
-
-          const nextRemoteWorkspacePath = browseFallbackWarning ? '' : item.remoteWorkspacePath.trim()
-          const nextDiagnostics = browseFallbackWarning
-            ? Array.from(new Set([...item.sshDiagnostics, browseFallbackWarning]))
-            : item.sshDiagnostics
-
-          return {
-            ...item,
-            remoteBrowserLoading: false,
-            remoteBrowserPath: browsePayload.path,
-            remoteParentPath: browsePayload.parentPath,
-            remoteBrowserEntries: browsePayload.entries,
-            remoteHomeDirectory: browsePayload.homeDirectory ?? item.remoteHomeDirectory,
-            remoteWorkspacePath: nextRemoteWorkspacePath,
-            sshRemotePath: item.sshRemotePath || nextRemoteWorkspacePath || browsePayload.path,
-            remoteShellPath: item.remoteShellPath || nextRemoteWorkspacePath || browsePayload.path,
-            sshDiagnostics: nextDiagnostics,
-            status: browseFallbackWarning ? 'attention' : 'idle',
-            statusText: browseFallbackWarning ? 'SSH に接続しましたがホームを表示しています' : 'SSH に接続しました',
-            runningSince: null,
-            lastActivityAt: browseCompletedAt,
-            lastFinishedAt: browseCompletedAt,
-            lastError: browseFallbackWarning,
-            sshActionState: 'success',
-            sshActionMessage: `${host} に接続しました`
-          }
-        })
-      )
-
-      const [workspaceResult, inspectionResult] = await Promise.allSettled([
-        fetchRemoteWorkspaces(host, connection),
-        inspectSshHost(host, connection)
-      ])
-
-      const workspacePayload = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null
-      const inspectionPayload = inspectionResult.status === 'fulfilled' ? inspectionResult.value : null
-      const failedPartLabels = [
-        workspaceResult.status === 'rejected' ? 'ワークスペース一覧' : null,
-        inspectionResult.status === 'rejected' ? '接続診断 / CLI確認' : null
-      ].filter((item): item is string => Boolean(item))
-      const partialErrors = [
-        workspaceResult.status === 'rejected'
-          ? `ワークスペース一覧の取得に失敗しました: ${workspaceResult.reason instanceof Error ? workspaceResult.reason.message : String(workspaceResult.reason)}`
-          : null,
-        inspectionResult.status === 'rejected'
-          ? `接続診断 / CLI確認の取得に失敗しました: ${inspectionResult.reason instanceof Error ? inspectionResult.reason.message : String(inspectionResult.reason)}`
-          : null,
-        browseFallbackWarning
-      ].filter((item): item is string => Boolean(item))
-
-      setPanes((current) =>
-        current.map((item) => {
-          if (item.id !== paneId) {
-            return item
-          }
-
-          const nextProvider =
-            inspectionPayload && inspectionPayload.availableProviders.length > 0 && !inspectionPayload.availableProviders.includes(item.provider)
-              ? inspectionPayload.availableProviders[0]
-              : item.provider
-          const nextSettings =
-            nextProvider !== item.provider && bootstrap
-              ? item.providerSettings[nextProvider] ?? createProviderSettingsFromCatalog(bootstrap.providers, nextProvider)
-              : getCurrentProviderSettings(item)
-          const updatedAt = Date.now()
-          const nextLocalKeys = mergeLocalSshKeys(inspectionPayload?.localKeys ?? [], item.sshLocalKeys)
-          const selectedKey = getPreferredLocalSshKey({ ...item, sshLocalKeys: nextLocalKeys }, nextLocalKeys, current)
-          const availableProviders = inspectionPayload?.availableProviders ?? item.remoteAvailableProviders
-          const currentRemoteWorkspacePath = item.remoteWorkspacePath.trim()
-          const nextRemoteWorkspacePath = browseFallbackWarning ? '' : currentRemoteWorkspacePath
-          const mergedDiagnostics = Array.from(new Set([
-            ...(inspectionPayload?.diagnostics ?? item.sshDiagnostics),
-            ...partialErrors
-          ]))
-          const hasPartialFailure = partialErrors.length > 0
-          const noRemoteProviderDetected = Boolean(inspectionPayload && inspectionPayload.availableProviders.length === 0)
-
-          return syncCurrentProviderSettings({
-            ...item,
-            provider: nextProvider,
-            model: nextSettings.model,
-            reasoningEffort: nextSettings.reasoningEffort,
-            autonomyMode: nextSettings.autonomyMode,
-            codexFastMode: nextProvider === 'codex' ? nextSettings.codexFastMode : 'off',
-            sessionId: nextProvider === item.provider ? item.sessionId : null,
-            sessionScopeKey: nextProvider === item.provider ? item.sessionScopeKey : null,
-            sshUser: item.sshUser || inspectionPayload?.suggestedUser || '',
-            sshPort: item.sshPort || inspectionPayload?.suggestedPort || '',
-            sshIdentityFile: selectedKey?.privateKeyPath || item.sshIdentityFile || inspectionPayload?.suggestedIdentityFile || '',
-            sshProxyJump: item.sshProxyJump || inspectionPayload?.suggestedProxyJump || '',
-            sshProxyCommand: item.sshProxyCommand || inspectionPayload?.suggestedProxyCommand || '',
-            sshLocalKeys: nextLocalKeys,
-            sshSelectedKeyPath: selectedKey?.privateKeyPath ?? '',
-            sshPublicKeyText: selectedKey?.publicKey ?? item.sshPublicKeyText,
-            sshKeyName: selectedKey?.name ?? item.sshKeyName,
-            sshKeyComment: selectedKey?.comment ?? item.sshKeyComment,
-            sshDiagnostics: mergedDiagnostics,
-            sshLocalPath: item.sshLocalPath || localWorkspacesRef.current[0]?.path || '',
-            sshRemotePath: item.sshRemotePath || nextRemoteWorkspacePath || browsePayload.path,
-            remoteShellPath: item.remoteShellPath || nextRemoteWorkspacePath || browsePayload.path,
-            remoteWorkspaces: workspacePayload?.workspaces ?? item.remoteWorkspaces,
-            remoteAvailableProviders: availableProviders,
-            remoteHomeDirectory: inspectionPayload?.homeDirectory ?? browsePayload.homeDirectory ?? item.remoteHomeDirectory,
-            remoteBrowserLoading: false,
-            remoteBrowserPath: browsePayload.path,
-            remoteParentPath: browsePayload.parentPath,
-            remoteBrowserEntries: browsePayload.entries,
-            remoteWorkspacePath: nextRemoteWorkspacePath,
-            status: hasPartialFailure || noRemoteProviderDetected ? 'attention' : 'idle',
-            statusText: hasPartialFailure ? `SSH に接続しましたが ${failedPartLabels.join(' / ')} の取得に失敗しました` : noRemoteProviderDetected ? 'SSH 接続済み / CLI 未検出' : 'SSH を更新しました',
-            runningSince: null,
-            lastActivityAt: updatedAt,
-            lastFinishedAt: updatedAt,
-            lastError: hasPartialFailure ? partialErrors.join('\n') : null,
-            sshActionState: hasPartialFailure ? 'error' : 'success',
-            sshActionMessage: hasPartialFailure ? `${host} への接続は成功しましたが、${failedPartLabels.join(' / ')} の取得に失敗しました` : noRemoteProviderDetected ? `${host} に接続しました。CLI を確認してください` : `${host} の接続情報を更新しました`
-          })
-        })
-      )
-    } catch (error) {
-      const failedAt = Date.now()
-      updatePane(paneId, {
-        status: 'error',
-        statusText: 'SSH 接続に失敗しました',
-        runningSince: null,
-        remoteBrowserLoading: false,
-        lastActivityAt: failedAt,
-        lastFinishedAt: failedAt,
-        lastError: error instanceof Error ? error.message : String(error),
-        sshActionState: 'error',
-        sshActionMessage: `SSH 接続に失敗しました: ${error instanceof Error ? error.message : String(error)}`
-      })
-    }
-  }
-
-  const handleBrowseRemote = async (paneId: string, nextPath?: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim()) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: 'SSH \u30db\u30b9\u30c8\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: 'SSH \u30db\u30b9\u30c8\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
-      })
-      return
-    }
-
-    updatePane(paneId, {
-      remoteBrowserLoading: true
-    })
-
-    try {
-      const browsePayload = await browseRemoteDirectory(
-        pane.sshHost.trim(),
-        nextPath || pane.remoteBrowserPath || pane.remoteHomeDirectory || undefined,
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-      )
-      mutatePane(paneId, (currentPane) => ({
-        ...currentPane,
-        remoteBrowserLoading: false,
-        remoteHomeDirectory: browsePayload.homeDirectory,
-        remoteBrowserPath: browsePayload.path,
-        remoteParentPath: browsePayload.parentPath,
-        remoteBrowserEntries: browsePayload.entries,
-        sshRemotePath: currentPane.sshRemotePath || browsePayload.path,
-        lastError: null
-      }))
-    } catch (error) {
-      updatePane(paneId, {
-        remoteBrowserLoading: false,
-        status: 'error',
-        statusText: 'SSH \u4e00\u89a7\u306e\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        lastError: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  const handleCreateRemoteDirectory = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim() || !pane.remoteBrowserPath.trim()) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: '\u4f5c\u6210\u5148\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: '\u30ea\u30e2\u30fc\u30c8\u4e00\u89a7\u3092\u8868\u793a\u3057\u3066\u304b\u3089\u4f5c\u6210\u3057\u3066\u304f\u3060\u3055\u3044\u3002'
-      })
-      return
-    }
-
-    const folderName = window.prompt('\u4f5c\u6210\u3059\u308b\u30d5\u30a9\u30eb\u30c0\u540d', '')
-    if (folderName === null) {
-      return
-    }
-
-    const trimmedName = folderName.trim()
-    if (!trimmedName) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: '\u30d5\u30a9\u30eb\u30c0\u540d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: '\u65b0\u898f\u30d5\u30a9\u30eb\u30c0\u540d\u304c\u7a7a\u3067\u3059\u3002'
-      })
-      return
-    }
-
-    const startedAt = Date.now()
-    updatePane(paneId, {
-      remoteBrowserLoading: true,
-      status: 'running',
-      statusText: '\u30d5\u30a9\u30eb\u30c0\u3092\u4f5c\u6210\u4e2d',
-      runningSince: startedAt,
-      lastActivityAt: startedAt,
-      lastError: null
-    })
-
-    try {
-      const payload = await createRemoteDirectory(
-        pane.sshHost.trim(),
-        pane.remoteBrowserPath.trim(),
-        trimmedName,
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-      )
-      const browsePayload = await browseRemoteDirectory(
-        pane.sshHost.trim(),
-        pane.remoteBrowserPath.trim(),
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-      )
-      const finishedAt = Date.now()
-      mutatePane(paneId, (currentPane) => ({
-        ...currentPane,
-        remoteBrowserLoading: false,
-        remoteBrowserPath: browsePayload.path,
-        remoteParentPath: browsePayload.parentPath,
-        remoteBrowserEntries: browsePayload.entries,
-        sshRemotePath: payload.path,
-        status: 'completed',
-        statusText: '\u30d5\u30a9\u30eb\u30c0\u3092\u4f5c\u6210\u3057\u307e\u3057\u305f',
-        runningSince: null,
-        lastActivityAt: finishedAt,
-        lastFinishedAt: finishedAt,
-        lastError: null,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', `\u30d5\u30a9\u30eb\u30c0\u4f5c\u6210: ${payload.path}`, finishedAt)
-      }))
-    } catch (error) {
-      updatePane(paneId, {
-        remoteBrowserLoading: false,
-        status: 'error',
-        statusText: '\u30d5\u30a9\u30eb\u30c0\u4f5c\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        runningSince: null,
-        lastError: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  const handleGenerateSshKey = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane) {
-      return
-    }
-
-    const keyName = pane.sshKeyName.trim() || 'id_ed25519'
-    const keyComment = pane.sshKeyComment.trim() || 'tako-cli-dev-tool'
-    const startedAt = Date.now()
-    updatePane(paneId, {
-      status: 'running',
-      statusText: 'SSH 鍵を生成中です',
-      runningSince: startedAt,
-      lastActivityAt: startedAt,
-      lastError: null,
-      sshActionState: 'running',
-      sshActionMessage: 'SSH 鍵を生成中です...'
-    })
-
-    try {
-      const result = await generateSshKey(keyName, keyComment, '')
-      const finishedAt = Date.now()
-      mutatePane(paneId, (pane) => ({
-        ...pane,
-        sshLocalKeys: [result.key, ...pane.sshLocalKeys.filter((item) => item.privateKeyPath !== result.key.privateKeyPath)],
-        sshSelectedKeyPath: result.key.privateKeyPath,
-        sshIdentityFile: result.key.privateKeyPath,
-        sshPublicKeyText: result.key.publicKey,
-        sshKeyName: result.key.name,
-        sshKeyComment: result.key.comment,
-        sshDiagnostics: [
-          ...pane.sshDiagnostics.filter((item) => !item.startsWith('\u30ed\u30fc\u30ab\u30eb\u9375:') && !item.startsWith('ローカルの ~/.ssh に利用可能な鍵がありません')),
-          `\u30ed\u30fc\u30ab\u30eb\u9375: ${result.key.privateKeyPath}`
-        ],
-        sshActionState: 'success',
-        sshActionMessage: result.created ? `SSH 鍵を生成しました: ${result.key.privateKeyPath}` : `既存の SSH 鍵を選択しました: ${result.key.privateKeyPath}`,
-        status: 'completed',
-        statusText: result.created ? 'SSH 鍵を生成しました' : '既存の SSH 鍵を選択しました',
-        runningSince: null,
-        lastActivityAt: finishedAt,
-        lastFinishedAt: finishedAt,
-        lastError: null,
-        streamEntries: appendStreamEntry(pane.streamEntries, 'system', result.created ? `SSH 鍵を生成しました: ${result.key.privateKeyPath}` : `既存の SSH 鍵を選択しました: ${result.key.privateKeyPath}`, finishedAt)
-      }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const failedAt = Date.now()
-      updatePane(paneId, {
-        status: 'error',
-        statusText: 'SSH \u9375\u306e\u751f\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        runningSince: null,
-        lastActivityAt: failedAt,
-        lastFinishedAt: failedAt,
-        lastError: message,
-        sshActionState: 'error',
-        sshActionMessage: `SSH 鍵の生成に失敗しました: ${message}`
-      })
-    }
-  }
-
-  const handleDeleteSshKey = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    const selectedKey = pane?.sshLocalKeys.find((item) => item.privateKeyPath === pane.sshSelectedKeyPath) ?? null
-    if (!pane || !selectedKey) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: '削除する SSH 鍵を選択してください',
-        lastError: '選択中のローカル SSH 鍵がありません。',
-        sshActionState: 'error',
-        sshActionMessage: '削除する SSH 鍵を選択してください。'
-      })
-      return
-    }
-
-    if (!window.confirm(`次の SSH 鍵を削除しますか？\n${selectedKey.privateKeyPath}`)) {
-      return
-    }
-
-    const startedAt = Date.now()
-    updatePane(paneId, {
-      status: 'running',
-      statusText: 'SSH 鍵を削除中です',
-      runningSince: startedAt,
-      lastActivityAt: startedAt,
-      lastError: null,
-      sshActionState: 'running',
-      sshActionMessage: `SSH 鍵を削除しています: ${selectedKey.privateKeyPath}`
-    })
-
-    try {
-      const result = await deleteSshKey(selectedKey.privateKeyPath)
-      const finishedAt = Date.now()
-      mutatePane(paneId, (currentPane) => {
-        const nextSelectedKey = result.remainingKeys.find((item) => item.privateKeyPath === currentPane.sshSelectedKeyPath) ?? result.remainingKeys[0] ?? null
-        const nextIdentityFile = currentPane.sshIdentityFile === selectedKey.privateKeyPath
-          ? nextSelectedKey?.privateKeyPath ?? ''
-          : currentPane.sshIdentityFile
-        const nextDiagnostics = [
-          ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('\u30ed\u30fc\u30ab\u30eb\u9375:') && !item.startsWith('ローカルの ~/.ssh に利用可能な鍵がありません')),
-          ...(nextSelectedKey ? [`\u30ed\u30fc\u30ab\u30eb\u9375: ${nextSelectedKey.privateKeyPath}`] : ['ローカルの ~/.ssh に利用可能な鍵がありません。必要ならここから生成してください。'])
-        ]
-
-        return {
-          ...currentPane,
-          sshLocalKeys: result.remainingKeys,
-          sshSelectedKeyPath: nextSelectedKey?.privateKeyPath ?? '',
-          sshIdentityFile: nextIdentityFile,
-          sshPublicKeyText: nextSelectedKey?.publicKey ?? '',
-          sshKeyName: nextSelectedKey?.name ?? 'id_ed25519',
-          sshKeyComment: nextSelectedKey?.comment ?? 'tako-cli-dev-tool',
-          sshDiagnostics: nextDiagnostics,
-          sshActionState: 'success',
-          sshActionMessage: result.deleted ? `SSH 鍵を削除しました: ${selectedKey.privateKeyPath}` : `SSH 鍵は既に削除されていました: ${selectedKey.privateKeyPath}`,
-          status: 'completed',
-          statusText: result.deleted ? 'SSH 鍵を削除しました' : 'SSH 鍵は既に削除済みでした',
-          runningSince: null,
-          lastActivityAt: finishedAt,
-          lastFinishedAt: finishedAt,
-          lastError: null,
-          streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', result.deleted ? `SSH 鍵を削除しました: ${selectedKey.privateKeyPath}` : `SSH 鍵は既に削除済みでした: ${selectedKey.privateKeyPath}`, finishedAt)
-        }
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const failedAt = Date.now()
-      updatePane(paneId, {
-        status: 'error',
-        statusText: 'SSH 鍵の削除に失敗しました',
-        runningSince: null,
-        lastActivityAt: failedAt,
-        lastFinishedAt: failedAt,
-        lastError: message,
-        sshActionState: 'error',
-        sshActionMessage: `SSH 鍵の削除に失敗しました: ${message}`
-      })
-    }
-  }
-
-  const handleRemoveKnownHost = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim()) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: 'SSH ホストを入力してください',
-        lastError: '削除する接続先ホスト鍵の対象が未設定です。',
-        sshActionState: 'error',
-        sshActionMessage: '接続先のホスト鍵を削除する対象を入力してください。'
-      })
-      return
-    }
-
-    const host = pane.sshHost.trim()
-    const startedAt = Date.now()
-    updatePane(paneId, {
-      status: 'running',
-      statusText: '接続先のホスト鍵を削除しています',
-      runningSince: startedAt,
-      lastActivityAt: startedAt,
-      lastError: null,
-      sshActionState: 'running',
-      sshActionMessage: `${host} の接続先ホスト鍵を削除しています...`
-    })
-
-    try {
-      const result = await removeKnownHost(host, buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current))
-      const finishedAt = Date.now()
-      mutatePane(paneId, (currentPane) => ({
-        ...currentPane,
-        sshDiagnostics: [
-          `接続先のホスト鍵を削除しました: ${result.removedHosts.length > 0 ? result.removedHosts.join(', ') : host}`,
-          ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('接続先のホスト鍵を削除しました:'))
-        ],
-        sshActionState: 'success',
-        sshActionMessage: result.removedHosts.length > 0 ? `${host} の接続先ホスト鍵を削除しました` : `${host} のホスト鍵は見つかりませんでした`,
-        status: 'completed',
-        statusText: result.removedHosts.length > 0 ? '接続先のホスト鍵を削除しました' : '削除対象のホスト鍵はありませんでした',
-        runningSince: null,
-        lastActivityAt: finishedAt,
-        lastFinishedAt: finishedAt,
-        lastError: null,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', result.removedHosts.length > 0 ? `接続先のホスト鍵を削除しました: ${result.removedHosts.join(', ')}` : `削除対象のホスト鍵はありませんでした: ${host}`, finishedAt)
-      }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const failedAt = Date.now()
-      updatePane(paneId, {
-        status: 'error',
-        statusText: '接続先のホスト鍵の削除に失敗しました',
-        runningSince: null,
-        lastActivityAt: failedAt,
-        lastFinishedAt: failedAt,
-        lastError: message,
-        sshActionState: 'error',
-        sshActionMessage: `接続先のホスト鍵の削除に失敗しました: ${message}`
-      })
-    }
-  }
-
-  const handleInstallSshPublicKey = async (paneId: string) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim() || !pane.sshPublicKeyText.trim()) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: '\u63a5\u7d9a\u5148\u3068\u516c\u958b\u9375\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: 'SSH \u516c\u958b\u9375\u306e\u767b\u9332\u306b\u5fc5\u8981\u306a\u60c5\u5831\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002',
-        sshActionState: 'error',
-        sshActionMessage: '接続先と公開鍵を確認してください。',
-        sshPasswordPulseAt: 0
-      })
-      return
-    }
-
-    if (!pane.sshPassword.trim()) {
-      const pulseAt = Date.now()
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: 'パスワードを入力してください',
-        lastError: '公開鍵を接続先に登録する場合はパスワードを設定してください。',
-        sshActionState: 'error',
-        sshActionMessage: '公開鍵を接続先に登録する場合はパスワードを設定してください',
-        sshPasswordPulseAt: pulseAt
-      })
-      return
-    }
-
-    const startedAt = Date.now()
-    updatePane(paneId, {
-      status: 'running',
-      statusText: '公開鍵を接続先に登録中です',
-      runningSince: startedAt,
-      lastActivityAt: startedAt,
-      lastError: null,
-      sshActionState: 'running',
-      sshActionMessage: `公開鍵を ${pane.sshHost.trim()} の接続先へ登録中です...`,
-      sshPasswordPulseAt: 0
-    })
-
-    try {
-      await installSshKey(pane.sshHost.trim(), pane.sshPublicKeyText.trim(), buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current))
-      const finishedAt = Date.now()
-      mutatePane(paneId, (currentPane) => ({
-        ...currentPane,
-        sshDiagnostics: [`公開鍵を接続先へ登録しました: ${pane.sshHost.trim()}`, ...currentPane.sshDiagnostics.filter((item) => !item.startsWith('公開鍵を接続先へ登録しました:'))],
-        sshActionState: 'success',
-        sshActionMessage: `公開鍵を ${pane.sshHost.trim()} の接続先へ登録しました`,
-        status: 'completed',
-        statusText: '公開鍵を接続先に登録しました',
-        runningSince: null,
-        lastActivityAt: finishedAt,
-        lastFinishedAt: finishedAt,
-        lastError: null,
-        sshPasswordPulseAt: 0,
-        streamEntries: appendStreamEntry(currentPane.streamEntries, 'system', `公開鍵を接続先へ登録しました: ${pane.sshHost.trim()}`, finishedAt)
-      }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const failedAt = Date.now()
-      updatePane(paneId, {
-        status: 'error',
-        statusText: '\u516c\u958b\u9375\u306e\u767b\u9332\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        runningSince: null,
-        lastActivityAt: failedAt,
-        lastFinishedAt: failedAt,
-        lastError: message,
-        sshActionState: 'error',
-        sshActionMessage: `公開鍵の登録に失敗しました: ${message}`,
-        sshPasswordPulseAt: 0
-      })
-    }
-  }
-
-  const handleTransferSshPath = async (
-    paneId: string,
-    direction: 'upload' | 'download',
-    options?: { localPath?: string; remotePath?: string; remoteLabel?: string; isDirectory?: boolean }
-  ) => {
-    const pane = panesRef.current.find((item) => item.id === paneId)
-    if (!pane || !pane.sshHost.trim()) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: 'SSH \u63a5\u7d9a\u5148\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: '\u8ee2\u9001\u5148\u306e SSH \u63a5\u7d9a\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002'
-      })
-      return
-    }
-
-    let localPath = options?.localPath?.trim() || pane.sshLocalPath.trim()
-    let remotePath = options?.remotePath?.trim() || pane.sshRemotePath.trim()
-
-    if (direction === 'download' && remotePath && !localPath) {
-      if (options?.isDirectory) {
-        const picked = await pickLocalWorkspace()
-        localPath = picked.paths[0] ?? ''
-      } else {
-        const fallbackName = options?.remoteLabel?.trim() || remotePath.split('/').filter(Boolean).pop() || 'download.txt'
-        const picked = await pickSaveFilePath(fallbackName)
-        localPath = picked.path ?? ''
-      }
-    }
-
-    if (!localPath || !remotePath) {
-      updatePane(paneId, {
-        status: 'attention',
-        statusText: direction === 'upload' ? '\u9001\u4fe1\u5143\u3068\u9001\u4fe1\u5148\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044' : '\u53d6\u5f97\u5143\u3068\u4fdd\u5b58\u5148\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044',
-        lastError: '\u8ee2\u9001\u306b\u5fc5\u8981\u306a\u60c5\u5831\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002'
-      })
-      return
-    }
-
-    updatePane(paneId, {
-      sshLocalPath: localPath,
-      sshRemotePath: remotePath,
-      status: 'running',
-      statusText: direction === 'upload' ? '\u9001\u4fe1\u4e2d' : '\u53d7\u4fe1\u4e2d',
-      lastError: null
-    })
-
-    try {
-      await transferSshPath(
-        direction,
-        pane.sshHost.trim(),
-        localPath,
-        remotePath,
-        buildSshConnectionFromPane(pane, bootstrap?.sshHosts ?? [], panesRef.current)
-      )
-      appendPaneSystemMessage(
-        paneId,
-        direction === 'upload' ? `\u9001\u4fe1\u5b8c\u4e86: ${localPath} -> ${remotePath}` : `\u53d7\u4fe1\u5b8c\u4e86: ${remotePath} -> ${localPath}`
-      )
-      const finishedAt = Date.now()
-      updatePane(paneId, {
-        status: 'completed',
-        statusText: direction === 'upload' ? '\u9001\u4fe1\u5b8c\u4e86' : '\u53d7\u4fe1\u5b8c\u4e86',
-        sshLocalPath: localPath,
-        sshRemotePath: remotePath,
-        lastError: null,
-        lastActivityAt: finishedAt,
-        lastFinishedAt: finishedAt
-      })
-
-      if (direction === 'upload') {
-        void handleBrowseRemote(paneId, pane.remoteBrowserPath || pane.remoteWorkspacePath || undefined)
-      }
-    } catch (error) {
-      updatePane(paneId, {
-        status: 'error',
-        statusText: '\u8ee2\u9001\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
-        sshLocalPath: localPath,
-        sshRemotePath: remotePath,
-        lastError: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
   useEffect(() => {
     if (!selectedPane || selectedPane.workspaceMode !== 'local' || !selectedPane.localWorkspacePath) {
       return
