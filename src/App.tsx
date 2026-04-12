@@ -1,25 +1,19 @@
 ﻿import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import {
-  Activity,
-  Bot,
-  CheckCircle2,
-  Grid2x2,
-  LayoutPanelTop,
-  Plus,
-  SplitSquareHorizontal,
-  Trash2,
-  Wifi,
   X,
   XCircle
 } from 'lucide-react'
 import { TerminalPane } from './components/TerminalPane'
+import { PaneMatrix } from './components/PaneMatrix'
+import { SharedContextDock } from './components/SharedContextDock'
+import { StageToolbar } from './components/StageToolbar'
+import { SummaryMetrics } from './components/SummaryMetrics'
 import {
   browseRemoteDirectory,
   browseLocalDirectory,
   createLocalDirectory,
   createRemoteDirectory,
   deleteSshKey,
-  fetchBootstrap,
   fetchLocalBrowseRoots,
   fetchPaneRunStatus,
   fetchRemoteWorkspaces,
@@ -47,9 +41,7 @@ import {
   appendShellOutputLine,
   clipText,
   MAX_LIVE_OUTPUT,
-  MAX_SHELL_OUTPUT,
-  sanitizeTerminalText,
-  summarize
+  sanitizeTerminalText
 } from './lib/text'
 import {
   buildCommandPreviewSections,
@@ -61,14 +53,8 @@ import {
   buildPaneSessionScopeKey,
   createEmptyProviderSessions,
   createProviderSettingsFromCatalog,
-  createProviderSettingsMap,
   getCurrentProviderSettings,
   getProviderResumeSession,
-  isProviderId,
-  isReasoningEffort,
-  normalizeProviderSettings,
-  normalizeProviderSettingsMap,
-  normalizeProviderSessionsMap,
   resetProviderSessionState,
   syncCurrentProviderSettings,
   updateProviderSessionState
@@ -76,7 +62,6 @@ import {
 import { reconcileSharedContextWithPanes } from './lib/sharedContext'
 import {
   buildRemoteWorkspacePickerRoots,
-  chooseInitialLocalWorkspacePath,
   chooseLocalWorkspacePickerStartPath,
   clampLocalPathToWorkspace,
   getAbsoluteLocalParentPath,
@@ -89,1300 +74,78 @@ import {
   resolveLinkedRemotePath
 } from './lib/workspacePaths'
 import type {
-  AutonomyMode,
   BootstrapPayload,
-  LocalSshKey,
-  LocalBrowseRoot,
-  LocalDirectoryEntry,
   LocalWorkspace,
   PaneLogEntry,
-  PaneSessionRecord,
   PaneState,
-  PaneStatus,
   PreviewRunCommandResponse,
   PromptImageAttachment,
   PromptImageAttachmentSource,
-  ProviderCatalogResponse,
   ProviderId,
-  RemoteDirectoryEntry,
   RunImageAttachment,
   RunStatusResponse,
   RunStreamEvent,
   ShellRunEvent,
   SharedContextItem,
-  SshConnectionOptions,
-  SshHost,
   WorkspaceTarget
 } from './types'
 
-type LayoutMode = 'quad' | 'triple' | 'focus'
-
-interface WorkspacePickerState {
-  mode: 'local' | 'ssh'
-  paneId: string
-  path: string
-  entries: Array<{
-    label: string
-    path: string
-    isWorkspace?: boolean
-  }>
-  roots: LocalBrowseRoot[]
-  loading: boolean
-  error: string | null
-}
-
-const PROVIDER_ORDER: ProviderId[] = ['codex', 'copilot', 'gemini']
-const EMPTY_CATALOGS = {} as Record<ProviderId, ProviderCatalogResponse>
-const STORAGE_KEYS = {
-  panes: 'multi-turtle-cli-dev/panes-v2',
-  sharedContext: 'multi-turtle-cli-dev/shared-context-v2',
-  layout: 'multi-turtle-cli-dev/layout-v2',
-  localWorkspaces: 'multi-turtle-cli-dev/local-workspaces-v2',
-  lastLocalBrowsePath: 'multi-turtle-cli-dev/last-local-browse-path-v1',
-  focusedPane: 'multi-turtle-cli-dev/focused-pane-v2'
-} as const
-const MAX_LOGS = 24
-const MAX_STREAM_ENTRIES = 240
-const MAX_SESSION_HISTORY = 18
-const MAX_SESSION_LABEL_LENGTH = 40
-const MAX_SHARED_CONTEXT = 16
-const STALL_MS = 120_000
-const BOOTSTRAP_RETRY_DELAY_MS = 500
-const BOOTSTRAP_MAX_ATTEMPTS = 12
-const TITLE_IMAGE_URL = new URL('../assets/title.png', import.meta.url).href
-
-function createId(prefix: string): string {
-  return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
-}
-
-function extensionFromMimeType(mimeType: string): string {
-  switch (mimeType.toLowerCase()) {
-    case 'image/png':
-      return '.png'
-    case 'image/jpeg':
-      return '.jpg'
-    case 'image/webp':
-      return '.webp'
-    case 'image/gif':
-      return '.gif'
-    case 'image/bmp':
-      return '.bmp'
-    case 'image/svg+xml':
-      return '.svg'
-    case 'image/avif':
-      return '.avif'
-    default:
-      return '.img'
-  }
-}
-
-function inferImageMimeType(fileName: string): string | null {
-  const normalized = fileName.trim().toLowerCase()
-  if (normalized.endsWith('.png')) {
-    return 'image/png'
-  }
-  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
-    return 'image/jpeg'
-  }
-  if (normalized.endsWith('.webp')) {
-    return 'image/webp'
-  }
-  if (normalized.endsWith('.gif')) {
-    return 'image/gif'
-  }
-  if (normalized.endsWith('.bmp')) {
-    return 'image/bmp'
-  }
-  if (normalized.endsWith('.svg')) {
-    return 'image/svg+xml'
-  }
-  if (normalized.endsWith('.avif')) {
-    return 'image/avif'
-  }
-  return null
-}
-
-function normalizePromptImageFile(file: File, source: PromptImageAttachmentSource): { file: File; fileName: string; mimeType: string } | null {
-  const detectedMimeType = file.type.trim() || inferImageMimeType(file.name)
-  if (!detectedMimeType || !detectedMimeType.startsWith('image/')) {
-    return null
-  }
-
-  const normalizedFileName = file.name.trim() || `${source}-image-${Date.now()}${extensionFromMimeType(detectedMimeType)}`
-  return {
-    file,
-    fileName: normalizedFileName,
-    mimeType: detectedMimeType
-  }
-}
-
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') {
-        reject(new Error('画像ファイルの読み込みに失敗しました。'))
-        return
-      }
-
-      const [, contentBase64 = ''] = reader.result.split(',', 2)
-      if (!contentBase64) {
-        reject(new Error('画像データを base64 に変換できませんでした。'))
-        return
-      }
-
-      resolve(contentBase64)
-    }
-    reader.onerror = () => {
-      reject(reader.error ?? new Error('画像ファイルの読み込みに失敗しました。'))
-    }
-    reader.readAsDataURL(file)
-  })
-}
-
-function buildPromptWithImageSummary(prompt: string, imageAttachments: Pick<RunImageAttachment, 'fileName'>[]): string {
-  if (imageAttachments.length === 0) {
-    return prompt
-  }
-
-  const normalizedPrompt = prompt.trim()
-  return [
-    '[添付画像]',
-    ...imageAttachments.map((attachment, index) => `${index + 1}. ${attachment.fileName}`),
-    ...(normalizedPrompt ? ['', normalizedPrompt] : [])
-  ].join('\n')
-}
-
-function reorderPanesById(panes: PaneState[], sourcePaneId: string, targetPaneId: string): PaneState[] {
-  if (sourcePaneId === targetPaneId) {
-    return panes
-  }
-
-  const sourceIndex = panes.findIndex((pane) => pane.id === sourcePaneId)
-  const targetIndex = panes.findIndex((pane) => pane.id === targetPaneId)
-  if (sourceIndex < 0 || targetIndex < 0) {
-    return panes
-  }
-
-  const next = [...panes]
-  const [movedPane] = next.splice(sourceIndex, 1)
-  next.splice(targetIndex, 0, movedPane)
-  return next
-}
-
-function getDocumentRect(element: HTMLElement): DOMRect {
-  const rect = element.getBoundingClientRect()
-  return new DOMRect(
-    rect.left + window.scrollX,
-    rect.top + window.scrollY,
-    rect.width,
-    rect.height
-  )
-}
-
-function animateReorder(element: HTMLElement, previousRect: DOMRect, nextRect: DOMRect): void {
-  const deltaX = previousRect.left - nextRect.left
-  const deltaY = previousRect.top - nextRect.top
-  if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) {
-    return
-  }
-
-  element.animate(
-    [
-      { transform: `translate(${deltaX}px, ${deltaY}px)` },
-      { transform: 'translate(0, 0)' }
-    ],
-    {
-      duration: 220,
-      easing: 'cubic-bezier(0.2, 0, 0, 1)'
-    }
-  )
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
-function isLocalDevEnvironment(): boolean {
-  if (typeof window === 'undefined') {
-    return false
-  }
-
-  return /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)
-}
-
-function isRetryableBootstrapError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /Request failed: 502|Request failed: 503|Request failed: 504|ECONNREFUSED|fetch failed|Failed to fetch/i.test(message)
-}
-
-async function fetchBootstrapWithRetry(): Promise<BootstrapPayload> {
-  let lastError: unknown = null
-
-  for (let attempt = 1; attempt <= BOOTSTRAP_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await fetchBootstrap()
-    } catch (error) {
-      lastError = error
-      if (!isRetryableBootstrapError(error) || attempt === BOOTSTRAP_MAX_ATTEMPTS) {
-        throw error
-      }
-
-      await delay(BOOTSTRAP_RETRY_DELAY_MS)
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error(String(lastError))
-}
-
-function buildShellPromptLabel(pane: PaneState, cwd?: string | null): string {
-  const currentPath =
-    pane.workspaceMode === 'local'
-      ? (cwd?.trim() || pane.localShellPath.trim() || pane.localWorkspacePath.trim() || '~')
-      : (cwd?.trim() || pane.remoteShellPath.trim() || pane.remoteWorkspacePath.trim() || '~')
-
-  if (pane.workspaceMode === 'local') {
-    return `${currentPath}>`
-  }
-
-  const sshLabel = pane.sshUser.trim() ? `${pane.sshUser.trim()}@${pane.sshHost.trim()}` : pane.sshHost.trim() || 'ssh'
-  return `${sshLabel}:${currentPath}$`
-}
-
-function acquireBodyScrollLock(): () => void {
-  if (typeof document === 'undefined') {
-    return () => undefined
-  }
-
-  const body = document.body
-  const root = document.documentElement
-  const countAttr = 'data-modal-lock-count'
-  const prevBodyOverflowAttr = 'data-prev-body-overflow'
-  const prevRootOverflowAttr = 'data-prev-root-overflow'
-  const currentCount = Number(body.getAttribute(countAttr) ?? '0')
-
-  if (currentCount === 0) {
-    body.setAttribute(prevBodyOverflowAttr, body.style.overflow)
-    root.setAttribute(prevRootOverflowAttr, root.style.overflow)
-    body.style.overflow = 'hidden'
-    root.style.overflow = 'hidden'
-  }
-
-  body.setAttribute(countAttr, String(currentCount + 1))
-
-  return () => {
-    const nextCount = Number(body.getAttribute(countAttr) ?? '1') - 1
-    if (nextCount <= 0) {
-      body.style.overflow = body.getAttribute(prevBodyOverflowAttr) ?? ''
-      root.style.overflow = root.getAttribute(prevRootOverflowAttr) ?? ''
-      body.removeAttribute(countAttr)
-      body.removeAttribute(prevBodyOverflowAttr)
-      root.removeAttribute(prevRootOverflowAttr)
-      return
-    }
-
-    body.setAttribute(countAttr, String(nextCount))
-  }
-}
-
-function statusLabel(status: PaneStatus): string {
-  switch (status) {
-    case 'running':
-      return '\u5b9f\u884c\u4e2d'
-    case 'updating':
-      return 'AI\u66f4\u65b0\u4e2d'
-    case 'completed':
-      return '\u5b8c\u4e86'
-    case 'attention':
-      return '\u5165\u529b / \u78ba\u8a8d\u5f85\u3061'
-    case 'error':
-      return '\u30a8\u30e9\u30fc'
-    default:
-      return '\u5f85\u6a5f\u4e2d'
-  }
-}
-
-function normalizeLocalWorkspace(rawWorkspace: Partial<LocalWorkspace> | null | undefined): LocalWorkspace | null {
-  if (!rawWorkspace?.path || !rawWorkspace.label) {
-    return null
-  }
-
-  return {
-    id: rawWorkspace.id ?? `local-${rawWorkspace.path.toLowerCase()}`,
-    label: rawWorkspace.label,
-    path: rawWorkspace.path,
-    indicators: Array.isArray(rawWorkspace.indicators)
-      ? rawWorkspace.indicators.filter((item): item is string => typeof item === 'string')
-      : [],
-    source: rawWorkspace.source === 'app' ? 'app' : 'manual'
-  }
-}
-
-function buildLocalWorkspaceRecord(path: string): LocalWorkspace {
-  const label = path.split(/[\\/]/).filter(Boolean).pop() ?? path
-
-  return {
-    id: `local-${path.toLowerCase()}`,
-    label,
-    path,
-    indicators: [],
-    source: 'manual'
-  }
-}
-
-function getManualWorkspaces(workspaces: LocalWorkspace[]): LocalWorkspace[] {
-  return workspaces.filter((workspace) => workspace.source === 'manual')
-}
-
-function mergeLocalWorkspaces(...groups: Array<Array<Partial<LocalWorkspace>> | LocalWorkspace[]>): LocalWorkspace[] {
-  const seen = new Map<string, LocalWorkspace>()
-
-  for (const group of groups) {
-    for (const candidate of group) {
-      const workspace = normalizeLocalWorkspace(candidate)
-      if (!workspace) {
-        continue
-      }
-
-      const key = workspace.path.toLowerCase()
-      const current = seen.get(key)
-      if (!current || (workspace.source === 'app' && current.source !== 'app')) {
-        seen.set(key, workspace)
-      }
-    }
-  }
-
-  return [...seen.values()].sort((left, right) => {
-    if (left.source === 'app' && right.source !== 'app') {
-      return -1
-    }
-    if (left.source !== 'app' && right.source === 'app') {
-      return 1
-    }
-    return left.label.localeCompare(right.label, 'ja')
-  })
-}
-
-function appendLogEntry(entries: PaneLogEntry[], entry: PaneLogEntry): PaneLogEntry[] {
-  return [...entries, { ...entry, text: clipText(entry.text, 32_000) }].slice(-MAX_LOGS)
-}
-
-function appendStreamEntry(
-  entries: PaneState['streamEntries'],
-  kind: PaneState['streamEntries'][number]['kind'],
-  text: string,
-  createdAt: number,
-  provider?: ProviderId,
-  model?: string
-): PaneState['streamEntries'] {
-  const normalized = text.trim()
-  if (!normalized) {
-    return entries
-  }
-
-  const clipped = clipText(normalized, 4_000)
-  const lastEntry = entries.at(-1)
-  if (
-    lastEntry &&
-    lastEntry.kind === kind &&
-    lastEntry.provider === provider &&
-    lastEntry.model === model &&
-    createdAt - lastEntry.createdAt < 1_500 &&
-    lastEntry.text.length + clipped.length < 1_800
-  ) {
-    return [
-      ...entries.slice(0, -1),
-      {
-        ...lastEntry,
-        text: `${lastEntry.text}\n${clipped}`,
-        createdAt
-      }
-    ]
-  }
-
-  return [...entries, { id: createId('stream'), kind, text: clipped, createdAt, provider, model }].slice(-MAX_STREAM_ENTRIES)
-}
-
-function hasSessionContent(pane: Pick<PaneState, 'logs' | 'streamEntries' | 'sessionId' | 'liveOutput' | 'lastResponse'>): boolean {
-  return (
-    pane.logs.length > 0 ||
-    pane.streamEntries.length > 0 ||
-    Boolean(pane.sessionId) ||
-    Boolean(pane.liveOutput.trim()) ||
-    Boolean(pane.lastResponse?.trim())
-  )
-}
-
-function clipSessionLabelText(text: string): string {
-  if (text.length <= MAX_SESSION_LABEL_LENGTH) {
-    return text
-  }
-
-  return `${text.slice(0, MAX_SESSION_LABEL_LENGTH - 1).trimEnd()}...`
-}
-
-function getSessionTopicCandidate(logs: PaneLogEntry[]): string | null {
-  const firstUserEntry = logs.find((entry) => entry.role === 'user' && entry.text.trim())
-  if (!firstUserEntry) {
-    return null
-  }
-
-  const normalizedLines = firstUserEntry.text
-    .replace(/\r/g, '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-
-  let imageCount = 0
-  let insideImageBlock = false
-  const contentLines: string[] = []
-
-  for (const line of normalizedLines) {
-    if (line === '[\u6dfb\u4ed8\u753b\u50cf]') {
-      insideImageBlock = true
-      continue
-    }
-
-    if (insideImageBlock && /^-\s+/.test(line)) {
-      imageCount += 1
-      continue
-    }
-
-    insideImageBlock = false
-    if (imageCount > 0 && line === '\u6dfb\u4ed8\u753b\u50cf\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002') {
-      continue
-    }
-
-    contentLines.push(line)
-  }
-
-  const normalizedText = contentLines.join(' ').replace(/\s+/g, ' ').trim()
-  if (normalizedText) {
-    return clipSessionLabelText(normalizedText)
-  }
-
-  if (imageCount > 0) {
-    return imageCount === 1
-      ? '\u753b\u50cf\u306b\u3064\u3044\u3066\u306e\u4f1a\u8a71'
-      : `\u753b\u50cf ${imageCount} \u679a\u306b\u3064\u3044\u3066\u306e\u4f1a\u8a71`
-  }
-
-  return null
-}
-
-function buildSessionLabel(sessionId: string | null, createdAt: number, logs: PaneLogEntry[]): string {
-  const topicCandidate = getSessionTopicCandidate(logs)
-  if (topicCandidate) {
-    return topicCandidate
-  }
-
-  if (sessionId) {
-    return `\u30bb\u30c3\u30b7\u30e7\u30f3 ${sessionId.slice(0, 8)}`
-  }
-
-  return `\u30bb\u30c3\u30b7\u30e7\u30f3 ${new Date(createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
-}
-
-function createArchivedSessionRecord(pane: PaneState): PaneSessionRecord {
-  const createdAt = pane.lastRunAt ?? pane.lastActivityAt ?? pane.lastFinishedAt ?? Date.now()
-  const updatedAt = pane.lastActivityAt ?? pane.lastFinishedAt ?? createdAt
-  const logs = pane.logs.slice(-MAX_LOGS)
-
-  return {
-    key: createId('session'),
-    label: buildSessionLabel(pane.sessionId, createdAt, logs),
-    sessionId: pane.sessionId,
-    createdAt,
-    updatedAt,
-    status: pane.status,
-    logs,
-    streamEntries: pane.streamEntries.slice(-MAX_STREAM_ENTRIES)
-  }
-}
-
-function appendSessionRecord(history: PaneSessionRecord[], record: PaneSessionRecord): PaneSessionRecord[] {
-  return [record, ...history].slice(0, MAX_SESSION_HISTORY)
-}
-
-function extractGeminiQuotaResetWindow(message: string): string | null {
-  const match = message.match(/quota will reset after\s+([^.!\n]+)/i)
-  return match?.[1]?.trim() || null
-}
-
-function getProviderIssueSummary(provider: ProviderId, message: string, autonomyMode?: AutonomyMode): { displayMessage: string; status: PaneStatus; statusText: string } | null {
-  const codexCanEscalate = provider === 'codex' && autonomyMode !== 'max'
-
-  if (
-    provider === 'gemini' &&
-    /exhausted your capacity on this model|quota will reset after|resource_exhausted|too many requests/i.test(message)
-  ) {
-    const resetWindow = extractGeminiQuotaResetWindow(message)
-    return {
-      displayMessage: resetWindow
-        ? `Gemini の利用上限に達しました。${resetWindow} 後に再実行するか、別モデルや別 CLI に切り替えてください。`
-        : 'Gemini の利用上限に達しました。少し待って再実行するか、別モデルや別 CLI に切り替えてください。',
-      status: 'attention',
-      statusText: 'Gemini の利用上限に達しました'
-    }
-  }
-
-  if (
-    provider === 'gemini' &&
-    /tool execution denied by policy|you are in plan mode and cannot modify source code|may only use write_file or replace to save plans/i.test(message)
-  ) {
-    return {
-      displayMessage: 'Gemini CLI が Plan Mode に入り、ソースコード変更が拒否されました。現状の設定では調査計画までは進めても、実ファイル編集に移れないことがあります。編集を確実に進めるなら Codex CLI を使うか、Gemini 側で Plan Mode に落ちない実行設定が必要です。',
-      status: 'attention',
-      statusText: 'Gemini が Plan Mode で停止しました'
-    }
-  }
-
-  if (
-    provider === 'codex' &&
-    /writing outside of the project; rejected by user approval settings|writing is blocked by read-only sandbox; rejected by user approval settings|patch rejected:\s*writing outside of the project/i.test(message)
-  ) {
-    return {
-      displayMessage: codexCanEscalate
-        ? 'Codex の標準モードでは workspace 直下の .agents / .codex / .git が保護されます。この種の編集は VS Code で対象ワークスペースを開いて進めてください。'
-        : 'Codex は workspace 外か保護対象ディレクトリへの書き込みを拒否しました。.agents / .codex / .git の編集は VS Code へ切り替え、制限なしでも失敗する場合は対象パスや OS 権限を確認してください。',
-      status: 'attention',
-      statusText: 'Codex が保護パスを書き込めません'
-    }
-  }
-
-  if (
-    provider === 'codex' &&
-    /access is denied|unauthorizedaccessexception|アクセスが拒否されました/i.test(message) &&
-    /\.agents|\.codex|\.git/i.test(message)
-  ) {
-    return {
-      displayMessage: codexCanEscalate
-        ? 'Windows 上の Codex 標準モードでは .agents / .codex / .git が保護され、Access is denied と見えることがあります。この種の編集は VS Code で対象ワークスペースを開いて進めてください。'
-        : 'Windows が対象パスへの書き込みを拒否しました。.agents / .codex / .git の編集は VS Code に切り替え、なお失敗する場合は ACL や属性を確認してください。',
-      status: 'attention',
-      statusText: 'Windows が書き込みを拒否しました'
-    }
-  }
-
-  if (provider === 'codex' && /rejected:\s*blocked by policy|blocked by policy/i.test(message)) {
-    return {
-      displayMessage: 'Codex が生成したツール実行が安全ポリシーにより拒否されました。TAKO 自体の故障ではなく、CLI 側が PowerShell / シェル操作を危険と判断したケースです。処理を小さく分けるか、プロセス停止や起動を伴う大きなコマンドを避けると通りやすくなります。',
-      status: 'attention',
-      statusText: 'Codex のツール実行がポリシーで拒否されました'
-    }
-  }
-
-  return null
-}
-
-function normalizeSshHostKey(host: string): string {
-  return host.trim().toLowerCase()
-}
-
-function mergeLocalSshKeys(...collections: LocalSshKey[][]): LocalSshKey[] {
-  const merged = new Map<string, LocalSshKey>()
-
-  for (const keys of collections) {
-    for (const key of keys) {
-      if (!key.privateKeyPath) {
-        continue
-      }
-
-      merged.set(key.privateKeyPath, key)
-    }
-  }
-
-  return [...merged.values()]
-}
-
-function getPaneRecentActivity(pane: PaneState): number {
-  return Math.max(
-    pane.lastActivityAt ?? 0,
-    pane.lastFinishedAt ?? 0,
-    pane.lastRunAt ?? 0,
-    pane.shellLastRunAt ?? 0
-  )
-}
-
-function findReusableSshPane(paneId: string, host: string, panes: PaneState[]): PaneState | null {
-  const normalizedHost = normalizeSshHostKey(host)
-  if (!normalizedHost) {
-    return null
-  }
-
-  const candidates = panes
-    .filter((pane) => pane.id !== paneId && normalizeSshHostKey(pane.sshHost) === normalizedHost)
-    .sort((left, right) => {
-      const leftScore = (left.sshSelectedKeyPath.trim() ? 4 : 0) + (left.sshIdentityFile.trim() ? 2 : 0) + (left.sshLocalKeys.length > 0 ? 1 : 0)
-      const rightScore = (right.sshSelectedKeyPath.trim() ? 4 : 0) + (right.sshIdentityFile.trim() ? 2 : 0) + (right.sshLocalKeys.length > 0 ? 1 : 0)
-      if (leftScore !== rightScore) {
-        return rightScore - leftScore
-      }
-
-      return getPaneRecentActivity(right) - getPaneRecentActivity(left)
-    })
-
-  return candidates[0] ?? null
-}
-
-function getPreferredLocalSshKey(pane: PaneState, localKeys: LocalSshKey[], panes: PaneState[]): LocalSshKey | null {
-  if (localKeys.length === 0) {
-    return null
-  }
-
-  const keyByPath = new Map(localKeys.map((key) => [key.privateKeyPath, key] as const))
-  const currentSelectedPath = pane.sshSelectedKeyPath.trim()
-  if (currentSelectedPath && keyByPath.has(currentSelectedPath)) {
-    return keyByPath.get(currentSelectedPath) ?? null
-  }
-
-  const currentIdentityPath = pane.sshIdentityFile.trim()
-  if (currentIdentityPath && keyByPath.has(currentIdentityPath)) {
-    return keyByPath.get(currentIdentityPath) ?? null
-  }
-
-  const reusablePane = findReusableSshPane(pane.id, pane.sshHost, panes)
-  const reusableSelectedPath = reusablePane?.sshSelectedKeyPath.trim() ?? ''
-  if (reusableSelectedPath && keyByPath.has(reusableSelectedPath)) {
-    return keyByPath.get(reusableSelectedPath) ?? null
-  }
-
-  const reusableIdentityPath = reusablePane?.sshIdentityFile.trim() ?? ''
-  if (reusableIdentityPath && keyByPath.has(reusableIdentityPath)) {
-    return keyByPath.get(reusableIdentityPath) ?? null
-  }
-
-  return localKeys[0] ?? null
-}
-
-function buildSshConnectionFromPane(pane: PaneState, sshHosts: SshHost[] = [], panes: PaneState[] = []): SshConnectionOptions {
-  const matchedHost = sshHosts.find((item) => item.alias === pane.sshHost.trim())
-  const reusablePane = findReusableSshPane(pane.id, pane.sshHost, panes)
-  const localKeys = mergeLocalSshKeys(pane.sshLocalKeys, reusablePane?.sshLocalKeys ?? [])
-  const preferredKey = getPreferredLocalSshKey({ ...pane, sshLocalKeys: localKeys }, localKeys, panes)
-  const selectedLocalKeyPath = localKeys.some((item) => item.privateKeyPath === pane.sshSelectedKeyPath.trim())
-    ? pane.sshSelectedKeyPath.trim()
-    : ''
-
-  return {
-    username: pane.sshUser.trim() || matchedHost?.user || undefined,
-    port: pane.sshPort.trim() || matchedHost?.port || undefined,
-    password: pane.sshPassword.trim() || undefined,
-    identityFile: selectedLocalKeyPath || pane.sshIdentityFile.trim() || preferredKey?.privateKeyPath || reusablePane?.sshIdentityFile.trim() || matchedHost?.identityFile || undefined,
-    proxyJump: matchedHost?.proxyJump || undefined,
-    proxyCommand: matchedHost?.proxyCommand || undefined,
-    extraArgs: undefined
-  }
-}
-
-function buildSshLabel(host: string, remotePath: string, connection?: SshConnectionOptions): string {
-  const userPrefix = connection?.username?.trim() ? `${connection.username.trim()}@` : ''
-  return `${userPrefix}${host}:${remotePath}`
-}
-
-function buildTargetFromPane(pane: PaneState, localWorkspaces: LocalWorkspace[], sshHosts: SshHost[] = [], panes: PaneState[] = []): WorkspaceTarget | null {
-  if (pane.workspaceMode === 'local') {
-    if (!pane.localWorkspacePath.trim()) {
-      return null
-    }
-
-    const workspace = localWorkspaces.find((item) => item.path === pane.localWorkspacePath)
-    return {
-      kind: 'local',
-      path: pane.localWorkspacePath,
-      label: workspace?.label ?? pane.localWorkspacePath,
-      resourceType: 'folder',
-      workspacePath: pane.localWorkspacePath
-    }
-  }
-
-  if (!pane.sshHost.trim() || !pane.remoteWorkspacePath.trim()) {
-    return null
-  }
-
-  const connection = buildSshConnectionFromPane(pane, sshHosts, panes)
-
-  return {
-    kind: 'ssh',
-    host: pane.sshHost.trim(),
-    path: pane.remoteWorkspacePath.trim(),
-    label: buildSshLabel(pane.sshHost.trim(), pane.remoteWorkspacePath.trim(), connection),
-    resourceType: 'folder',
-    workspacePath: pane.remoteWorkspacePath.trim(),
-    connection
-  }
-}
-
-function createInitialPane(index: number, payload: BootstrapPayload, localWorkspaces: LocalWorkspace[]): PaneState {
-  const provider = PROVIDER_ORDER[index % PROVIDER_ORDER.length]
-  const providerSettings = createProviderSettingsMap(payload.providers)
-  const providerSetting = providerSettings[provider]
-  const initialWorkspacePath = chooseInitialLocalWorkspacePath(localWorkspaces)
-
-  return {
-    id: createId('pane'),
-    title: `Task ${index + 1}`,
-    settingsOpen: false,
-    workspaceOpen: false,
-    shellOpen: false,
-    provider,
-    model: providerSetting.model,
-    reasoningEffort: providerSetting.reasoningEffort,
-    autonomyMode: providerSetting.autonomyMode,
-    codexFastMode: providerSetting.codexFastMode,
-    providerSettings,
-    providerSessions: createEmptyProviderSessions(),
-    status: 'idle',
-    statusText: statusLabel('idle'),
-    runInProgress: false,
-    shellCommand: '',
-    shellOutput: '',
-    shellHistory: [],
-    shellHistoryIndex: null,
-    localShellPath: initialWorkspacePath,
-    remoteShellPath: '',
-    shellRunning: false,
-    shellLastExitCode: null,
-    shellLastError: null,
-    shellLastRunAt: null,
-    workspaceMode: 'local',
-    localWorkspacePath: initialWorkspacePath,
-    localBrowserPath: '',
-    localBrowserEntries: [],
-    localBrowserLoading: false,
-    sshHost: '',
-    sshUser: '',
-    sshPort: '',
-    sshPassword: '',
-    sshIdentityFile: '',
-    sshProxyJump: '',
-    sshProxyCommand: '',
-    sshExtraArgs: '',
-    sshLocalKeys: [],
-    sshSelectedKeyPath: '',
-    sshPublicKeyText: '',
-    sshKeyName: 'id_ed25519',
-    sshKeyComment: 'tako-cli-dev-tool',
-    sshDiagnostics: [],
-    sshActionState: 'idle',
-    sshActionMessage: null,
-    sshPasswordPulseAt: 0,
-    sshLocalPath: initialWorkspacePath,
-    sshRemotePath: '',
-    remoteWorkspacePath: '',
-    remoteWorkspaces: [],
-    remoteAvailableProviders: [],
-    remoteHomeDirectory: null,
-    remoteBrowserPath: '',
-    remoteBrowserEntries: [],
-    remoteParentPath: null,
-    remoteNewDirectoryName: '',
-    remoteBrowserLoading: false,
-    prompt: '',
-    logs: [],
-    streamEntries: [],
-    sessionHistory: [],
-    selectedSessionKey: null,
-    liveOutput: '',
-    attachedContextIds: [],
-    sessionId: null,
-    sessionScopeKey: null,
-    autoShare: false,
-    autoShareTargetIds: [],
-    pendingShareGlobal: false,
-    pendingShareTargetIds: [],
-    currentRequestText: null,
-    currentRequestAt: null,
-    stopRequested: false,
-    stopRequestAvailable: false,
-    lastRunAt: null,
-    runningSince: null,
-    lastActivityAt: null,
-    lastFinishedAt: null,
-    lastError: null,
-    lastResponse: null
-  }
-}
-
-function createSharedContextItem(
-  pane: PaneState,
-  target: WorkspaceTarget | null,
-  response: string,
-  options: {
-    scope: SharedContextItem['scope']
-    targetPaneIds?: string[]
-    targetPaneTitles?: string[]
-    contentLabel: string
-  }
-): SharedContextItem {
-  return {
-    id: createId('context'),
-    sourcePaneId: pane.id,
-    sourcePaneTitle: pane.title,
-    provider: pane.provider,
-    scope: options.scope,
-    targetPaneIds: options.targetPaneIds ?? [],
-    targetPaneTitles: options.targetPaneTitles ?? [],
-    contentLabel: options.contentLabel,
-    workspaceLabel: target?.label ?? '\u672a\u9078\u629e',
-    summary: summarize(response),
-    detail: clipText(response, 16_000),
-    consumedByPaneIds: [],
-    createdAt: Date.now()
-  }
-}
-
-function getLatestAssistantText(pane: PaneState): string | null {
-  if (pane.lastResponse?.trim()) {
-    return pane.lastResponse
-  }
-
-  const latestAssistant = [...pane.logs].reverse().find((entry) => entry.role === 'assistant')
-  return latestAssistant?.text ?? null
-}
-
-function getPaneOutputText(pane: Pick<PaneState, 'liveOutput' | 'lastResponse'>): string | null {
-  if (pane.liveOutput.trim()) {
-    return pane.liveOutput
-  }
-
-  if (pane.lastResponse?.trim()) {
-    return pane.lastResponse
-  }
-
-  return null
-}
-
-async function writeClipboardText(text: string): Promise<void> {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text)
-      return
-    } catch {
-      // Fallback for environments where the async clipboard API is blocked.
-    }
-  }
-
-  if (typeof document === 'undefined') {
-    throw new Error('Clipboard API is unavailable')
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', 'true')
-  textarea.style.position = 'fixed'
-  textarea.style.top = '0'
-  textarea.style.left = '0'
-  textarea.style.opacity = '0'
-  textarea.style.pointerEvents = 'none'
-  document.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
-  textarea.setSelectionRange(0, textarea.value.length)
-  const copied = document.execCommand('copy')
-  document.body.removeChild(textarea)
-
-  if (!copied) {
-    throw new Error('Copy command failed')
-  }
-}
-
-function getShareablePayload(pane: PaneState): { text: string | null; contentLabel: string } {
-  if (pane.selectedSessionKey) {
-    const selectedSession = pane.sessionHistory.find((session) => session.key === pane.selectedSessionKey)
-    if (selectedSession) {
-      const latestAssistant = [...selectedSession.logs].reverse().find((entry) => entry.role === 'assistant')?.text
-      if (latestAssistant?.trim()) {
-        return { text: latestAssistant, contentLabel: '\u9078\u629e\u4e2d\u30bb\u30c3\u30b7\u30e7\u30f3' }
-      }
-
-      const combinedLogs = selectedSession.logs.map((entry) => `${entry.role.toUpperCase()}: ${entry.text}`).join('\n\n').trim()
-      if (combinedLogs) {
-        return { text: combinedLogs, contentLabel: '\u9078\u629e\u4e2d\u30bb\u30c3\u30b7\u30e7\u30f3' }
-      }
-
-      const combinedStream = selectedSession.streamEntries.map((entry) => `[${entry.kind}] ${entry.text}`).join('\n').trim()
-      if (combinedStream) {
-        return { text: combinedStream, contentLabel: '\u9078\u629e\u4e2d\u30bb\u30c3\u30b7\u30e7\u30f3' }
-      }
-    }
-  }
-
-  return { text: getLatestAssistantText(pane), contentLabel: '\u6700\u65b0\u7d50\u679c' }
-}
-
-function resetActiveSessionFields(pane: PaneState): PaneState {
-  return {
-    ...pane,
-    prompt: '',
-    status: 'idle',
-    statusText: statusLabel('idle'),
-    runInProgress: false,
-    logs: [],
-    streamEntries: [],
-    selectedSessionKey: null,
-    liveOutput: '',
-    sessionId: null,
-    sessionScopeKey: null,
-    providerSessions: createEmptyProviderSessions(),
-    currentRequestText: null,
-    currentRequestAt: null,
-    stopRequested: false,
-    stopRequestAvailable: false,
-    lastRunAt: null,
-    runningSince: null,
-    lastActivityAt: null,
-    lastFinishedAt: null,
-    lastError: null,
-    lastResponse: null
-  }
-}
-
-function readJsonStorage<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined') {
-    return fallback
-  }
-
-  try {
-    const raw = window.localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as T) : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function isPaneBusyForExecution(pane: Pick<PaneState, 'status' | 'runInProgress'>): boolean {
-  return pane.runInProgress || pane.status === 'running' || pane.status === 'updating'
-}
-
-function getPaneVisualStatus(pane: PaneState, now: number): PaneStatus | 'stalled' {
-  if (pane.runInProgress && pane.lastActivityAt !== null && now - pane.lastActivityAt > STALL_MS) {
-    return 'stalled'
-  }
-
-  return pane.status
-}
-
-function applyBackgroundActionSuccess(pane: PaneState, statusText: string, eventAt: number): PaneState {
-  if (isPaneBusyForExecution(pane)) {
-    return {
-      ...pane,
-      streamEntries: appendStreamEntry(pane.streamEntries, 'system', statusText, eventAt, pane.provider, pane.model)
-    }
-  }
-
-  return {
-    ...pane,
-    status: 'idle',
-    statusText: statusLabel('idle'),
-    streamEntries: appendStreamEntry(pane.streamEntries, 'system', statusText, eventAt, pane.provider, pane.model),
-    lastError: null
-  }
-}
-
-function applyBackgroundActionFailure(pane: PaneState, statusText: string, errorMessage: string, eventAt: number): PaneState {
-  if (isPaneBusyForExecution(pane)) {
-    return {
-      ...pane,
-      streamEntries: appendStreamEntry(pane.streamEntries, 'stderr', `${statusText}: ${errorMessage}`, eventAt)
-    }
-  }
-
-  return {
-    ...pane,
-    status: 'error',
-    statusText,
-    lastError: errorMessage
-  }
-}
-
-function normalizeSharedContextItem(rawItem: Partial<SharedContextItem> | null | undefined): SharedContextItem | null {
-  if (!rawItem?.id || !rawItem.sourcePaneId || !rawItem.sourcePaneTitle || !rawItem.provider || !rawItem.workspaceLabel) {
-    return null
-  }
-
-  return {
-    id: rawItem.id,
-    sourcePaneId: rawItem.sourcePaneId,
-    sourcePaneTitle: rawItem.sourcePaneTitle,
-    provider: rawItem.provider,
-    workspaceLabel: rawItem.workspaceLabel,
-    scope: rawItem.scope === 'direct' ? 'direct' : 'global',
-    targetPaneIds: Array.isArray(rawItem.targetPaneIds)
-      ? rawItem.targetPaneIds.filter((item): item is string => typeof item === 'string')
-      : [],
-    targetPaneTitles: Array.isArray(rawItem.targetPaneTitles)
-      ? rawItem.targetPaneTitles.filter((item): item is string => typeof item === 'string')
-      : [],
-    contentLabel: typeof rawItem.contentLabel === 'string' && rawItem.contentLabel.trim() ? rawItem.contentLabel : '\u6700\u65b0\u7d50\u679c',
-    summary: typeof rawItem.summary === 'string' ? rawItem.summary : '',
-    detail: typeof rawItem.detail === 'string' ? rawItem.detail : '',
-    consumedByPaneIds: Array.isArray(rawItem.consumedByPaneIds)
-      ? rawItem.consumedByPaneIds.filter((item): item is string => typeof item === 'string')
-      : [],
-    createdAt: typeof rawItem.createdAt === 'number' ? rawItem.createdAt : Date.now()
-  }
-}
-
-function loadPersistedState(): {
-  panes: Partial<PaneState>[]
-  sharedContext: SharedContextItem[]
-  layout: LayoutMode
-  localWorkspaces: LocalWorkspace[]
-  lastLocalBrowsePath: string | null
-  focusedPaneId: string | null
-} {
-  const layout = readJsonStorage<LayoutMode>(STORAGE_KEYS.layout, 'triple')
-  const lastLocalBrowsePath = readJsonStorage<string | null>(STORAGE_KEYS.lastLocalBrowsePath, null)
-
-  return {
-    panes: readJsonStorage<Partial<PaneState>[]>(STORAGE_KEYS.panes, []),
-    sharedContext: readJsonStorage<SharedContextItem[]>(STORAGE_KEYS.sharedContext, [])
-      .map((item) => normalizeSharedContextItem(item))
-      .filter((item): item is SharedContextItem => Boolean(item)),
-    layout: layout === 'quad' || layout === 'focus' ? layout : 'triple',
-    localWorkspaces: mergeLocalWorkspaces(readJsonStorage<LocalWorkspace[]>(STORAGE_KEYS.localWorkspaces, [])),
-    lastLocalBrowsePath: typeof lastLocalBrowsePath === 'string' && lastLocalBrowsePath.trim() ? lastLocalBrowsePath.trim() : null,
-    focusedPaneId: readJsonStorage<string | null>(STORAGE_KEYS.focusedPane, null)
-  }
-}
-
-function persistState(payload: {
-  panes: PaneState[]
-  sharedContext: SharedContextItem[]
-  layout: LayoutMode
-  localWorkspaces: LocalWorkspace[]
-  focusedPaneId: string | null
-}): void {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  window.localStorage.setItem(STORAGE_KEYS.panes, JSON.stringify(payload.panes))
-  window.localStorage.setItem(STORAGE_KEYS.sharedContext, JSON.stringify(payload.sharedContext))
-  window.localStorage.setItem(STORAGE_KEYS.layout, JSON.stringify(payload.layout))
-  window.localStorage.setItem(STORAGE_KEYS.localWorkspaces, JSON.stringify(getManualWorkspaces(payload.localWorkspaces)))
-  window.localStorage.setItem(STORAGE_KEYS.focusedPane, JSON.stringify(payload.focusedPaneId))
-}
-
-function normalizeLocalDirectoryEntry(rawEntry: Partial<LocalDirectoryEntry> | null | undefined): LocalDirectoryEntry | null {
-  if (!rawEntry?.label || !rawEntry.path) {
-    return null
-  }
-
-  return {
-    label: rawEntry.label,
-    path: rawEntry.path,
-    isDirectory: rawEntry.isDirectory !== false
-  }
-}
-
-function normalizeRemoteDirectoryEntry(rawEntry: Partial<RemoteDirectoryEntry> | null | undefined): RemoteDirectoryEntry | null {
-  if (!rawEntry?.label || !rawEntry.path) {
-    return null
-  }
-
-  return {
-    label: rawEntry.label,
-    path: rawEntry.path,
-    isDirectory: rawEntry.isDirectory !== false,
-    isWorkspace: Boolean(rawEntry.isWorkspace)
-  }
-}
-
-function normalizeSessionRecord(rawRecord: Partial<PaneSessionRecord> | null | undefined): PaneSessionRecord | null {
-  if (!rawRecord?.key) {
-    return null
-  }
-
-  const logs = Array.isArray(rawRecord.logs) ? rawRecord.logs.slice(-MAX_LOGS) : []
-  const createdAt = typeof rawRecord.createdAt === 'number' ? rawRecord.createdAt : Date.now()
-  const sessionId = typeof rawRecord.sessionId === 'string' ? rawRecord.sessionId : null
-
-  return {
-    key: rawRecord.key,
-    label: buildSessionLabel(sessionId, createdAt, logs),
-    sessionId,
-    createdAt,
-    updatedAt: typeof rawRecord.updatedAt === 'number' ? rawRecord.updatedAt : null,
-    status:
-      rawRecord.status === 'completed' || rawRecord.status === 'attention' || rawRecord.status === 'error' || rawRecord.status === 'running' || rawRecord.status === 'updating'
-        ? rawRecord.status
-        : 'idle',
-    logs,
-    streamEntries: Array.isArray(rawRecord.streamEntries) ? rawRecord.streamEntries.slice(-MAX_STREAM_ENTRIES) : []
-  }
-}
-
-function normalizePane(
-  rawPane: Partial<PaneState>,
-  payload: BootstrapPayload,
-  localWorkspaces: LocalWorkspace[]
-): PaneState {
-  const provider = isProviderId(rawPane.provider) ? rawPane.provider : 'codex'
-  const providerSettings = normalizeProviderSettingsMap(rawPane.providerSettings, payload.providers)
-  const activeProviderSetting = normalizeProviderSettings(
-    {
-      ...providerSettings[provider],
-      model: typeof rawPane.model === 'string' ? rawPane.model : providerSettings[provider].model,
-      reasoningEffort: isReasoningEffort(rawPane.reasoningEffort) ? rawPane.reasoningEffort : providerSettings[provider].reasoningEffort,
-      autonomyMode: rawPane.autonomyMode === 'max' ? 'max' : providerSettings[provider].autonomyMode,
-      codexFastMode: rawPane.codexFastMode === 'fast' ? 'fast' : providerSettings[provider].codexFastMode
-    },
-    payload.providers,
-    provider
-  )
-  providerSettings[provider] = activeProviderSetting
-  const providerSessions = normalizeProviderSessionsMap(rawPane.providerSessions)
-  const restoredSessionId = typeof rawPane.sessionId === 'string' ? rawPane.sessionId : null
-  const restoredSessionScopeKey = typeof rawPane.sessionScopeKey === 'string' ? rawPane.sessionScopeKey : null
-  if (restoredSessionId || restoredSessionScopeKey) {
-    providerSessions[provider] = {
-      ...providerSessions[provider],
-      sessionId: restoredSessionId,
-      sessionScopeKey: restoredSessionScopeKey,
-      updatedAt: typeof rawPane.lastActivityAt === 'number' ? rawPane.lastActivityAt : providerSessions[provider].updatedAt
-    }
-  }
-  const workspaceMode = rawPane.workspaceMode === 'ssh' ? 'ssh' : 'local'
-  const persistedLocalWorkspacePath = typeof rawPane.localWorkspacePath === 'string' ? rawPane.localWorkspacePath.trim() : ''
-  const localWorkspacePath = persistedLocalWorkspacePath || chooseInitialLocalWorkspacePath(localWorkspaces)
-  const rawStatus = rawPane.status ?? 'idle'
-  const rawLastError = typeof rawPane.lastError === 'string' && rawPane.lastError.trim() ? rawPane.lastError : null
-  const hasPersistedRunActivity =
-    typeof rawPane.lastRunAt === 'number' ||
-    typeof rawPane.lastFinishedAt === 'number' ||
-    (Array.isArray(rawPane.logs) && rawPane.logs.some((entry) => entry?.role === 'user' || entry?.role === 'assistant'))
-  const restoredStatus: PaneStatus =
-    rawStatus === 'running' || rawStatus === 'updating'
-      ? 'attention'
-    : rawStatus === 'error'
-      ? 'error'
-      : rawStatus === 'completed' && hasPersistedRunActivity
-        ? 'completed'
-        : rawStatus === 'attention' && rawLastError && hasPersistedRunActivity
-          ? 'attention'
-        : 'idle'
-  const remoteBrowserEntries = Array.isArray(rawPane.remoteBrowserEntries)
-    ? rawPane.remoteBrowserEntries
-        .map((entry) => normalizeRemoteDirectoryEntry(entry))
-        .filter((entry): entry is RemoteDirectoryEntry => Boolean(entry))
-    : []
-  const rawStatusText = typeof rawPane.statusText === 'string' ? rawPane.statusText : ''
-  const statusText =
-    rawStatus === 'running' || rawStatus === 'updating'
-      ? '\u524d\u56de\u306e\u5b9f\u884c\u306f\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f'
-      : restoredStatus === 'idle'
-        ? statusLabel('idle')
-        : rawStatusText.includes('\u5916\u90e8\u30bf\u30fc\u30df\u30ca\u30eb')
-        ? statusLabel(restoredStatus)
-        : rawStatusText || statusLabel(restoredStatus)
-  const restoredLastError = restoredStatus === 'idle' ? null : rawLastError
-
-  return {
-    id: rawPane.id ?? createId('pane'),
-    title: typeof rawPane.title === 'string' && rawPane.title.trim() ? rawPane.title : 'Task',
-    settingsOpen: rawPane.settingsOpen === true,
-    workspaceOpen: rawPane.workspaceOpen === true,
-    shellOpen: rawPane.shellOpen === true,
-    provider,
-    model: activeProviderSetting.model,
-    reasoningEffort: activeProviderSetting.reasoningEffort,
-    autonomyMode: activeProviderSetting.autonomyMode,
-    codexFastMode: activeProviderSetting.codexFastMode,
-    providerSettings,
-    providerSessions,
-    status: restoredStatus,
-    statusText,
-    runInProgress: false,
-    shellCommand: typeof rawPane.shellCommand === 'string' ? rawPane.shellCommand : '',
-    shellOutput: typeof rawPane.shellOutput === 'string' ? clipText(rawPane.shellOutput, MAX_SHELL_OUTPUT) : '',
-    shellHistory: Array.isArray(rawPane.shellHistory)
-      ? rawPane.shellHistory.filter((item): item is string => typeof item === 'string').slice(-50)
-      : [],
-    shellHistoryIndex: typeof rawPane.shellHistoryIndex === 'number' ? rawPane.shellHistoryIndex : null,
-    localShellPath: typeof rawPane.localShellPath === 'string' && rawPane.localShellPath.trim() ? rawPane.localShellPath : localWorkspacePath,
-    remoteShellPath: typeof rawPane.remoteShellPath === 'string' ? rawPane.remoteShellPath : '',
-    shellRunning: false,
-    shellLastExitCode: typeof rawPane.shellLastExitCode === 'number' ? rawPane.shellLastExitCode : null,
-    shellLastError: typeof rawPane.shellLastError === 'string' ? rawPane.shellLastError : null,
-    shellLastRunAt: typeof rawPane.shellLastRunAt === 'number' ? rawPane.shellLastRunAt : null,
-    workspaceMode,
-    localWorkspacePath,
-    localBrowserPath: typeof rawPane.localBrowserPath === 'string' ? rawPane.localBrowserPath : '',
-    localBrowserEntries: Array.isArray(rawPane.localBrowserEntries)
-      ? rawPane.localBrowserEntries
-          .map((entry) => normalizeLocalDirectoryEntry(entry))
-          .filter((entry): entry is LocalDirectoryEntry => Boolean(entry))
-      : [],
-    localBrowserLoading: false,
-    sshHost: typeof rawPane.sshHost === 'string' ? rawPane.sshHost : '',
-    sshUser: typeof rawPane.sshUser === 'string' ? rawPane.sshUser : '',
-    sshPort: typeof rawPane.sshPort === 'string' ? rawPane.sshPort : '',
-    sshPassword: typeof rawPane.sshPassword === 'string' ? rawPane.sshPassword : '',
-    sshIdentityFile: typeof rawPane.sshIdentityFile === 'string' ? rawPane.sshIdentityFile : '',
-    sshProxyJump: typeof rawPane.sshProxyJump === 'string' ? rawPane.sshProxyJump : '',
-    sshProxyCommand: typeof rawPane.sshProxyCommand === 'string' ? rawPane.sshProxyCommand : '',
-    sshExtraArgs: typeof rawPane.sshExtraArgs === 'string' ? rawPane.sshExtraArgs : '',
-    sshLocalKeys: Array.isArray(rawPane.sshLocalKeys) ? rawPane.sshLocalKeys : [],
-    sshSelectedKeyPath: typeof rawPane.sshSelectedKeyPath === 'string' ? rawPane.sshSelectedKeyPath : '',
-    sshPublicKeyText: typeof rawPane.sshPublicKeyText === 'string' ? rawPane.sshPublicKeyText : '',
-    sshKeyName: typeof rawPane.sshKeyName === 'string' && rawPane.sshKeyName.trim() ? rawPane.sshKeyName : 'id_ed25519',
-    sshKeyComment: typeof rawPane.sshKeyComment === 'string' ? rawPane.sshKeyComment : 'tako-cli-dev-tool',
-    sshDiagnostics: Array.isArray(rawPane.sshDiagnostics)
-      ? rawPane.sshDiagnostics.filter((item): item is string => typeof item === 'string')
-      : [],
-    sshActionState: rawPane.sshActionState === 'running' || rawPane.sshActionState === 'success' || rawPane.sshActionState === 'error' ? rawPane.sshActionState : 'idle',
-    sshActionMessage: typeof rawPane.sshActionMessage === 'string' ? rawPane.sshActionMessage : null,
-    sshPasswordPulseAt: 0,
-    sshLocalPath: typeof rawPane.sshLocalPath === 'string' ? rawPane.sshLocalPath : localWorkspacePath,
-    sshRemotePath: typeof rawPane.sshRemotePath === 'string' ? rawPane.sshRemotePath : '',
-    remoteWorkspacePath: typeof rawPane.remoteWorkspacePath === 'string' ? rawPane.remoteWorkspacePath : '',
-    remoteWorkspaces: Array.isArray(rawPane.remoteWorkspaces) ? rawPane.remoteWorkspaces : [],
-    remoteAvailableProviders: Array.isArray(rawPane.remoteAvailableProviders)
-      ? rawPane.remoteAvailableProviders.filter(isProviderId)
-      : [],
-    remoteHomeDirectory: typeof rawPane.remoteHomeDirectory === 'string' ? rawPane.remoteHomeDirectory : null,
-    remoteBrowserPath: typeof rawPane.remoteBrowserPath === 'string' ? rawPane.remoteBrowserPath : '',
-    remoteBrowserEntries,
-    remoteParentPath: typeof rawPane.remoteParentPath === 'string' ? rawPane.remoteParentPath : null,
-    remoteNewDirectoryName: typeof rawPane.remoteNewDirectoryName === 'string' ? rawPane.remoteNewDirectoryName : '',
-    remoteBrowserLoading: false,
-    prompt: typeof rawPane.prompt === 'string' ? rawPane.prompt : '',
-    logs: Array.isArray(rawPane.logs) ? rawPane.logs.slice(-MAX_LOGS) : [],
-    streamEntries: Array.isArray(rawPane.streamEntries) ? rawPane.streamEntries.slice(-MAX_STREAM_ENTRIES) : [],
-    sessionHistory: Array.isArray(rawPane.sessionHistory)
-      ? rawPane.sessionHistory
-          .map((item) => normalizeSessionRecord(item))
-          .filter((item): item is PaneSessionRecord => Boolean(item))
-      : [],
-    selectedSessionKey: null,
-    liveOutput: typeof rawPane.liveOutput === 'string' ? clipText(rawPane.liveOutput, MAX_LIVE_OUTPUT) : '',
-    attachedContextIds: Array.isArray(rawPane.attachedContextIds)
-      ? rawPane.attachedContextIds.filter((item): item is string => typeof item === 'string')
-      : [],
-    sessionId: restoredSessionId,
-    sessionScopeKey: restoredSessionScopeKey,
-    autoShare: Boolean(rawPane.autoShare),
-    autoShareTargetIds: Array.isArray(rawPane.autoShareTargetIds)
-      ? rawPane.autoShareTargetIds.filter((item): item is string => typeof item === 'string')
-      : [],
-    pendingShareGlobal: Boolean(rawPane.pendingShareGlobal),
-    pendingShareTargetIds: Array.isArray(rawPane.pendingShareTargetIds)
-      ? rawPane.pendingShareTargetIds.filter((item): item is string => typeof item === 'string')
-      : [],
-    currentRequestText: typeof rawPane.currentRequestText === 'string' && rawPane.currentRequestText.trim() ? rawPane.currentRequestText : null,
-    currentRequestAt: typeof rawPane.currentRequestAt === 'number' ? rawPane.currentRequestAt : null,
-    stopRequested: false,
-    stopRequestAvailable: false,
-    lastRunAt: typeof rawPane.lastRunAt === 'number' ? rawPane.lastRunAt : null,
-    runningSince: null,
-    lastActivityAt: typeof rawPane.lastActivityAt === 'number' ? rawPane.lastActivityAt : null,
-    lastFinishedAt: typeof rawPane.lastFinishedAt === 'number' ? rawPane.lastFinishedAt : null,
-    lastError: restoredLastError,
-    lastResponse: typeof rawPane.lastResponse === 'string' ? rawPane.lastResponse : null
-  }
-}
+import {
+  MAX_LOGS,
+  MAX_SHARED_CONTEXT,
+  MAX_STREAM_ENTRIES,
+  EMPTY_CATALOGS,
+  PROVIDER_ORDER,
+  TITLE_IMAGE_URL,
+  type LayoutMode,
+  type WorkspacePickerState,
+  appendLogEntry,
+  appendSessionRecord,
+  appendStreamEntry,
+  buildPromptWithImageSummary,
+  buildShellPromptLabel,
+  buildLocalWorkspaceRecord,
+  buildSshConnectionFromPane,
+  buildSshLabel,
+  buildTargetFromPane,
+  createArchivedSessionRecord,
+  createId,
+  createSharedContextItem,
+  fetchBootstrapWithRetry,
+  findReusableSshPane,
+  getManualWorkspaces,
+  getPaneOutputText,
+  getPreferredLocalSshKey,
+  getProviderIssueSummary,
+  getShareablePayload,
+  hasSessionContent,
+  mergeLocalSshKeys,
+  mergeLocalWorkspaces,
+  normalizePromptImageFile,
+  readFileAsBase64,
+  reorderPanesById,
+} from './lib/appCore'
+import {
+  acquireBodyScrollLock,
+  animateReorder,
+  getDocumentRect,
+  writeClipboardText
+} from './lib/browserUi'
+import {
+  applyBackgroundActionFailure,
+  applyBackgroundActionSuccess,
+  createInitialPane,
+  getPaneVisualStatus,
+  isPaneBusyForExecution,
+  normalizePane,
+  resetActiveSessionFields,
+  statusLabel
+} from './lib/paneState'
+import {
+  loadPersistedState,
+  persistState,
+  STORAGE_KEYS
+} from './lib/storage'
 
 function App() {
   const persistedRef = useRef(loadPersistedState())
@@ -2331,17 +1094,6 @@ function App() {
     if (!enabled) {
       appendPaneSystemMessage(paneId, '\u5171\u6709\u3067\u304d\u308b\u6700\u65b0\u7d50\u679c\u304c\u307e\u3060\u3042\u308a\u307e\u305b\u3093')
       return
-    }
-
-    if (isLocalDevEnvironment()) {
-      console.log('[share-toggle-click]', {
-        sourcePaneId: paneId,
-        targetPaneId,
-        nextTargetIds,
-        directTargetIds: effectiveDirectTargetIds,
-        hasShareablePayload,
-        enabled
-      })
     }
 
     appendPaneSystemMessage(
@@ -4878,179 +3630,43 @@ function App() {
         </div>
       )}
 
-      <section className="summary-grid compact">
-        <article className="metric-card compact">
-          <header>
-            <Activity size={16} />
-            <span>{'\u5b9f\u884c\u4e2d'}</span>
-          </header>
-          <strong>{metrics.running}</strong>
-          <p>{'\u5b9f\u884c\u4e2d\u306e\u30bf\u30b9\u30af'}</p>
-        </article>
-        <article className="metric-card compact">
-          <header>
-            <CheckCircle2 size={16} />
-            <span>{'\u5b8c\u4e86'}</span>
-          </header>
-          <strong>{metrics.completed}</strong>
-          <p>{'\u6b63\u5e38\u306b\u7d42\u4e86\u3057\u305f\u30bf\u30b9\u30af'}</p>
-        </article>
-        <article className="metric-card compact">
-          <header>
-            <Bot size={16} />
-            <span>{'\u78ba\u8a8d\u5f85\u3061'}</span>
-          </header>
-          <strong>{metrics.attention}</strong>
-          <p>{'\u5165\u529b\u3084\u5224\u65ad\u304c\u5fc5\u8981\u306a\u30bf\u30b9\u30af'}</p>
-        </article>
-        <article className="metric-card compact">
-          <header>
-            <XCircle size={16} />
-            <span>{'\u505c\u6ede / \u30a8\u30e9\u30fc'}</span>
-          </header>
-          <strong>{metrics.error + metrics.stalled}</strong>
-          <p>{'\u5931\u6557\u307e\u305f\u306f\u505c\u6ede\u3092\u691c\u51fa\u3057\u305f\u30bf\u30b9\u30af'}</p>
-        </article>
-      </section>
+      <SummaryMetrics metrics={metrics} />
 
-      {sharedContext.length > 0 && (
-        <section className="context-dock">
-          <div className="panel-header context-dock-header">
-            <Wifi size={16} />
-            <h2>{'\u5171\u6709\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8'}</h2>
-          </div>
-          <div className="context-dock-note">
-            <span>{`\u5168\u4f53 ${sharedContext.filter((item) => item.scope === 'global').length}`}</span>
-            <span>{`\u500b\u5225 ${sharedContext.filter((item) => item.scope === 'direct').length}`}</span>
-            <span>{'\u6b21\u56de\u306e\u5b9f\u884c1\u56de\u3060\u3051\u306b\u53cd\u6620'}</span>
-          </div>
-          <div className="context-dock-list">
-            {sharedContext.map((item) => {
-              const pendingPaneTitles = panes.filter((pane) => pane.attachedContextIds.includes(item.id)).map((pane) => pane.title)
-              const consumedPaneTitles = panes.filter((pane) => item.consumedByPaneIds.includes(pane.id)).map((pane) => pane.title)
-              const directTargets = item.targetPaneTitles.length > 0
-                ? item.targetPaneTitles
-                : panes.filter((pane) => item.targetPaneIds.includes(pane.id)).map((pane) => pane.title)
-
-              return (
-                <article key={item.id} className="context-dock-item">
-                  <div className="context-dock-item-head">
-                    <div>
-                      <strong>{item.sourcePaneTitle}</strong>
-                      <span className="context-dock-meta">
-                        {item.contentLabel} / {item.scope === 'global' ? '\u5168\u4f53\u5171\u6709' : '\u500b\u5225\u5171\u6709'}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      className="icon-button danger compact-icon-button"
-                      onClick={() => handleDeleteSharedContext(item.id)}
-                      title={'\u5171\u6709\u3092\u524a\u9664'}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                  <span>{item.summary}</span>
-                  <span className="context-dock-meta">{'\u30ef\u30fc\u30af\u30b9\u30da\u30fc\u30b9: '}{item.workspaceLabel}</span>
-                  <span className="context-dock-meta">
-                    {item.scope === 'global'
-                      ? pendingPaneTitles.length > 0
-                        ? '\u6b21\u56de\u4f7f\u7528\u4e88\u5b9a: ' + pendingPaneTitles.join(', ')
-                        : '\u6b21\u56de\u4f7f\u7528\u4e88\u5b9a: \u307e\u3060\u3042\u308a\u307e\u305b\u3093'
-                      : directTargets.length > 0
-                        ? '\u500b\u5225\u5171\u6709\u5148: ' + directTargets.join(', ')
-                        : '\u500b\u5225\u5171\u6709\u5148: \u306a\u3057'}
-                  </span>
-                  <span className="context-dock-meta">
-                    {consumedPaneTitles.length > 0
-                      ? '\u4f7f\u7528\u6e08\u307f: ' + consumedPaneTitles.join(', ')
-                      : '\u4f7f\u7528\u6e08\u307f: \u307e\u3060\u3042\u308a\u307e\u305b\u3093'}
-                  </span>
-                </article>
-              )
-            })}
-          </div>
-        </section>
-      )}
+      <SharedContextDock sharedContext={sharedContext} panes={panes} onDelete={handleDeleteSharedContext} />
 
       <div className="main-grid single-column">
         <main className="workspace-stage full-stage">
-          <div className="stage-toolbar">
-            <div className="toolbar-group">
-              <button type="button" className="primary-button" onClick={handleAddPane}>
-                <Plus size={16} />
-                {'\u30da\u30a4\u30f3\u8ffd\u52a0'}
-              </button>
-              <button type="button" className="secondary-button" onClick={closeAllPaneAccordions}>
-                {'\u898b\u305f\u76ee\u30ad\u30ec\u30a4'}
-              </button>
-              <button
-                type="button"
-                className={layout === 'quad' ? 'switch-button active' : 'switch-button'}
-                onClick={() => setLayout('quad')}
-              >
-                <Grid2x2 size={15} />
-                2x2
-              </button>
-              <button
-                type="button"
-                className={layout === 'triple' ? 'switch-button active' : 'switch-button'}
-                onClick={() => setLayout('triple')}
-              >
-                <SplitSquareHorizontal size={15} />
-                {'3\u5217'}
-              </button>
-              <button
-                type="button"
-                className={layout === 'focus' ? 'switch-button active' : 'switch-button'}
-                onClick={() => setLayout('focus')}
-              >
-                <LayoutPanelTop size={15} />
-                Focus
-              </button>
-            </div>
+          <StageToolbar
+            layout={layout}
+            metrics={metrics}
+            onAddPane={handleAddPane}
+            onCloseAllPaneAccordions={closeAllPaneAccordions}
+            onLayoutChange={setLayout}
+          />
 
-            <div className="toolbar-status-strip" aria-label="pane-status-summary">
-              <span className="toolbar-status-chip running">実行中 {metrics.running}</span>
-              <span className="toolbar-status-chip completed">完了 {metrics.completed}</span>
-              <span className="toolbar-status-chip attention">確認待ち {metrics.attention}</span>
-              <span className="toolbar-status-chip issue">停滞 / エラー {metrics.error + metrics.stalled}</span>
-            </div>
-          </div>
-
-          <div className="pane-matrix">
-            {panes.map((pane, index) => {
-              const isFocused = pane.id === focusedPaneId
-              const visualStatus = getPaneVisualStatus(pane, now)
-              const matrixStatus = visualStatus === 'stalled' ? 'attention' : visualStatus
-
-              return (
-                <button
-                  key={`matrix-${pane.id}`}
-                  ref={(node) => {
-                    if (node) {
-                      matrixTileRefs.current[pane.id] = node
-                    } else {
-                      delete matrixTileRefs.current[pane.id]
-                    }
-                  }}
-                  type="button"
-                  draggable={panes.length > 1}
-                  className={`matrix-tile status-${matrixStatus} ${isFocused ? 'active' : ''} ${selectedPaneIds.includes(pane.id) ? 'selected' : ''} ${draggedPaneId === pane.id ? 'is-dragging' : ''} ${matrixDropTargetId === pane.id && draggedPaneId !== pane.id ? 'is-drop-target' : ''}`}
-                  onClick={(event) => handleMatrixClick(event, pane.id)}
-                  onDragStart={(event) => handleMatrixDragStart(event, pane.id)}
-                  onDragEnter={(event) => handleMatrixDragEnter(event, pane.id)}
-                  onDragOver={(event) => handleMatrixDragOver(event, pane.id)}
-                  onDrop={(event) => handleMatrixDrop(event, pane.id)}
-                  onDragEnd={handleMatrixDragEnd}
-                >
-                  <span className="matrix-index">{String(index + 1).padStart(2, '0')}</span>
-                  <strong>{pane.title}</strong>
-                  <span>{catalogs[pane.provider]?.label ?? pane.provider}</span>
-                </button>
-              )
-            })}
-          </div>
+          <PaneMatrix
+            panes={panes}
+            catalogs={catalogs}
+            now={now}
+            focusedPaneId={focusedPaneId}
+            selectedPaneIds={selectedPaneIds}
+            draggedPaneId={draggedPaneId}
+            dropTargetId={matrixDropTargetId}
+            getVisualStatus={getPaneVisualStatus}
+            onTileRef={(paneId, node) => {
+              if (node) {
+                matrixTileRefs.current[paneId] = node
+              } else {
+                delete matrixTileRefs.current[paneId]
+              }
+            }}
+            onTileClick={handleMatrixClick}
+            onTileDragStart={handleMatrixDragStart}
+            onTileDragEnter={handleMatrixDragEnter}
+            onTileDragOver={handleMatrixDragOver}
+            onTileDrop={handleMatrixDrop}
+            onTileDragEnd={handleMatrixDragEnd}
+          />
 
           <div className={`pane-grid layout-${layout}`}>
             {visiblePanes.map((pane) => (
