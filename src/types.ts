@@ -428,6 +428,9 @@ export type ShellRunEvent =
 
 export type RunStreamEvent =
   | {
+      type: 'started'
+    }
+  | {
       type: 'session'
       sessionId: string
     }

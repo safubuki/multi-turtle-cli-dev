@@ -14,7 +14,8 @@ import {
   buildCommandPreviewSections,
   buildStructuredRunContextSections,
   formatStructuredRunContextForStream,
-  selectPaneContextMemory
+  selectPaneContextMemory,
+  selectSharedContextPayload
 } from './runContext'
 import { applyBackgroundActionFailure, isPaneBusyForExecution, statusLabel } from './paneState'
 import { buildPaneSessionScopeKey, getProviderResumeSession, updateProviderSessionState } from './providerState'
@@ -35,7 +36,8 @@ import type {
   RunImageAttachment,
   RunStatusResponse,
   RunStreamEvent,
-  SharedContextItem
+  SharedContextItem,
+  SharedContextPayload
 } from '../types'
 
 type PaneUpdater = (paneId: string, updates: Partial<PaneState>) => void
@@ -54,16 +56,23 @@ type PreparedRunPayloadSuccess = {
   resumeSessionId: string | null
   providerContextMemory: PaneLogEntry[]
   consumedContextIds: string[]
-  sharedContextPayload: Array<{
-    sourcePaneTitle: string
-    provider: SharedContextItem['provider']
-    workspaceLabel: string
-    summary: string
-    detail: string
-  }>
+  sharedContextPayload: SharedContextPayload[]
+  sharedContextOmittedCount: number
 }
 
 type PreparedRunPayload = PreparedRunPayloadFailure | PreparedRunPayloadSuccess
+
+type PendingRunStart = {
+  userEntry: PaneLogEntry
+  requestText: string
+  requestedAt: number
+  targetLabel: string
+  currentSessionScopeKey: string
+  resumeSessionId: string | null
+  consumedContextIds: string[]
+  runContextText: string
+  readyImageAttachments: RunImageAttachment[]
+}
 
 interface RunActionsParams {
   bootstrap: BootstrapPayload | null
@@ -84,12 +93,235 @@ interface RunActionsParams {
   flushQueuedPromptImageCleanup: (paneId: string) => void
   scheduleWorkspaceContentsRefresh: (paneId: string, delay?: number) => void
   setPendingShareSelection: (paneId: string, responseOverride: string | undefined, selection: PendingShareSelection) => boolean
+  requestWorkspaceSelection?: (paneId: string) => void
 }
 
 export function createRunActions(params: RunActionsParams) {
+  const pendingRunStarts = new Map<string, PendingRunStart>()
+
+  const clearPendingRunStart = (paneId: string) => {
+    pendingRunStarts.delete(paneId)
+  }
+
+  const consumeSharedContext = (paneId: string, consumedContextIds: string[]) => {
+    if (consumedContextIds.length === 0) {
+      return
+    }
+
+    params.setSharedContext((current) =>
+      current
+        .flatMap((item) => {
+          if (!consumedContextIds.includes(item.id)) {
+            return [item]
+          }
+
+          const nextConsumedByPaneIds = item.consumedByPaneIds.includes(paneId)
+            ? item.consumedByPaneIds
+            : [...item.consumedByPaneIds, paneId]
+          const nextTargetPaneIds = item.targetPaneIds.filter((id) => id !== paneId)
+          const nextTargetPaneTitles = item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
+
+          if (item.scope === 'direct' || nextTargetPaneIds.length === 0) {
+            return []
+          }
+
+          return [{
+            ...item,
+            targetPaneIds: nextTargetPaneIds,
+            targetPaneTitles: nextTargetPaneTitles,
+            consumedByPaneIds: nextConsumedByPaneIds
+          }]
+        })
+        .slice(0, MAX_SHARED_CONTEXT)
+    )
+  }
+
+  const acknowledgePendingRunStart = (paneId: string) => {
+    const pendingStart = pendingRunStarts.get(paneId)
+    if (!pendingStart) {
+      return
+    }
+
+    consumeSharedContext(paneId, pendingStart.consumedContextIds)
+
+    params.mutatePane(paneId, (currentPane) => {
+      const nextLogs = appendLogEntry(currentPane.logs, pendingStart.userEntry)
+      const startStreamEntries = appendStreamEntry(
+        currentPane.streamEntries,
+        'system',
+        `開始: ${currentPane.provider} / ${pendingStart.targetLabel}`,
+        pendingStart.requestedAt,
+        currentPane.provider,
+        currentPane.model
+      )
+      const nextStreamEntries = pendingStart.runContextText
+        ? appendStreamEntry(startStreamEntries, 'system', pendingStart.runContextText, pendingStart.requestedAt + 1, currentPane.provider, currentPane.model)
+        : startStreamEntries
+
+      return updateProviderSessionState({
+        ...currentPane,
+        prompt: '',
+        logs: nextLogs,
+        status: 'running',
+        statusText: '実行中',
+        runInProgress: true,
+        lastRunAt: pendingStart.requestedAt,
+        runningSince: pendingStart.requestedAt,
+        lastActivityAt: pendingStart.requestedAt,
+        lastError: null,
+        lastResponse: null,
+        selectedSessionKey: null,
+        liveOutput: '',
+        sessionId: pendingStart.resumeSessionId,
+        sessionScopeKey: pendingStart.currentSessionScopeKey,
+        currentRequestText: pendingStart.requestText,
+        currentRequestAt: pendingStart.requestedAt,
+        stopRequested: false,
+        stopRequestAvailable: true,
+        attachedContextIds: currentPane.attachedContextIds.filter((item) => !pendingStart.consumedContextIds.includes(item)),
+        streamEntries: nextStreamEntries
+      }, currentPane.provider, {
+        sessionId: pendingStart.resumeSessionId,
+        sessionScopeKey: pendingStart.currentSessionScopeKey,
+        lastSharedLogEntryId: pendingStart.userEntry.id,
+        updatedAt: pendingStart.requestedAt
+      })
+    })
+
+    if (pendingStart.readyImageAttachments.length > 0) {
+      params.queuePromptImageCleanup(paneId, pendingStart.readyImageAttachments.map((attachment) => attachment.localPath))
+      params.clearPanePromptImages(paneId, { cleanupFiles: false })
+    }
+
+    clearPendingRunStart(paneId)
+  }
+
+  const finalizeCompletedRun = (
+    paneId: string,
+    result: {
+      response: string
+      statusHint: 'completed' | 'attention' | 'error'
+      sessionId: string | null
+      warningMessage?: string | null
+      warningStatusText?: string | null
+    },
+    options: {
+      recoveryNote?: string
+    } = {}
+  ) => {
+    const eventAt = Date.now()
+    const finalText = clipText(sanitizeTerminalText(result.response).trim(), MAX_LIVE_OUTPUT)
+    const warningMessage = typeof result.warningMessage === 'string' && result.warningMessage.trim() ? result.warningMessage.trim() : null
+    const warningStatusText = typeof result.warningStatusText === 'string' && result.warningStatusText.trim() ? result.warningStatusText.trim() : null
+    let shouldShareGlobal = false
+    let autoShareTargetIds: string[] = []
+    let pendingShareGlobal = false
+    let pendingShareTargetIds: string[] = []
+    let didFinalize = false
+
+    params.mutatePane(paneId, (pane) => {
+      if (options.recoveryNote && !pane.runInProgress && pane.lastResponse === finalText) {
+        return pane
+      }
+
+      didFinalize = true
+      shouldShareGlobal = pane.autoShare
+      autoShareTargetIds = pane.autoShareTargetIds.filter((item) => item !== pane.id)
+      pendingShareGlobal = pane.pendingShareGlobal
+      pendingShareTargetIds = pane.pendingShareTargetIds.filter((item) => item !== pane.id)
+
+      const assistantEntry: PaneLogEntry = {
+        id: createId('log'),
+        role: 'assistant',
+        text: finalText,
+        createdAt: eventAt,
+        provider: pane.provider,
+        model: pane.model
+      }
+      const nextLogs = finalText ? appendLogEntry(pane.logs, assistantEntry) : pane.logs
+      let nextStreamEntries = pane.streamEntries
+      if (options.recoveryNote) {
+        nextStreamEntries = appendStreamEntry(nextStreamEntries, 'system', options.recoveryNote, eventAt, pane.provider, pane.model)
+      }
+      if (warningMessage && !nextStreamEntries.some((entry) => entry.kind === 'system' && entry.text === warningMessage)) {
+        nextStreamEntries = appendStreamEntry(nextStreamEntries, 'system', warningMessage, eventAt, pane.provider, pane.model)
+      }
+      nextStreamEntries = appendStreamEntry(nextStreamEntries, 'system', `結果: ${statusLabel(result.statusHint)}`, eventAt, pane.provider, pane.model)
+      const shouldPreserveSpecificAttention = result.statusHint === 'attention'
+        && warningMessage === '標準エラー出力がありました。Run Log を確認してください。'
+        && Boolean(pane.lastError)
+
+      const finalPreview = finalText.slice(0, 120)
+      const liveOutputHasFinal = Boolean(finalPreview) && pane.liveOutput.includes(finalPreview)
+      const nextLiveOutput = finalText
+        ? liveOutputHasFinal
+          ? clipText(pane.liveOutput, MAX_LIVE_OUTPUT)
+          : appendLiveOutputLine(pane.liveOutput, finalText)
+        : pane.liveOutput
+      const nextSessionId = result.sessionId ?? pane.sessionId
+      const nextSessionScopeKey = buildPaneSessionScopeKey(pane)
+
+      return updateProviderSessionState({
+        ...pane,
+        logs: nextLogs,
+        status: result.statusHint,
+        statusText: result.statusHint === 'attention'
+          ? shouldPreserveSpecificAttention
+            ? pane.statusText
+            : warningStatusText ?? (pane.lastError ? pane.statusText : statusLabel('attention'))
+          : statusLabel(result.statusHint),
+        runInProgress: false,
+        runningSince: null,
+        stopRequested: false,
+        stopRequestAvailable: false,
+        lastActivityAt: eventAt,
+        lastFinishedAt: eventAt,
+        lastError: result.statusHint === 'error'
+          ? '処理がエラーで終了しました'
+          : shouldPreserveSpecificAttention
+            ? pane.lastError
+            : warningMessage ?? (result.statusHint === 'attention' ? pane.lastError : null),
+        lastResponse: finalText,
+        liveOutput: nextLiveOutput,
+        sessionId: nextSessionId,
+        sessionScopeKey: nextSessionScopeKey,
+        streamEntries: nextStreamEntries
+      }, pane.provider, {
+        sessionId: nextSessionId,
+        sessionScopeKey: nextSessionScopeKey,
+        lastSharedLogEntryId: finalText ? assistantEntry.id : pane.providerSessions[pane.provider].lastSharedLogEntryId,
+        lastSharedStreamEntryId: nextStreamEntries.at(-1)?.id ?? pane.providerSessions[pane.provider].lastSharedStreamEntryId,
+        updatedAt: eventAt
+      })
+    })
+
+    clearPendingRunStart(paneId)
+
+    if (!didFinalize) {
+      return
+    }
+
+    if (pendingShareGlobal) {
+      params.setPendingShareSelection(paneId, finalText, { mode: 'global' })
+    } else if (pendingShareTargetIds.length > 0) {
+      params.setPendingShareSelection(paneId, finalText, { mode: 'direct', targetPaneIds: pendingShareTargetIds })
+    } else if (shouldShareGlobal) {
+      params.setPendingShareSelection(paneId, finalText, { mode: 'global' })
+    } else if (autoShareTargetIds.length > 0) {
+      params.setPendingShareSelection(paneId, finalText, { mode: 'direct', targetPaneIds: autoShareTargetIds })
+    }
+
+    params.scheduleWorkspaceContentsRefresh(paneId)
+  }
+
   const handleStreamEvent = (paneId: string, event: RunStreamEvent) => {
     const eventAt = Date.now()
     const shouldKeepRunning = Boolean(params.controllersRef.current[paneId]) && !params.stopRequestedRef.current.has(paneId)
+
+    if (event.type === 'started') {
+      acknowledgePendingRunStart(paneId)
+      return
+    }
 
     if (event.type === 'assistant-delta') {
       startTransition(() => {
@@ -160,90 +392,20 @@ export function createRunActions(params: RunActionsParams) {
     }
 
     if (event.type === 'final') {
-      const finalText = clipText(sanitizeTerminalText(event.response).trim(), MAX_LIVE_OUTPUT)
-      const eventPane = params.panesRef.current.find((item) => item.id === paneId)
-      const assistantEntry: PaneLogEntry = {
-        id: createId('log'),
-        role: 'assistant',
-        text: finalText,
-        createdAt: eventAt,
-        provider: eventPane?.provider,
-        model: eventPane?.model
-      }
-
-      let shouldShareGlobal = false
-      let autoShareTargetIds: string[] = []
-      let pendingShareGlobal = false
-      let pendingShareTargetIds: string[] = []
-      params.mutatePane(paneId, (pane) => {
-        const finalPreview = finalText.slice(0, 120)
-        const liveOutputHasFinal = Boolean(finalPreview) && pane.liveOutput.includes(finalPreview)
-        const nextLiveOutput = finalText
-          ? liveOutputHasFinal
-            ? clipText(pane.liveOutput, MAX_LIVE_OUTPUT)
-            : appendLiveOutputLine(pane.liveOutput, finalText)
-          : pane.liveOutput
-
-        shouldShareGlobal = pane.autoShare
-        autoShareTargetIds = pane.autoShareTargetIds.filter((item) => item !== pane.id)
-        pendingShareGlobal = pane.pendingShareGlobal
-        pendingShareTargetIds = pane.pendingShareTargetIds.filter((item) => item !== pane.id)
-        const nextLogs = appendLogEntry(pane.logs, assistantEntry)
-        const warningMessage = typeof event.warningMessage === 'string' && event.warningMessage.trim() ? event.warningMessage.trim() : null
-        const warningStatusText = typeof event.warningStatusText === 'string' && event.warningStatusText.trim() ? event.warningStatusText.trim() : null
-        const streamEntriesWithWarning = warningMessage && !pane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === warningMessage)
-          ? appendStreamEntry(pane.streamEntries, 'system', warningMessage, eventAt, pane.provider, pane.model)
-          : pane.streamEntries
-        const nextStreamEntries = appendStreamEntry(streamEntriesWithWarning, 'system', `結果: ${statusLabel(event.statusHint)}`, eventAt, pane.provider, pane.model)
-        const nextSessionId = event.sessionId ?? pane.sessionId
-        const nextSessionScopeKey = buildPaneSessionScopeKey(pane)
-        return updateProviderSessionState({
-          ...pane,
-          logs: nextLogs,
-          status: event.statusHint,
-          statusText: event.statusHint === 'attention'
-            ? warningStatusText ?? (pane.lastError ? pane.statusText : statusLabel('attention'))
-            : statusLabel(event.statusHint),
-          runInProgress: false,
-          runningSince: null,
-          stopRequested: false,
-          stopRequestAvailable: false,
-          lastActivityAt: eventAt,
-          lastFinishedAt: eventAt,
-          lastError: event.statusHint === 'error'
-            ? '処理がエラーで終了しました'
-            : warningMessage ?? (event.statusHint === 'attention' ? pane.lastError : null),
-          lastResponse: assistantEntry.text,
-          liveOutput: nextLiveOutput,
-          sessionId: nextSessionId,
-          sessionScopeKey: nextSessionScopeKey,
-          streamEntries: nextStreamEntries
-        }, pane.provider, {
-          sessionId: nextSessionId,
-          sessionScopeKey: nextSessionScopeKey,
-          lastSharedLogEntryId: assistantEntry.id,
-          lastSharedStreamEntryId: nextStreamEntries.at(-1)?.id ?? pane.providerSessions[pane.provider].lastSharedStreamEntryId,
-          updatedAt: eventAt
-        })
+      finalizeCompletedRun(paneId, {
+        response: event.response,
+        statusHint: event.statusHint,
+        sessionId: event.sessionId,
+        warningMessage: event.warningMessage,
+        warningStatusText: event.warningStatusText
       })
-
-      if (pendingShareGlobal) {
-        params.setPendingShareSelection(paneId, assistantEntry.text, { mode: 'global' })
-      } else if (pendingShareTargetIds.length > 0) {
-        params.setPendingShareSelection(paneId, assistantEntry.text, { mode: 'direct', targetPaneIds: pendingShareTargetIds })
-      } else if (shouldShareGlobal) {
-        params.setPendingShareSelection(paneId, assistantEntry.text, { mode: 'global' })
-      } else if (autoShareTargetIds.length > 0) {
-        params.setPendingShareSelection(paneId, assistantEntry.text, { mode: 'direct', targetPaneIds: autoShareTargetIds })
-      }
-
-      params.scheduleWorkspaceContentsRefresh(paneId)
       return
     }
 
     if (event.type === 'error') {
       const message = sanitizeTerminalText(event.message).trim()
       params.streamErroredRef.current.add(paneId)
+      clearPendingRunStart(paneId)
       params.mutatePane(paneId, (pane) => {
         const issueSummary = getProviderIssueSummary(pane.provider, message, pane.autonomyMode)
         const systemEntry: PaneLogEntry = {
@@ -289,67 +451,15 @@ export function createRunActions(params: RunActionsParams) {
     }
 
     if (status.status === 'completed' && status.result) {
-      const result = status.result
-      const finalText = clipText(sanitizeTerminalText(result.response).trim(), MAX_LIVE_OUTPUT)
-      params.mutatePane(paneId, (pane) => {
-        if (!pane.runInProgress && pane.lastResponse === finalText) {
-          return pane
-        }
-
-        const assistantEntry: PaneLogEntry = {
-          id: createId('log'),
-          role: 'assistant',
-          text: finalText,
-          createdAt: eventAt,
-          provider: pane.provider,
-          model: pane.model
-        }
-        const nextLogs = finalText ? appendLogEntry(pane.logs, assistantEntry) : pane.logs
-        const nextSessionId = result.sessionId ?? pane.sessionId
-        const nextSessionScopeKey = buildPaneSessionScopeKey(pane)
-        const warningMessage = typeof result.warningMessage === 'string' && result.warningMessage.trim() ? result.warningMessage.trim() : null
-        const warningStatusText = typeof result.warningStatusText === 'string' && result.warningStatusText.trim() ? result.warningStatusText.trim() : null
-        const recoveredMessage = `バックグラウンド実行の結果を復元: ${statusLabel(result.statusHint)}`
-        const streamEntriesWithRecovery = appendStreamEntry(pane.streamEntries, 'system', recoveredMessage, eventAt, pane.provider, pane.model)
-        const streamEntriesWithWarning = warningMessage && !streamEntriesWithRecovery.some((entry) => entry.kind === 'system' && entry.text === warningMessage)
-          ? appendStreamEntry(streamEntriesWithRecovery, 'system', warningMessage, eventAt, pane.provider, pane.model)
-          : streamEntriesWithRecovery
-
-        return updateProviderSessionState({
-          ...pane,
-          logs: nextLogs,
-          status: result.statusHint,
-          statusText: result.statusHint === 'attention'
-            ? warningStatusText ?? (pane.lastError ? pane.statusText : statusLabel('attention'))
-            : statusLabel(result.statusHint),
-          runInProgress: false,
-          runningSince: null,
-          stopRequested: false,
-          stopRequestAvailable: false,
-          lastActivityAt: eventAt,
-          lastFinishedAt: eventAt,
-          lastError: result.statusHint === 'error'
-            ? '処理がエラーで終了しました'
-            : warningMessage ?? (result.statusHint === 'attention' ? pane.lastError : null),
-          lastResponse: finalText,
-          liveOutput: finalText ? appendLiveOutputLine(pane.liveOutput, finalText) : pane.liveOutput,
-          sessionId: nextSessionId,
-          sessionScopeKey: nextSessionScopeKey,
-          streamEntries: streamEntriesWithWarning
-        }, pane.provider, {
-          sessionId: nextSessionId,
-          sessionScopeKey: nextSessionScopeKey,
-          lastSharedLogEntryId: finalText ? assistantEntry.id : pane.providerSessions[pane.provider].lastSharedLogEntryId,
-          lastSharedStreamEntryId: streamEntriesWithWarning.at(-1)?.id ?? pane.providerSessions[pane.provider].lastSharedStreamEntryId,
-          updatedAt: eventAt
-        })
+      finalizeCompletedRun(paneId, status.result, {
+        recoveryNote: `バックグラウンド実行の結果を復元: ${statusLabel(status.result.statusHint)}`
       })
-      params.scheduleWorkspaceContentsRefresh(paneId)
       return
     }
 
     if (status.status === 'error') {
       const message = status.error ?? 'バックグラウンド実行の状態確認で失敗しました。'
+      clearPendingRunStart(paneId)
       params.mutatePane(paneId, (pane) => ({
         ...pane,
         status: 'attention',
@@ -367,6 +477,7 @@ export function createRunActions(params: RunActionsParams) {
     }
 
     if (status.status === 'idle') {
+      clearPendingRunStart(paneId)
       params.mutatePane(paneId, (pane) => {
         if (!pane.runInProgress) {
           return pane
@@ -420,12 +531,16 @@ export function createRunActions(params: RunActionsParams) {
     const message = sanitizeTerminalText(error instanceof Error ? error.message : String(error)).trim()
     const stopped = controllerSignal.aborted || params.stopRequestedRef.current.has(paneId)
     const streamErrored = params.streamErroredRef.current.delete(paneId)
+    const startPending = pendingRunStarts.has(paneId)
 
     if (!stopped && !streamErrored) {
       const failedAt = Date.now()
+      clearPendingRunStart(paneId)
       params.mutatePane(paneId, (currentPane) => {
         const issueSummary = getProviderIssueSummary(currentPane.provider, message, currentPane.autonomyMode)
-        const fallbackAttentionMessage = 'ストリーム接続が途中で切れました。サーバー側で実行が残っている可能性があるため、必要なら停止再送を試してください。'
+        const fallbackAttentionMessage = startPending
+          ? '実行開始前に失敗しました。入力と添付内容はそのまま残してあるため、内容を確認して再実行できます。'
+          : 'ストリーム接続が途中で切れました。サーバー側で実行が残っている可能性があるため、必要なら停止再送を試してください。'
         const displayMessage = issueSummary?.displayMessage ?? fallbackAttentionMessage
         const systemEntry: PaneLogEntry = {
           id: createId('log'),
@@ -442,14 +557,16 @@ export function createRunActions(params: RunActionsParams) {
           ...currentPane,
           logs: appendLogEntry(currentPane.logs, systemEntry),
           status: issueSummary?.status ?? 'attention',
-          statusText: issueSummary?.statusText ?? 'ストリーム接続が途切れました',
+          statusText: issueSummary?.statusText ?? (startPending ? '実行開始に失敗しました' : 'ストリーム接続が途切れました'),
           runInProgress: false,
           runningSince: null,
           stopRequested: false,
-          stopRequestAvailable: true,
+          stopRequestAvailable: startPending ? false : true,
           lastActivityAt: failedAt,
           lastFinishedAt: failedAt,
           lastError: displayMessage,
+          currentRequestText: startPending ? null : currentPane.currentRequestText,
+          currentRequestAt: startPending ? null : currentPane.currentRequestAt,
           streamEntries:
             issueSummary && !currentPane.streamEntries.some((entry) => entry.kind === 'system' && entry.text === issueSummary.displayMessage)
               ? appendStreamEntry(nextStreamEntries, 'system', issueSummary.displayMessage, failedAt, currentPane.provider, currentPane.model)
@@ -457,17 +574,20 @@ export function createRunActions(params: RunActionsParams) {
         }
       })
       params.scheduleWorkspaceContentsRefresh(paneId)
-      void fetchPaneRunStatus(paneId)
-        .then((status) => {
-          if (status.status !== 'idle') {
-            applyRecoveredRunStatus(paneId, status)
-          }
-        })
-        .catch(() => undefined)
+      if (!startPending) {
+        void fetchPaneRunStatus(paneId)
+          .then((status) => {
+            if (status.status !== 'idle') {
+              applyRecoveredRunStatus(paneId, status)
+            }
+          })
+          .catch(() => undefined)
+      }
     }
 
     if (stopped) {
       const stoppedAt = Date.now()
+      clearPendingRunStart(paneId)
       params.mutatePane(paneId, (currentPane) => ({
         ...currentPane,
         status: 'attention',
@@ -476,6 +596,8 @@ export function createRunActions(params: RunActionsParams) {
         runningSince: null,
         stopRequested: false,
         stopRequestAvailable: false,
+        currentRequestText: startPending ? null : currentPane.currentRequestText,
+        currentRequestAt: startPending ? null : currentPane.currentRequestAt,
         lastActivityAt: stoppedAt,
         lastFinishedAt: stoppedAt,
         lastError: null,
@@ -484,7 +606,11 @@ export function createRunActions(params: RunActionsParams) {
     }
   }
 
-  const preparePaneRunPayload = (paneId: string, promptOverride?: string, options: { allowEmptyPrompt?: boolean } = {}): PreparedRunPayload => {
+  const preparePaneRunPayload = (
+    paneId: string,
+    promptOverride?: string,
+    options: { allowEmptyPrompt?: boolean; requestWorkspaceSelection?: boolean } = {}
+  ): PreparedRunPayload => {
     const pane = params.panesRef.current.find((item) => item.id === paneId)
     if (!pane) {
       return { ok: false, error: 'ペインが見つかりません。' }
@@ -497,6 +623,9 @@ export function createRunActions(params: RunActionsParams) {
         statusText: 'ワークスペースを選択してください',
         lastError: 'ワークスペースが未設定です。'
       })
+      if (options.requestWorkspaceSelection && pane.workspaceMode === 'local') {
+        params.requestWorkspaceSelection?.(paneId)
+      }
       return { ok: false, error: 'ワークスペースが未設定です。' }
     }
 
@@ -564,15 +693,15 @@ export function createRunActions(params: RunActionsParams) {
     const currentSessionScopeKey = buildPaneSessionScopeKey(pane)
     const providerContextMemory = selectPaneContextMemory(pane, pane.provider)
     const resumeSessionId = getProviderResumeSession(pane, pane.provider, currentSessionScopeKey)
-    const attachedContext = params.sharedContextRef.current.filter((item) => pane.attachedContextIds.includes(item.id))
-    const consumedContextIds = attachedContext.map((item) => item.id)
-    const sharedContextPayload = attachedContext.map((item) => ({
-      sourcePaneTitle: item.sourcePaneTitle,
-      provider: item.provider,
-      workspaceLabel: item.workspaceLabel,
-      summary: item.summary,
-      detail: item.detail
-    }))
+    const sharedContextById = new Map(params.sharedContextRef.current.map((item) => [item.id, item]))
+    const attachedContext = pane.attachedContextIds
+      .map((contextId) => sharedContextById.get(contextId) ?? null)
+      .filter((item): item is SharedContextItem => item !== null)
+    const {
+      sharedContextPayload,
+      consumedContextIds,
+      omittedCount: sharedContextOmittedCount
+    } = selectSharedContextPayload(attachedContext)
 
     return {
       ok: true,
@@ -585,7 +714,8 @@ export function createRunActions(params: RunActionsParams) {
       resumeSessionId,
       providerContextMemory,
       consumedContextIds,
-      sharedContextPayload
+      sharedContextPayload,
+      sharedContextOmittedCount
     }
   }
 
@@ -625,6 +755,7 @@ export function createRunActions(params: RunActionsParams) {
         resumeSessionId: prepared.resumeSessionId,
         providerContextMemory: prepared.providerContextMemory,
         sharedContextPayload: prepared.sharedContextPayload,
+        sharedContextOmittedCount: prepared.sharedContextOmittedCount,
         readyImageAttachments: prepared.readyImageAttachments,
         preview
       })
@@ -632,7 +763,7 @@ export function createRunActions(params: RunActionsParams) {
   }
 
   const handleRun = async (paneId: string, promptOverride?: string) => {
-    const prepared = preparePaneRunPayload(paneId, promptOverride)
+    const prepared = preparePaneRunPayload(paneId, promptOverride, { requestWorkspaceSelection: true })
     if (!prepared.ok) {
       return
     }
@@ -647,7 +778,8 @@ export function createRunActions(params: RunActionsParams) {
       resumeSessionId,
       providerContextMemory,
       consumedContextIds,
-      sharedContextPayload
+      sharedContextPayload,
+      sharedContextOmittedCount
     } = prepared
 
     if (isPaneBusyForExecution(pane) || params.controllersRef.current[paneId]) {
@@ -677,90 +809,43 @@ export function createRunActions(params: RunActionsParams) {
             resumeSessionId,
             providerContextMemory,
             sharedContextPayload,
+            sharedContextOmittedCount,
             readyImageAttachments
           })
         )
       : ''
 
+    pendingRunStarts.set(paneId, {
+      userEntry,
+      requestText,
+      requestedAt: startedAt,
+      targetLabel: target.label,
+      currentSessionScopeKey,
+      resumeSessionId,
+      consumedContextIds,
+      runContextText,
+      readyImageAttachments
+    })
+
     params.controllersRef.current[paneId] = controller
     params.stopRequestedRef.current.delete(paneId)
     params.streamErroredRef.current.delete(paneId)
 
-    if (consumedContextIds.length > 0) {
-      params.setSharedContext((current) =>
-        current
-          .flatMap((item) => {
-            if (!consumedContextIds.includes(item.id)) {
-              return [item]
-            }
-
-            const nextConsumedByPaneIds = item.consumedByPaneIds.includes(paneId)
-              ? item.consumedByPaneIds
-              : [...item.consumedByPaneIds, paneId]
-            const nextTargetPaneIds = item.targetPaneIds.filter((id) => id !== paneId)
-            const nextTargetPaneTitles = item.targetPaneTitles.filter((_, index) => item.targetPaneIds[index] !== paneId)
-
-            if (item.scope === 'direct' || nextTargetPaneIds.length === 0) {
-              return []
-            }
-
-            return [{
-              ...item,
-              targetPaneIds: nextTargetPaneIds,
-              targetPaneTitles: nextTargetPaneTitles,
-              consumedByPaneIds: nextConsumedByPaneIds
-            }]
-          })
-          .slice(0, MAX_SHARED_CONTEXT)
-      )
-    }
-
     params.mutatePane(paneId, (currentPane) => {
-      const nextLogs = appendLogEntry(currentPane.logs, userEntry)
-      const startStreamEntries = appendStreamEntry(
-        currentPane.streamEntries,
-        'system',
-        `開始: ${currentPane.provider} / ${target.label}`,
-        startedAt,
-        currentPane.provider,
-        currentPane.model
-      )
-      const nextStreamEntries = runContextText
-        ? appendStreamEntry(startStreamEntries, 'system', runContextText, startedAt + 1, currentPane.provider, currentPane.model)
-        : startStreamEntries
-
-      return updateProviderSessionState({
+      return {
         ...currentPane,
-        prompt: '',
-        logs: nextLogs,
-        status: 'running',
-        statusText: '実行中',
-        runInProgress: true,
-        lastRunAt: startedAt,
+        status: 'updating',
+        statusText: '実行を開始中',
+        runInProgress: false,
         runningSince: startedAt,
         lastActivityAt: startedAt,
         lastError: null,
-        lastResponse: null,
-        selectedSessionKey: null,
-        liveOutput: '',
-        sessionId: resumeSessionId,
-        sessionScopeKey: currentSessionScopeKey,
-        currentRequestText: requestText,
-        currentRequestAt: startedAt,
+        currentRequestText: null,
+        currentRequestAt: null,
         stopRequested: false,
         stopRequestAvailable: true,
-        attachedContextIds: currentPane.attachedContextIds.filter((item) => !consumedContextIds.includes(item)),
-        streamEntries: nextStreamEntries
-      }, currentPane.provider, {
-        sessionId: resumeSessionId,
-        sessionScopeKey: currentSessionScopeKey,
-        lastSharedLogEntryId: userEntry.id,
-        updatedAt: startedAt
-      })
+      }
     })
-
-    params.queuePromptImageCleanup(paneId, readyImageAttachments.map((attachment) => attachment.localPath))
-    params.clearPanePromptImages(paneId, { cleanupFiles: false })
 
     try {
       await runPaneStream(

@@ -87,7 +87,7 @@ function applyStateUpdate<T>(current: T, update: SetStateAction<T>): T {
   return typeof update === 'function' ? (update as (value: T) => T)(current) : update
 }
 
-function createSharedContextItem(paneId: string): SharedContextItem {
+function createSharedContextItem(paneId: string, overrides: Partial<SharedContextItem> = {}): SharedContextItem {
   return {
     id: 'ctx-1',
     sourcePaneId: 'pane-source',
@@ -101,7 +101,8 @@ function createSharedContextItem(paneId: string): SharedContextItem {
     summary: 'Summary',
     detail: 'Shared context detail',
     consumedByPaneIds: [],
-    createdAt: 1
+    createdAt: 1,
+    ...overrides
   }
 }
 
@@ -181,6 +182,7 @@ function createRunHarness(options: {
   const flushQueuedPromptImageCleanup = vi.fn()
   const scheduleWorkspaceContentsRefresh = vi.fn()
   const setPendingShareSelection = vi.fn(() => true)
+  const requestWorkspaceSelection = vi.fn()
 
   const actions = createRunActions({
     bootstrap,
@@ -200,7 +202,8 @@ function createRunHarness(options: {
     clearPanePromptImages,
     flushQueuedPromptImageCleanup,
     scheduleWorkspaceContentsRefresh,
-    setPendingShareSelection
+    setPendingShareSelection,
+    requestWorkspaceSelection
   })
 
   return {
@@ -212,6 +215,8 @@ function createRunHarness(options: {
     clearPanePromptImages,
     flushQueuedPromptImageCleanup,
     scheduleWorkspaceContentsRefresh,
+    setPendingShareSelection,
+    requestWorkspaceSelection,
     get pane() {
       return panes[0]
     },
@@ -258,6 +263,7 @@ describe('createRunActions', () => {
 
   it('run で shared context と画像を引き継ぎ、final で完了状態へ遷移する', async () => {
     apiMocks.runPaneStream.mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: 'started' })
       onEvent({ type: 'session', sessionId: 'session-1' })
       onEvent({ type: 'assistant-delta', text: 'partial answer' })
       onEvent({
@@ -303,6 +309,105 @@ describe('createRunActions', () => {
     expect(harness.pane.lastResponse).toBe('Completed answer')
     expect(harness.pane.sessionId).toBe('session-1')
     expect(harness.scheduleWorkspaceContentsRefresh).toHaveBeenCalledWith('pane-1')
+  })
+
+  it('started 前に失敗した場合は prompt と shared context と画像を保持する', async () => {
+    apiMocks.runPaneStream.mockRejectedValue(new Error('network failed'))
+
+    const harness = createRunHarness({
+      paneOverrides: {
+        attachedContextIds: ['ctx-1']
+      },
+      sharedContext: [createSharedContextItem('pane-1')],
+      attachments: [createReadyImageAttachment()]
+    })
+
+    await harness.actions.handleRun('pane-1')
+
+    expect(harness.pane.prompt).toBe('Investigate the failing workflow')
+    expect(harness.pane.logs.filter((entry) => entry.role === 'user')).toHaveLength(0)
+    expect(harness.pane.providerSessions.codex.lastSharedLogEntryId).toBeNull()
+    expect(harness.pane.attachedContextIds).toEqual(['ctx-1'])
+    expect(harness.pane.currentRequestText).toBeNull()
+    expect(harness.sharedContext).toEqual([expect.objectContaining({ id: 'ctx-1' })])
+    expect(harness.clearPanePromptImages).not.toHaveBeenCalled()
+    expect(harness.queuePromptImageCleanup).not.toHaveBeenCalled()
+  })
+
+  it('ワークスペース未選択で run すると選択導線を要求する', async () => {
+    const harness = createRunHarness({
+      paneOverrides: {
+        localWorkspacePath: '',
+        localShellPath: ''
+      }
+    })
+
+    await harness.actions.handleRun('pane-1')
+
+    expect(harness.requestWorkspaceSelection).toHaveBeenCalledWith('pane-1')
+    expect(apiMocks.runPaneStream).not.toHaveBeenCalled()
+    expect(harness.pane.statusText).toBe('ワークスペースを選択してください')
+    expect(harness.pane.lastError).toBe('ワークスペースが未設定です。')
+  })
+
+  it('共有コンテキストは上限付きで送信し、未送信分は attached のまま残す', async () => {
+    apiMocks.runPaneStream.mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: 'started' })
+      onEvent({
+        type: 'final',
+        response: 'Completed answer',
+        statusHint: 'completed',
+        sessionId: 'session-1'
+      })
+    })
+
+    const sharedContexts = [
+      createSharedContextItem('pane-1', { id: 'ctx-1', detail: 'A'.repeat(2_500) }),
+      createSharedContextItem('pane-1', { id: 'ctx-2', detail: 'B'.repeat(2_500) }),
+      createSharedContextItem('pane-1', { id: 'ctx-3', detail: 'C'.repeat(2_500) }),
+      createSharedContextItem('pane-1', { id: 'ctx-4', detail: 'D'.repeat(2_500) })
+    ]
+
+    const harness = createRunHarness({
+      paneOverrides: {
+        attachedContextIds: ['ctx-1', 'ctx-2', 'ctx-3', 'ctx-4']
+      },
+      sharedContext: sharedContexts
+    })
+
+    await harness.actions.handleRun('pane-1')
+
+    const sentSharedContext = apiMocks.runPaneStream.mock.calls[0]?.[0].sharedContext
+    const totalDetailLength = sentSharedContext.reduce((sum: number, item: { detail: string }) => sum + item.detail.length, 0)
+
+    expect(sentSharedContext).toHaveLength(3)
+    expect(sentSharedContext.every((item: { detail: string }) => item.detail.length <= 4_000)).toBe(true)
+    expect(totalDetailLength).toBeLessThanOrEqual(8_000)
+    expect(harness.pane.attachedContextIds).toEqual(['ctx-4'])
+    expect(harness.sharedContext).toEqual([expect.objectContaining({ id: 'ctx-4' })])
+  })
+
+  it('stderr の専用要約は generic warning final で上書きしない', async () => {
+    apiMocks.runPaneStream.mockImplementation(async (_request, onEvent) => {
+      onEvent({ type: 'started' })
+      onEvent({ type: 'stderr', text: 'windows sandbox: CreateProcessWithLogonW failed: 1056' })
+      onEvent({
+        type: 'final',
+        response: 'Partial response',
+        statusHint: 'attention',
+        sessionId: 'session-1',
+        warningMessage: '標準エラー出力がありました。Run Log を確認してください。',
+        warningStatusText: 'ログ確認が必要です'
+      })
+    })
+
+    const harness = createRunHarness()
+
+    await harness.actions.handleRun('pane-1')
+
+    expect(harness.pane.status).toBe('attention')
+    expect(harness.pane.statusText).toBe('Codex の sandbox 起動に失敗しました')
+    expect(harness.pane.lastError).toContain('CreateProcessWithLogonW failed: 1056')
   })
 
   it('stop は server stop を送ってからローカル controller を abort する', async () => {
@@ -359,5 +464,37 @@ describe('createRunActions', () => {
     expect(harness.pane.lastResponse).toBe('Recovered output')
     expect(harness.pane.sessionId).toBe('session-recovered')
     expect(harness.scheduleWorkspaceContentsRefresh).toHaveBeenCalledWith('pane-1')
+  })
+
+  it('background status check の completed 復元でも pending share を確定する', async () => {
+    apiMocks.fetchPaneRunStatus.mockResolvedValue({
+      success: true,
+      status: 'completed',
+      result: {
+        success: true,
+        response: 'Recovered output',
+        statusHint: 'completed',
+        sessionId: 'session-recovered'
+      }
+    })
+
+    const harness = createRunHarness({
+      paneOverrides: {
+        status: 'running',
+        statusText: '実行中',
+        runInProgress: true,
+        lastRunAt: 10,
+        runningSince: 10,
+        lastActivityAt: 10,
+        pendingShareTargetIds: ['pane-2']
+      }
+    })
+
+    await harness.actions.checkBackgroundRunStatuses()
+
+    expect(harness.setPendingShareSelection).toHaveBeenCalledWith('pane-1', 'Recovered output', {
+      mode: 'direct',
+      targetPaneIds: ['pane-2']
+    })
   })
 })

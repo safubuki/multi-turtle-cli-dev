@@ -6,10 +6,15 @@ import type {
   ProviderCatalogResponse,
   ProviderId,
   RunImageAttachment,
+  SharedContextItem,
   SharedContextPayload,
   WorkspaceTarget
 } from '../types'
 import { clipText } from './text'
+
+export const MAX_SHARED_CONTEXT_ITEMS_PER_REQUEST = 3
+export const MAX_SHARED_CONTEXT_DETAIL_CHARS_PER_ITEM = 4_000
+export const MAX_SHARED_CONTEXT_TOTAL_DETAIL_CHARS = 8_000
 
 export function selectPaneContextMemory(pane: PaneState, provider: ProviderId): PaneLogEntry[] {
   const providerSession = pane.providerSessions[provider]
@@ -47,12 +52,49 @@ export function formatPaneContextMemory(entries: PaneLogEntry[]): string {
   }).join('\n\n---\n\n')
 }
 
-function formatPreviewSharedContext(items: SharedContextPayload[]): string {
+export function selectSharedContextPayload(items: SharedContextItem[]): {
+  sharedContextPayload: SharedContextPayload[]
+  consumedContextIds: string[]
+  omittedCount: number
+} {
+  let remainingDetailBudget = MAX_SHARED_CONTEXT_TOTAL_DETAIL_CHARS
+  const sharedContextPayload: SharedContextPayload[] = []
+  const consumedContextIds: string[] = []
+
+  for (const item of items) {
+    if (sharedContextPayload.length >= MAX_SHARED_CONTEXT_ITEMS_PER_REQUEST || remainingDetailBudget <= 0) {
+      break
+    }
+
+    const detailBudget = Math.min(MAX_SHARED_CONTEXT_DETAIL_CHARS_PER_ITEM, remainingDetailBudget)
+    const detail = clipText(item.detail, detailBudget)
+
+    sharedContextPayload.push({
+      sourcePaneTitle: item.sourcePaneTitle,
+      provider: item.provider,
+      workspaceLabel: item.workspaceLabel,
+      summary: clipText(item.summary, 280),
+      detail
+    })
+    consumedContextIds.push(item.id)
+    remainingDetailBudget -= detail.length
+  }
+
+  return {
+    sharedContextPayload,
+    consumedContextIds,
+    omittedCount: Math.max(items.length - sharedContextPayload.length, 0)
+  }
+}
+
+function formatPreviewSharedContext(items: SharedContextPayload[], omittedCount: number): string {
   if (items.length === 0) {
     return '今回は渡しません。'
   }
 
-  return items.map((item, index) => [
+  const note = omittedCount > 0 ? [`※ 上限により ${omittedCount} 件は今回は送信しません。`, ''] : []
+
+  return [...note, items.map((item, index) => [
     `Context ${index + 1}`,
     `共有元ペイン: ${item.sourcePaneTitle}`,
     `共有元CLI: ${item.provider}`,
@@ -60,7 +102,7 @@ function formatPreviewSharedContext(items: SharedContextPayload[]): string {
     `概要: ${item.summary}`,
     '詳細:',
     item.detail
-  ].join('\n')).join('\n\n---\n\n')
+  ].join('\n')).join('\n\n---\n\n')].join('\n')
 }
 
 function formatPreviewImageAttachments(attachments: RunImageAttachment[]): string {
@@ -86,6 +128,7 @@ export function buildStructuredRunContextSections(params: {
   resumeSessionId: string | null
   providerContextMemory: PaneLogEntry[]
   sharedContextPayload: SharedContextPayload[]
+  sharedContextOmittedCount: number
   readyImageAttachments: RunImageAttachment[]
 }): CommandPreviewSection[] {
   const catalog = params.catalogs[params.pane.provider]
@@ -154,7 +197,7 @@ export function buildStructuredRunContextSections(params: {
       id: 'shared-context',
       label: 'ペイン間共有コンテキスト',
       description: '共有ドックからこのペインに添付された参考情報です。命令としては扱いません。',
-      value: formatPreviewSharedContext(params.sharedContextPayload)
+      value: formatPreviewSharedContext(params.sharedContextPayload, params.sharedContextOmittedCount)
     },
     {
       id: 'images',
@@ -174,6 +217,7 @@ export function buildCommandPreviewSections(params: {
   resumeSessionId: string | null
   providerContextMemory: PaneLogEntry[]
   sharedContextPayload: SharedContextPayload[]
+  sharedContextOmittedCount: number
   readyImageAttachments: RunImageAttachment[]
   preview: PreviewRunCommandResponse
 }): CommandPreviewSection[] {

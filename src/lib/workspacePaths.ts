@@ -371,10 +371,6 @@ export function isAppLocalWorkspacePath(targetPath: string, workspaces: LocalWor
   )
 }
 
-export function getPreferredManualLocalWorkspace(workspaces: LocalWorkspace[]): LocalWorkspace | null {
-  return workspaces.find((workspace) => workspace.source !== 'app') ?? null
-}
-
 export function isWindowsDriveRootPath(targetPath: string): boolean {
   return /^[A-Za-z]:[\\/]?$/.test(targetPath.trim())
 }
@@ -393,10 +389,6 @@ export function getDefaultLocalBrowsePath(roots: LocalBrowseRoot[], hostPlatform
   })?.path ?? visibleRoots[0]?.path ?? ''
 }
 
-export function chooseInitialLocalWorkspacePath(workspaces: LocalWorkspace[]): string {
-  return getPreferredManualLocalWorkspace(workspaces)?.path ?? ''
-}
-
 export function chooseLocalWorkspacePickerStartPath(params: {
   pane: { localWorkspacePath: string } | undefined
   workspaces: LocalWorkspace[]
@@ -404,14 +396,18 @@ export function chooseLocalWorkspacePickerStartPath(params: {
   lastLocalBrowsePath: string | null
   hostPlatform: HostPlatform | undefined
 }): string {
-  const lastLocalBrowsePath = params.lastLocalBrowsePath?.trim()
-  if (lastLocalBrowsePath) {
-    return lastLocalBrowsePath
-  }
-
   const paneWorkspacePath = params.pane?.localWorkspacePath.trim()
   if (paneWorkspacePath && !isAppLocalWorkspacePath(paneWorkspacePath, params.workspaces)) {
     return paneWorkspacePath
+  }
+
+  if (!paneWorkspacePath) {
+    return getDefaultLocalBrowsePath(params.roots, params.hostPlatform)
+  }
+
+  const lastLocalBrowsePath = params.lastLocalBrowsePath?.trim()
+  if (lastLocalBrowsePath) {
+    return lastLocalBrowsePath
   }
 
   return getDefaultLocalBrowsePath(params.roots, params.hostPlatform)

@@ -41,6 +41,7 @@ import {
   chooseLocalWorkspacePickerStartPath,
   clampLocalPathToWorkspace,
   createWorkspacePickerState,
+  getManualWorkspaces,
   getDefaultLocalBrowsePath,
   isLocalWorkspacePickerRootVisible,
   mergeLocalWorkspaces,
@@ -88,6 +89,84 @@ export function createWorkspaceActions(params: WorkspaceActionsParams) {
     }
   }
 
+  const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
+
+  const isRecoverableLocalBrowsePathError = (errorMessage: string) => /local directory not found|local path is not a directory|enoent|enotdir/i.test(errorMessage)
+
+  const removeManualWorkspacePath = (targetPath: string) => {
+    const normalizedTargetPath = normalizeComparablePath(targetPath).toLowerCase()
+    if (!normalizedTargetPath) {
+      return
+    }
+
+    params.setLocalWorkspaces((current) =>
+      current.filter((workspace) =>
+        workspace.source === 'app' || normalizeComparablePath(workspace.path).toLowerCase() !== normalizedTargetPath
+      )
+    )
+  }
+
+  const recoverLocalBrowse = async (
+    requestedPath: string,
+    workspaceRoot: string,
+    errorMessage: string
+  ): Promise<{
+    payload: Awaited<ReturnType<typeof browseLocalDirectory>>
+    mode: 'workspace-root' | 'saved-workspace' | 'browse-root'
+  } | null> => {
+    if (!isRecoverableLocalBrowsePathError(errorMessage)) {
+      return null
+    }
+
+    const requestedComparable = normalizeComparablePath(requestedPath).toLowerCase()
+    const workspaceComparable = normalizeComparablePath(workspaceRoot).toLowerCase()
+    const fallbackCandidates: Array<{ path: string; mode: 'workspace-root' | 'saved-workspace' | 'browse-root' }> = []
+
+    if (workspaceRoot && requestedComparable !== workspaceComparable) {
+      fallbackCandidates.push({ path: workspaceRoot, mode: 'workspace-root' })
+    }
+
+    for (const workspace of getManualWorkspaces(params.localWorkspacesRef.current)) {
+      const candidatePath = workspace.path.trim()
+      const comparableCandidatePath = normalizeComparablePath(candidatePath).toLowerCase()
+      if (!comparableCandidatePath || comparableCandidatePath === workspaceComparable) {
+        continue
+      }
+      fallbackCandidates.push({ path: candidatePath, mode: 'saved-workspace' })
+    }
+
+    try {
+      const rootsPayload = await fetchLocalBrowseRoots()
+      const defaultPath = getDefaultLocalBrowsePath(rootsPayload.roots, params.bootstrap?.hostPlatform)
+      if (defaultPath.trim()) {
+        fallbackCandidates.push({ path: defaultPath, mode: 'browse-root' })
+      }
+    } catch {
+      // Keep the original error if even the fallback roots cannot be loaded.
+    }
+
+    const seen = new Set<string>()
+    for (const candidate of fallbackCandidates) {
+      const normalizedCandidatePath = normalizeComparablePath(candidate.path).toLowerCase()
+      if (!normalizedCandidatePath || seen.has(normalizedCandidatePath)) {
+        continue
+      }
+
+      seen.add(normalizedCandidatePath)
+      try {
+        const payload = await browseLocalDirectory(candidate.path)
+        return {
+          payload,
+          mode: candidate.mode
+        }
+      } catch {
+        // Try the next fallback candidate.
+      }
+    }
+
+    return null
+  }
+
   const handleBrowseLocal = async (paneId: string, targetPath: string) => {
     const pane = params.panesRef.current.find((item) => item.id === paneId)
     if (!pane) {
@@ -114,11 +193,40 @@ export function createWorkspaceActions(params: WorkspaceActionsParams) {
         lastError: null
       }))
     } catch (error) {
+      const errorMessage = getErrorMessage(error)
+      const normalizedWorkspaceRoot = normalizeComparablePath(workspaceRoot).toLowerCase()
+      const normalizedRequestedPath = normalizeComparablePath(nextPath).toLowerCase()
+      if (normalizedWorkspaceRoot && normalizedWorkspaceRoot === normalizedRequestedPath) {
+        removeManualWorkspacePath(workspaceRoot)
+      }
+
+      const recovered = await recoverLocalBrowse(nextPath, workspaceRoot, errorMessage)
+      if (recovered) {
+        const fallbackMessage = recovered.mode === 'workspace-root'
+          ? '指定パスが見つからなかったため、ワークスペース直下を開きました。'
+          : recovered.mode === 'saved-workspace'
+            ? '保存済みワークスペースが見つからなかったため、別のワークスペースを開きました。'
+            : '保存済みワークスペースが見つからないため、参照先を開きました。ワークスペースを選択し直してください。'
+
+        rememberLastLocalBrowsePath(recovered.payload.path)
+        params.mutatePane(paneId, (currentPane) => ({
+          ...currentPane,
+          localBrowserLoading: false,
+          localBrowserPath: recovered.payload.path,
+          localBrowserEntries: recovered.payload.entries,
+          localWorkspacePath: recovered.mode === 'browse-root' ? '' : recovered.payload.path,
+          localShellPath: recovered.mode === 'browse-root' ? '' : recovered.payload.path,
+          lastError: recovered.mode === 'workspace-root' ? null : fallbackMessage
+        }))
+        params.appendPaneSystemMessage(paneId, fallbackMessage)
+        return
+      }
+
       params.updatePane(paneId, {
         localBrowserLoading: false,
         status: 'error',
         statusText: 'ワークスペースの内容の読み込みに失敗しました',
-        lastError: error instanceof Error ? error.message : String(error)
+        lastError: errorMessage
       })
     }
   }

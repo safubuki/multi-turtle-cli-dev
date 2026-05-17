@@ -348,6 +348,26 @@ export function getProviderIssueSummary(provider: ProviderId, message: string, a
     }
   }
 
+  if (/createprocesswithlogonw failed:\s*1056/i.test(message)) {
+    return {
+      displayMessage: provider === 'codex'
+        ? codexCanEscalate
+          ? 'Codex の Windows sandbox が子プロセス起動で失敗しました。OS や VS Code のウィンドウ / プロセス制御を含む指示では、Codex 標準モードが CreateProcessWithLogonW failed: 1056 で止まることがあります。まず調査や計画の生成へ寄せるか、必要なら max モードを検討してください。'
+          : 'Codex の実行経路で Windows の子プロセス起動に失敗しました。OS や VS Code のウィンドウ / プロセス制御を含む指示と衝突している可能性があります。まず調査や計画の生成へ寄せ、必要な権限や実行経路を見直してください。'
+        : 'Windows の子プロセス起動に失敗しました。OS や VS Code のウィンドウ / プロセス制御を含む指示と現在の実行経路が衝突している可能性があります。まず調査や計画の生成へ寄せてください。',
+      status: 'attention',
+      statusText: provider === 'codex' ? 'Codex の sandbox 起動に失敗しました' : 'Windows の起動制御に失敗しました'
+    }
+  }
+
+  if (/format-hex/i.test(message) && /count/i.test(message) && /parameter|パラメーター|パラメータ/i.test(message)) {
+    return {
+      displayMessage: 'PowerShell コマンドが現在の shell と互換でありません。Format-Hex -Count は Windows PowerShell 5.1 では使えないため、PowerShell 7 前提のコマンドが混ざっています。5.1 互換の記法へ言い換えるか、pwsh 前提の操作を避けてください。',
+      status: 'attention',
+      statusText: 'PowerShell 互換性を確認してください'
+    }
+  }
+
   if (
     provider === 'gemini' &&
     /exhausted your capacity on this model|quota will reset after|resource_exhausted|too many requests/i.test(message)

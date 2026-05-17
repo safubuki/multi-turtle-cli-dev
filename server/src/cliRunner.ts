@@ -41,6 +41,7 @@ interface ParsedRunState {
   assistantText: string
   finalText: string | null
   stderrText: string
+  recentEvents: { kind: 'status' | 'tool' | 'stderr'; text: string }[]
 }
 
 interface RunStatusAssessment {
@@ -53,6 +54,12 @@ const REMOTE_CAPTURE_BEGIN = '__TAKO_REMOTE_CAPTURE_BEGIN__'
 const REMOTE_CAPTURE_END = '__TAKO_REMOTE_CAPTURE_END__'
 const REMOTE_CODEX_OUTPUT_PLACEHOLDER = '__TAKO_REMOTE_CODEX_OUTPUT__'
 const REMOTE_PREVIEW_IMAGE_DIR = '/tmp/multi-turtle-images-preview'
+const MAX_RECENT_RUN_EVENTS = 6
+
+const GIT_WORKFLOW_PATTERN = /\bgit\b|commit|diff|branch|rebase|merge|stash|pull request|repository|repo|コミット|差分|ブランチ|リベース|マージ|リポジトリ/iu
+const WINDOWS_AUTOMATION_OBJECT_PATTERN = /\bvscode\b|visual studio code|code\.exe|\bwindows\b|\bwindow\b|win32|hwnd|desktop|taskbar|explorer|process|プロセス|ウィンドウ|デスクトップ|タスクバー/iu
+const WINDOWS_AUTOMATION_ACTION_PATTERN = /launch|open|start|spawn|move|resize|reposition|tile|arrange|activate|focus|foreground|monitor|watch|inspect|automate|control|manage|起動|複数起動|整列|移動|サイズ変更|前面化|監視|制御|操作/iu
+const WINDOWS_AUTOMATION_API_PATTERN = /setwindowpos|showwindow|setforegroundwindow|enumwindows|createprocess|start-process/iu
 
 interface ResolvedRunImageAttachment {
   fileName: string
@@ -63,7 +70,8 @@ const DEFAULT_STATE = (): ParsedRunState => ({
   sessionId: null,
   assistantText: '',
   finalText: null,
-  stderrText: ''
+  stderrText: '',
+  recentEvents: []
 })
 
 type CliEncoding = 'auto' | 'utf8' | 'shift_jis'
@@ -88,6 +96,33 @@ function emitIfText(onEvent: RunOptions['onEvent'], type: Extract<RunStreamEvent
   for (const line of normalized.split('\n').map((entry) => entry.trim()).filter(Boolean)) {
     onEvent?.({ type, text: line })
   }
+}
+
+function recordRecentRunEvent(state: ParsedRunState, kind: 'status' | 'tool' | 'stderr', text: string): void {
+  const normalizedLines = text
+    .replace(/\r/g, '\n')
+    .split(/\n+/)
+    .map((entry) => stripAnsi(entry).trim())
+    .filter(Boolean)
+
+  if (normalizedLines.length === 0) {
+    return
+  }
+
+  for (const line of normalizedLines) {
+    const clippedLine = line.length > 220 ? `${line.slice(0, 217)}...` : line
+    state.recentEvents = [...state.recentEvents, { kind, text: clippedLine }].slice(-MAX_RECENT_RUN_EVENTS)
+  }
+}
+
+function emitTrackedText(
+  state: ParsedRunState,
+  onEvent: RunOptions['onEvent'],
+  type: 'status' | 'tool' | 'stderr',
+  text: string
+): void {
+  emitIfText(onEvent, type, text)
+  recordRecentRunEvent(state, type, text)
 }
 
 function sanitizeSessionId(sessionId: string | null | undefined): string | null {
@@ -284,8 +319,63 @@ function normalizeCopilotToolErrorMessage(message: string): string {
 }
 
 function appendStderrText(state: ParsedRunState, onEvent: RunOptions['onEvent'], text: string): void {
-  emitIfText(onEvent, 'stderr', text)
+  emitTrackedText(state, onEvent, 'stderr', text)
   state.stderrText += `${text}\n`
+}
+
+function hasGitMetadataInPathChain(startPath: string): boolean {
+  let currentPath = path.resolve(startPath)
+
+  while (true) {
+    if (fs.existsSync(path.join(currentPath, '.git'))) {
+      return true
+    }
+
+    const parentPath = path.dirname(currentPath)
+    if (parentPath === currentPath) {
+      return false
+    }
+
+    currentPath = parentPath
+  }
+}
+
+function promptMentionsGitWorkflow(prompt: string): boolean {
+  return GIT_WORKFLOW_PATTERN.test(prompt)
+}
+
+function promptLooksLikeWindowsAutomation(prompt: string): boolean {
+  if (process.platform !== 'win32') {
+    return false
+  }
+
+  return WINDOWS_AUTOMATION_API_PATTERN.test(prompt)
+    || (WINDOWS_AUTOMATION_OBJECT_PATTERN.test(prompt) && WINDOWS_AUTOMATION_ACTION_PATTERN.test(prompt))
+}
+
+export function collectRunPreflightNotes(options: Pick<RunOptions, 'provider' | 'autonomyMode' | 'prompt' | 'target'>): string[] {
+  const notes: string[] = []
+
+  if (options.target.kind === 'local') {
+    const workingDirectory = resolveLocalWorkingDirectory(options.target)
+    if (!hasGitMetadataInPathChain(workingDirectory)) {
+      notes.push(
+        promptMentionsGitWorkflow(options.prompt)
+          ? '事前確認: このワークスペースは Git 管理外です。今回の指示は Git 前提の可能性があるため、git status / git diff / git commit などは失敗しやすいです。Git 管理下のフォルダを選ぶか、このフォルダで git init してから実行してください。'
+          : '事前確認: このワークスペースは Git 管理外です。AI は文脈確認のために git status / git diff を自発的に試すことがあるため、git 系操作は失敗し得ます。Git 前提の作業なら Git 管理下のフォルダを選ぶか、このフォルダで git init してから実行してください。'
+      )
+    }
+  }
+
+  if (promptLooksLikeWindowsAutomation(options.prompt)) {
+    notes.push('事前確認: この指示は VSCode / Windows のウィンドウやプロセス制御を含む可能性があります。workspace 内編集より OS 依存が高いため、まず調査や計画を優先した方が安定します。')
+
+    if (options.provider === 'codex' && options.autonomyMode !== 'max') {
+      notes.push('事前確認: Codex 標準モードでは Windows sandbox と衝突し、CreateProcessWithLogonW failed: 1056 のような起動失敗になりやすいです。必要なら max モードを検討してください。')
+    }
+  }
+
+  return dedupeStrings(notes)
 }
 
 function extractGeminiMessageContent(content: unknown): { text: string; thought: string } {
@@ -357,7 +447,7 @@ function pushAssistantText(state: ParsedRunState, onEvent: RunOptions['onEvent']
 function handleCodexLine(state: ParsedRunState, onEvent: RunOptions['onEvent'], line: string): void {
   const parsed = safeJsonParse(line)
   if (!parsed) {
-    emitIfText(onEvent, 'status', line)
+    emitTrackedText(state, onEvent, 'status', line)
     return
   }
 
@@ -398,8 +488,7 @@ function handleCodexLine(state: ParsedRunState, onEvent: RunOptions['onEvent'], 
       getNestedString(parsed, ['data', 'message']) ??
       getNestedString(parsed, ['message']) ??
       JSON.stringify(parsed)
-    emitIfText(onEvent, 'stderr', message)
-    state.stderrText += `${message}\n`
+    appendStderrText(state, onEvent, message)
     return
   }
 
@@ -409,16 +498,16 @@ function handleCodexLine(state: ParsedRunState, onEvent: RunOptions['onEvent'], 
     getNestedString(parsed, ['message'])
 
   if (commandText) {
-    emitIfText(onEvent, 'tool', `${eventType ?? 'event'}: ${commandText}`)
+    emitTrackedText(state, onEvent, 'tool', `${eventType ?? 'event'}: ${commandText}`)
   } else if (eventType) {
-    emitIfText(onEvent, 'status', eventType)
+    emitTrackedText(state, onEvent, 'status', eventType)
   }
 }
 
 function handleCopilotLine(state: ParsedRunState, onEvent: RunOptions['onEvent'], line: string): void {
   const parsed = safeJsonParse(line)
   if (!parsed) {
-    emitIfText(onEvent, 'status', line)
+    emitTrackedText(state, onEvent, 'status', line)
     return
   }
 
@@ -456,41 +545,41 @@ function handleCopilotLine(state: ParsedRunState, onEvent: RunOptions['onEvent']
     const success = getNestedBoolean(parsed, ['data', 'success'])
     const errorMessage = getNestedString(parsed, ['data', 'error', 'message'])
 
-    emitIfText(onEvent, 'tool', success === false ? `${toolLabel}: failed` : `${toolLabel}: completed`)
+    emitTrackedText(state, onEvent, 'tool', success === false ? `${toolLabel}: failed` : `${toolLabel}: completed`)
 
     if (success === false && errorMessage) {
-      emitIfText(onEvent, 'stderr', normalizeCopilotToolErrorMessage(errorMessage))
+      appendStderrText(state, onEvent, normalizeCopilotToolErrorMessage(errorMessage))
     }
     return
   }
 
   if (eventType === 'tool.execution_start' || eventType === 'tool.execution_started') {
     const toolLabel = getNestedString(parsed, ['data', 'tool']) ?? getNestedString(parsed, ['tool']) ?? 'tool'
-    emitIfText(onEvent, 'tool', `${toolLabel}: started`)
+    emitTrackedText(state, onEvent, 'tool', `${toolLabel}: started`)
     return
   }
 
   const toolName = getNestedString(parsed, ['data', 'tool']) ?? getNestedString(parsed, ['tool'])
   if (toolName) {
-    emitIfText(onEvent, 'tool', toolName)
+    emitTrackedText(state, onEvent, 'tool', toolName)
     return
   }
 
   const message = getNestedString(parsed, ['message']) ?? getNestedString(parsed, ['data', 'message'])
   if (message) {
-    emitIfText(onEvent, 'status', message)
+    emitTrackedText(state, onEvent, 'status', message)
     return
   }
 
   if (eventType) {
-    emitIfText(onEvent, 'status', eventType)
+    emitTrackedText(state, onEvent, 'status', eventType)
   }
 }
 
 function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'], line: string): void {
   const parsed = safeJsonParse(line)
   if (!parsed) {
-    emitIfText(onEvent, 'status', line)
+    emitTrackedText(state, onEvent, 'status', line)
     return
   }
 
@@ -513,7 +602,7 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
 
     if (role === 'assistant' || role === 'agent' || role === 'model') {
       if (thought) {
-        emitIfText(onEvent, 'status', thought)
+        emitTrackedText(state, onEvent, 'status', thought)
       }
 
       if (text) {
@@ -529,19 +618,19 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
     }
 
     if (text || thought) {
-      emitIfText(onEvent, 'status', text || thought)
+      emitTrackedText(state, onEvent, 'status', text || thought)
       return
     }
   }
 
   if (eventType === 'tool_use' && typeof parsed.tool_name === 'string') {
-    emitIfText(onEvent, 'tool', parsed.tool_name)
+    emitTrackedText(state, onEvent, 'tool', parsed.tool_name)
     return
   }
 
   if (eventType === 'tool_request') {
     const toolLabel = typeof parsed.name === 'string' ? parsed.name : 'tool'
-    emitIfText(onEvent, 'tool', `${toolLabel}: started`)
+    emitTrackedText(state, onEvent, 'tool', `${toolLabel}: started`)
     return
   }
 
@@ -550,14 +639,15 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
       typeof parsed.status === 'string'
         ? `tool_result: ${parsed.status}`
         : 'tool_result'
-    emitIfText(onEvent, 'tool', toolStatus)
+    emitTrackedText(state, onEvent, 'tool', toolStatus)
     return
   }
 
   if (eventType === 'tool_response') {
     const toolLabel = typeof parsed.name === 'string' ? parsed.name : 'tool'
     const hasErrorFlag = typeof parsed.isError === 'boolean'
-    emitIfText(
+    emitTrackedText(
+      state,
       onEvent,
       'tool',
       hasErrorFlag ? `${toolLabel}: ${parsed.isError ? 'failed' : 'completed'}` : toolLabel
@@ -581,7 +671,7 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
   if (eventType === 'agent_end') {
     const summary = getNestedString(parsed, ['data', 'message'])
     if (summary) {
-      emitIfText(onEvent, 'status', summary)
+      emitTrackedText(state, onEvent, 'status', summary)
     }
     return
   }
@@ -594,7 +684,36 @@ function handleGeminiLine(state: ParsedRunState, onEvent: RunOptions['onEvent'],
     return
   }
 
-  emitIfText(onEvent, 'status', JSON.stringify(parsed))
+  emitTrackedText(state, onEvent, 'status', JSON.stringify(parsed))
+}
+
+function buildEmptyOutputFailureMessage(state: ParsedRunState, code: number | null): string {
+  const messageLines: string[] = []
+
+  if (code !== 0) {
+    messageLines.push('CLI は最終応答を返す前に異常終了しました。')
+    messageLines.push(`終了コード: ${code}`)
+  } else {
+    messageLines.push('CLI は終了しましたが、最終応答が空のままでした。')
+  }
+
+  const meaningfulStderrLines = getMeaningfulStderrLines(state.stderrText).slice(-3)
+  if (meaningfulStderrLines.length > 0) {
+    messageLines.push(`stderr: ${meaningfulStderrLines.join(' / ')}`)
+  }
+
+  const recentEvents = state.recentEvents.slice(-4).map((entry) => `${entry.kind}: ${entry.text}`)
+  if (recentEvents.length > 0) {
+    messageLines.push(`直前イベント: ${recentEvents.join(' | ')}`)
+  }
+
+  if (/createprocesswithlogonw failed:\s*1056/i.test(state.stderrText)) {
+    messageLines.push('Windows sandbox の起動失敗が一次原因で、その後続として空応答になった可能性があります。')
+  } else if (meaningfulStderrLines.length > 0) {
+    messageLines.push('最終応答より前に stderr が出ているため、直前のエラーメッセージが一次原因の可能性があります。')
+  }
+
+  return messageLines.join('\n')
 }
 
 function classifyStatus(response: string, stderrText: string): RunStatusAssessment {
@@ -1254,7 +1373,7 @@ function createActiveRun(
     child.stderr.on('data', (chunk: Buffer) => {
       const text = stderrDecoder.write(chunk)
       state.stderrText += text
-      emitIfText(options.onEvent, 'stderr', text)
+      emitTrackedText(state, options.onEvent, 'stderr', text)
     })
 
     child.on('error', (error) => {
@@ -1275,7 +1394,7 @@ function createActiveRun(
       const stderrTail = stderrDecoder.end()
       if (stderrTail) {
         state.stderrText += stderrTail
-        emitIfText(options.onEvent, 'stderr', stderrTail)
+        emitTrackedText(state, options.onEvent, 'stderr', stderrTail)
       }
 
       let capturedOutput = ''
@@ -1300,12 +1419,12 @@ function createActiveRun(
       }
 
       if (!response && code !== 0) {
-        reject(new Error(state.stderrText.trim() || `CLI exited with code ${code}`))
+        reject(new Error(buildEmptyOutputFailureMessage(state, code)))
         return
       }
 
       if (!response) {
-        reject(new Error(state.stderrText.trim() || 'CLI returned empty output'))
+        reject(new Error(buildEmptyOutputFailureMessage(state, code)))
         return
       }
 
@@ -1359,6 +1478,7 @@ export async function previewCliRunCommand(options: RunOptions): Promise<{
     if (options.provider === 'codex') {
       appendCodexPreviewNotes(notes, options.autonomyMode)
     }
+    notes.push(...collectRunPreflightNotes(options))
 
     return {
       commandLine: buildPreviewCommandLine(launchSpec.command, launchSpec.args),
@@ -1379,6 +1499,7 @@ export async function previewCliRunCommand(options: RunOptions): Promise<{
   if (options.provider === 'codex') {
     appendCodexPreviewNotes(notes, options.autonomyMode)
   }
+  notes.push(...collectRunPreflightNotes(options))
   if (previewRemoteImages.attachments.length > 0) {
     notes.push('\u30ea\u30e2\u30fc\u30c8\u753b\u50cf\u306f\u5b9f\u884c\u6642\u306b\u4e00\u6642\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\u3078\u8ee2\u9001\u3055\u308c\u308b\u305f\u3081\u3001\u30d7\u30ec\u30d3\u30e5\u30fc\u3067\u306f\u4ee3\u8868\u30d1\u30b9\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059\u3002')
   }
@@ -1397,6 +1518,10 @@ async function startSingleCliRun(options: RunOptions): Promise<ActiveCliRun> {
     options.target.kind === 'local'
       ? await buildLocalLaunchSpec(options)
       : await buildRemoteLaunchSpec(options)
+
+  for (const note of collectRunPreflightNotes(options)) {
+    emitIfText(options.onEvent, 'status', note)
+  }
 
   const child = spawnCliChild(
     launchSpec.command,

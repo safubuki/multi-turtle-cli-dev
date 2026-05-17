@@ -280,7 +280,22 @@ function App() {
     clearPanePromptImages,
     flushQueuedPromptImageCleanup,
     scheduleWorkspaceContentsRefresh,
-    setPendingShareSelection
+    setPendingShareSelection,
+    requestWorkspaceSelection: (paneId) => {
+      const pane = panesRef.current.find((item) => item.id === paneId)
+      if (!pane) {
+        return
+      }
+
+      if (pane.workspaceMode === 'ssh') {
+        if (pane.sshHost.trim()) {
+          void handleOpenRemoteWorkspacePicker(paneId)
+        }
+        return
+      }
+
+      void handleAddLocalWorkspace(paneId)
+    }
   })
 
   useAppLifecycle({
@@ -349,7 +364,8 @@ function App() {
     closeAllPaneAccordions,
     handleDeletePane,
     handleDeleteSelectedPanes,
-    handleDuplicatePane
+    handleDuplicatePane,
+    handleReinitializePane
   } = createPaneLifecycleActions({
     bootstrap,
     panesRef,
@@ -505,6 +521,7 @@ function App() {
                   isFocusLayout={layout === 'focus'}
                   onPreviewRunCommand={handlePreviewRunCommand}
                   onDuplicate={handleDuplicatePane}
+                  onReinitialize={handleReinitializePane}
                   onStartNewSession={handleStartNewSession}
                   onResetSession={handleResetSession}
                   onSelectSession={handleSelectSession}

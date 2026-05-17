@@ -177,6 +177,19 @@ describe('createPaneLifecycleActions', () => {
     expect(harness.panes.every((pane) => !pane.settingsOpen && !pane.workspaceOpen && !pane.shellOpen)).toBe(true)
   })
 
+  it('handleAddPane はワークスペース未選択の pane を追加する', () => {
+    const bootstrap = createBootstrap()
+    const harness = createLifecycleHarness({
+      panes: [createPane(bootstrap, 'pane-a', 'Pane A', { localWorkspacePath: 'C:\\workspace', localShellPath: 'C:\\workspace' })]
+    })
+
+    harness.actions.handleAddPane()
+
+    expect(harness.panes[0].localWorkspacePath).toBe('')
+    expect(harness.panes[0].localShellPath).toBe('')
+    expect(harness.focusedPaneId).toBe(harness.panes[0].id)
+  })
+
   it('handleDuplicatePane は実行中状態を持ち越さず複製する', () => {
     const bootstrap = createBootstrap()
     const harness = createLifecycleHarness({
@@ -257,6 +270,85 @@ describe('createPaneLifecycleActions', () => {
     expect(harness.panes[0].attachedContextIds).toEqual(['ctx-keep'])
     expect(harness.focusedPaneId).toBe('pane-a')
     expect(harness.selectedPaneIds).toEqual([])
+  })
+
+  it('handleReinitializePane は実行資源を止めて pane を新しい状態へ差し替える', () => {
+    const bootstrap = createBootstrap()
+    const paneA = createPane(bootstrap, 'pane-a', 'Pane A', {
+      provider: 'gemini',
+      model: 'gemini-model',
+      reasoningEffort: 'high',
+      autonomyMode: 'max',
+      codexFastMode: 'off',
+      settingsOpen: true,
+      workspaceOpen: true,
+      shellOpen: true,
+      status: 'error',
+      statusText: 'ワークスペースの内容の読み込みに失敗しました',
+      runInProgress: true,
+      shellRunning: true,
+      prompt: 'stale prompt',
+      localWorkspacePath: 'C:\\missing',
+      localBrowserPath: 'C:\\missing',
+      localBrowserEntries: [{ label: 'old', path: 'C:\\missing\\old', isDirectory: true }],
+      logs: [{ id: 'log-1', role: 'assistant', text: 'old answer', createdAt: 1 }],
+      streamEntries: [{ id: 'stream-1', kind: 'stderr', text: 'old error', createdAt: 1 }],
+      attachedContextIds: ['ctx-removed'],
+      autoShare: true,
+      autoShareTargetIds: ['pane-b', 'pane-a']
+    })
+    const paneB = createPane(bootstrap, 'pane-b', 'Pane B', {
+      attachedContextIds: ['ctx-removed', 'ctx-keep'],
+      autoShareTargetIds: ['pane-a'],
+      pendingShareTargetIds: ['pane-a']
+    })
+    const harness = createLifecycleHarness({
+      panes: [paneA, paneB],
+      selectedPaneIds: ['pane-a', 'pane-b']
+    })
+
+    const controller = new AbortController()
+    const shellController = new AbortController()
+    const abortController = vi.spyOn(controller, 'abort')
+    const abortShellController = vi.spyOn(shellController, 'abort')
+    harness.controllersRef.current['pane-a'] = controller
+    harness.shellControllersRef.current['pane-a'] = shellController
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    harness.actions.handleReinitializePane('pane-a')
+
+    const replacement = harness.panes[0]
+
+    expect(confirmSpy).toHaveBeenCalledOnce()
+    expect(harness.clearMultiplePanePromptImages).toHaveBeenCalledWith(['pane-a'])
+    expect(harness.pruneSharedContextForDeletedPanes).toHaveBeenCalledWith(['pane-a'])
+    expect(abortController).toHaveBeenCalledOnce()
+    expect(abortShellController).toHaveBeenCalledOnce()
+    expect(apiMocks.stopPaneRun).toHaveBeenCalledWith('pane-a')
+    expect(apiMocks.stopShellRun).toHaveBeenCalledWith('pane-a')
+    expect(replacement.id).not.toBe('pane-a')
+    expect(replacement.title).toBe('Pane A')
+    expect(replacement.provider).toBe('gemini')
+    expect(replacement.model).toBe('gemini-model')
+    expect(replacement.reasoningEffort).toBe('high')
+    expect(replacement.autonomyMode).toBe('max')
+    expect(replacement.runInProgress).toBe(false)
+    expect(replacement.shellRunning).toBe(false)
+    expect(replacement.prompt).toBe('')
+    expect(replacement.logs).toEqual([])
+    expect(replacement.streamEntries).toEqual([])
+    expect(replacement.localWorkspacePath).toBe('')
+    expect(replacement.localShellPath).toBe('')
+    expect(replacement.localBrowserPath).toBe('')
+    expect(replacement.attachedContextIds).toEqual([])
+    expect(replacement.autoShare).toBe(true)
+    expect(replacement.autoShareTargetIds).toEqual(['pane-b'])
+    expect(harness.panes[1].attachedContextIds).toEqual(['ctx-keep'])
+    expect(harness.panes[1].autoShareTargetIds).toEqual([])
+    expect(harness.panes[1].pendingShareTargetIds).toEqual([])
+    expect(harness.focusedPaneId).toBe(replacement.id)
+    expect(harness.selectedPaneIds).toEqual([replacement.id, 'pane-b'])
   })
 
   it('deletePanesById は最後の pane を消したとき replacement pane を補充する', () => {

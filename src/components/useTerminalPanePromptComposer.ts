@@ -134,7 +134,6 @@ export function useTerminalPanePromptComposer(params: UseTerminalPanePromptCompo
   const handleRunRequest = () => {
     const hasPromptInput = promptDraft.trim().length > 0 || params.promptImageCount > 0
     const canRun = hasPromptInput
-      && params.hasWorkspaceTarget
       && !params.hasUploadingPromptImages
       && !params.hasPromptImageErrors
       && (params.isPromptImageSupported || params.promptImageCount === 0)

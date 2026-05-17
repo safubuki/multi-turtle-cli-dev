@@ -167,6 +167,9 @@ export interface PreviewRunCommandResponse {
 
 export type RunStreamEvent =
   | {
+      type: 'started'
+    }
+  | {
       type: 'session'
       sessionId: string
     }

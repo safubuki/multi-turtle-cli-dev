@@ -82,6 +82,7 @@ interface TerminalPaneProps {
   onCopyProviderCommand: (paneId: string, text: string, successMessage: string) => Promise<boolean>
   onCopyText: (paneId: string, text: string, successMessage: string) => Promise<boolean>
   onDuplicate: (paneId: string) => void
+  onReinitialize: (paneId: string) => void
   onStartNewSession: (paneId: string) => void
   onResetSession: (paneId: string) => void
   onDelete: (paneId: string) => void
@@ -145,6 +146,7 @@ const UI = {
   versionNote: '\u3053\u306e\u30c4\u30fc\u30eb\u306f npm \u30b0\u30ed\u30fc\u30d0\u30eb\u306b\u5165\u3063\u3066\u3044\u308b CLI / SDK \u3092\u53c2\u7167\u3057\u307e\u3059\u3002\u5916\u90e8\u3067\u7248\u304c\u5909\u308f\u3063\u305f\u5834\u5408\u3082\u3001\u3053\u306e\u753b\u9762\u306b\u623b\u308b\u3068\u518d\u8aad\u8fbc\u3057\u307e\u3059\u3002',
   versionMismatchNote: '\u53e4\u3044\u7248\u3092\u4f7f\u3044\u7d9a\u3051\u308b\u3068\u3001CLI \u672c\u4f53\u3067\u5229\u7528\u3067\u304d\u308b\u6700\u65b0\u30e2\u30c7\u30eb\u304c\u3053\u306e\u4e00\u89a7\u306b\u51fa\u306a\u3044\u306a\u3069\u3001\u30e2\u30c7\u30eb\u4e0d\u4e00\u81f4\u304c\u8d77\u304d\u3048\u307e\u3059\u3002',
   versionCheckError: 'npm latest \u306e\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f',
+  reinitializePane: '\u30da\u30a4\u30f3\u3092\u518d\u521d\u671f\u5316',
   deletePane: '\u30da\u30a4\u30f3\u3092\u524a\u9664',
   openExplorer: 'Explorer\u3067\u958b\u304f',
   openVsCode: 'VSCode\u3067\u958b\u304f',
@@ -845,6 +847,7 @@ export function TerminalPane({
   onCopyProviderCommand,
   onCopyText,
   onDuplicate,
+  onReinitialize,
   onStartNewSession,
   onDelete,
   onLoadRemote,
@@ -1050,7 +1053,7 @@ export function TerminalPane({
         ? idleHeaderStatusText
         : pane.statusText
   const hasPromptInput = promptDraft.trim().length > 0 || promptImageAttachments.length > 0
-  const canRun = hasPromptInput && hasWorkspaceTarget && !hasUploadingPromptImages && !hasPromptImageErrors && (isPromptImageSupported || promptImageAttachments.length === 0)
+  const canRun = hasPromptInput && !hasUploadingPromptImages && !hasPromptImageErrors && (isPromptImageSupported || promptImageAttachments.length === 0)
   const defaultComposerHintText = isPromptImageSupported ? UI.promptImageHintCompact : UI.promptImageUnsupportedCompact
   const promptImageErrorText = promptImageAttachments.find((attachment) => attachment.status === 'error')?.error || UI.promptImageError
   const outputText = getOutputText(pane)
@@ -1415,6 +1418,7 @@ export function TerminalPane({
                 </div>
               </details>
               <button type="button" className="icon-button" disabled={!hasSessionRecords} onClick={openRunLogs} title={UI.runLogs}><History size={16} /></button>
+              <button type="button" className="icon-button" onClick={() => onReinitialize(pane.id)} title={UI.reinitializePane} aria-label={UI.reinitializePane}><RefreshCcw size={16} /></button>
               <button type="button" className="icon-button danger" onClick={handleDelete} title={UI.deletePane}><Trash2 size={16} /></button>
             </div>
 

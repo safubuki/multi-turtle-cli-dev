@@ -8,7 +8,6 @@ import {
   normalizeProviderSettingsMap,
   normalizeProviderSessionsMap
 } from './providerState'
-import { chooseInitialLocalWorkspacePath } from './workspacePaths'
 import {
   appendStreamEntry,
   buildSessionLabel,
@@ -46,11 +45,11 @@ export function statusLabel(status: PaneStatus): string {
   }
 }
 
-export function createInitialPane(index: number, payload: BootstrapPayload, localWorkspaces: LocalWorkspace[]): PaneState {
+export function createInitialPane(index: number, payload: BootstrapPayload, _localWorkspaces: LocalWorkspace[]): PaneState {
   const provider = PROVIDER_ORDER[index % PROVIDER_ORDER.length]
   const providerSettings = createProviderSettingsMap(payload.providers)
   const providerSetting = providerSettings[provider]
-  const initialWorkspacePath = chooseInitialLocalWorkspacePath(localWorkspaces)
+  const initialWorkspacePath = ''
 
   return {
     id: createId('pane'),
@@ -261,7 +260,7 @@ export function normalizeSessionRecord(rawRecord: Partial<PaneSessionRecord> | n
 export function normalizePane(
   rawPane: Partial<PaneState>,
   payload: BootstrapPayload,
-  localWorkspaces: LocalWorkspace[]
+  _localWorkspaces: LocalWorkspace[]
 ): PaneState {
   const provider = isProviderId(rawPane.provider) ? rawPane.provider : 'codex'
   const providerSettings = normalizeProviderSettingsMap(rawPane.providerSettings, payload.providers)
@@ -290,7 +289,7 @@ export function normalizePane(
   }
   const workspaceMode = rawPane.workspaceMode === 'ssh' ? 'ssh' : 'local'
   const persistedLocalWorkspacePath = typeof rawPane.localWorkspacePath === 'string' ? rawPane.localWorkspacePath.trim() : ''
-  const localWorkspacePath = persistedLocalWorkspacePath || chooseInitialLocalWorkspacePath(localWorkspaces)
+  const localWorkspacePath = persistedLocalWorkspacePath
   const rawStatus = rawPane.status ?? 'idle'
   const rawLastError = typeof rawPane.lastError === 'string' && rawPane.lastError.trim() ? rawPane.lastError : null
   const hasPersistedRunActivity =

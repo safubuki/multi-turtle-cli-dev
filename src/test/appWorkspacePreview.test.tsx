@@ -145,6 +145,57 @@ afterEach(() => {
 })
 
 describe('App workspace picker and command preview flows', () => {
+  it('保存済み manual workspace があっても初期 pane は未選択で、picker は基本ルートから開く', async () => {
+    seedPersistedPanes([
+      {
+        id: 'pane-local',
+        title: 'Local Pane',
+        workspaceOpen: true,
+        workspaceMode: 'local',
+        provider: 'codex'
+      }
+    ])
+    window.localStorage.setItem(STORAGE_KEYS.localWorkspaces, JSON.stringify([
+      {
+        id: 'local-auto-image-crop',
+        label: 'auto-image-crop',
+        path: 'C:\\git_home\\auto-image-crop',
+        indicators: [],
+        source: 'manual'
+      }
+    ]))
+    window.localStorage.setItem(STORAGE_KEYS.lastLocalBrowsePath, JSON.stringify('C:\\Users\\tester\\Documents'))
+
+    apiMocks.fetchLocalBrowseRoots.mockResolvedValue({
+      success: true,
+      roots: [{ label: 'C', path: 'C:\\' }]
+    } satisfies LocalBrowseRootsResponse)
+
+    apiMocks.browseLocalDirectory.mockImplementation(async (path: string) => {
+      if (path === 'C:\\') {
+        return localBrowsePayload('C:\\', [
+          { label: 'Projects', path: 'C:\\Projects', isDirectory: true }
+        ])
+      }
+
+      throw new Error(`Unexpected local path: ${path}`)
+    })
+
+    renderApp()
+
+    await waitFor(() => {
+      expect(screen.getAllByText('未選択').length).toBeGreaterThan(0)
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ワークスペースを選択' }))
+
+    await waitFor(() => {
+      expect(apiMocks.browseLocalDirectory).toHaveBeenCalledWith('C:\\')
+    })
+    expect(apiMocks.browseLocalDirectory).not.toHaveBeenCalledWith('C:\\Users\\tester\\Documents')
+    expect(screen.getByRole('heading', { name: 'ワークスペースを選択' })).toBeInTheDocument()
+  })
+
   it('ローカル workspace picker で選択・再読込・新規フォルダ作成を行える', async () => {
     seedPersistedPanes([
       {
@@ -223,6 +274,90 @@ describe('App workspace picker and command preview flows', () => {
     })
 
     promptSpy.mockRestore()
+  })
+
+  it('ワークスペース未選択で実行すると picker を開く', async () => {
+    seedPersistedPanes([
+      {
+        id: 'pane-local',
+        title: 'Local Pane',
+        workspaceOpen: true,
+        workspaceMode: 'local',
+        provider: 'codex',
+        prompt: 'Check this'
+      }
+    ])
+
+    apiMocks.fetchLocalBrowseRoots.mockResolvedValue({
+      success: true,
+      roots: [{ label: 'C', path: 'C:\\' }]
+    } satisfies LocalBrowseRootsResponse)
+
+    apiMocks.browseLocalDirectory.mockResolvedValue(localBrowsePayload('C:\\', [
+      { label: 'Projects', path: 'C:\\Projects', isDirectory: true }
+    ]))
+
+    renderApp()
+
+    const promptInput = await screen.findByPlaceholderText('やりたいことを入力します。Ctrl+Enter で実行できます。')
+    fireEvent.change(promptInput, { target: { value: 'Check this' } })
+    fireEvent.click(screen.getByRole('button', { name: '実行' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'ワークスペースを選択' })).toBeInTheDocument()
+    })
+  })
+
+  it('復元した local workspace path が無効でも参照ルートへフォールバックできる', async () => {
+    seedPersistedPanes([
+      {
+        id: 'pane-stale',
+        title: 'Stale Pane',
+        workspaceOpen: true,
+        workspaceMode: 'local',
+        localWorkspacePath: 'C:\\Missing',
+        provider: 'codex'
+      }
+    ])
+    window.localStorage.setItem(STORAGE_KEYS.localWorkspaces, JSON.stringify([
+      {
+        id: 'local-c-missing',
+        label: 'Missing',
+        path: 'C:\\Missing',
+        indicators: [],
+        source: 'manual'
+      }
+    ]))
+
+    apiMocks.fetchLocalBrowseRoots.mockResolvedValue({
+      success: true,
+      roots: [{ label: 'C', path: 'C:\\' }]
+    } satisfies LocalBrowseRootsResponse)
+
+    apiMocks.browseLocalDirectory.mockImplementation(async (path: string) => {
+      if (path === 'C:\\Missing') {
+        throw new Error('Local directory not found: C:\\Missing')
+      }
+
+      if (path === 'C:\\') {
+        return localBrowsePayload('C:\\', [
+          { label: 'Projects', path: 'C:\\Projects', isDirectory: true }
+        ])
+      }
+
+      throw new Error(`Unexpected local path: ${path}`)
+    })
+
+    renderApp()
+
+    await waitFor(() => {
+      expect(apiMocks.browseLocalDirectory).toHaveBeenCalledWith('C:\\Missing')
+      expect(apiMocks.browseLocalDirectory).toHaveBeenCalledWith('C:\\')
+    })
+
+    await waitFor(() => {
+      expect(screen.getAllByText('保存済みワークスペースが見つからないため、参照先を開きました。ワークスペースを選択し直してください。').length).toBeGreaterThan(0)
+    })
   })
 
   it('SSH workspace picker で選択と遷移を行える', async () => {
